@@ -55,7 +55,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
   readonly #connections = new Map<string, ManagedCdpTransport>();
-  #activeSessionId: string | undefined;
+  static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
     const env = options.env ?? process.env;
@@ -88,7 +88,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async acquire(_input: BrowserAcquireInput): Promise<BrowserSession> {
-    if (this.#activeSessionId !== undefined) {
+    if (DockerCdpBrowserProvider.#activeSessionId !== undefined) {
       throw new Error(
         "Browser session already active or being acquired. Wait for it to be released before acquiring a new session.",
       );
@@ -97,7 +97,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
     // Reserve the single MVP slot before the first async boundary so two
     // concurrent acquire() calls cannot both attach to the persistent browser.
     const id = randomUUID();
-    this.#activeSessionId = id;
+    DockerCdpBrowserProvider.#activeSessionId = id;
 
     let connection: ConnectedBrowser | undefined;
 
@@ -106,8 +106,13 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
 
       // A runtime restart or transport loss invalidates the app-side session.
       // Chromium itself is owned by browser-runtime and must not be closed here.
+      const activeTransport = connection.transport;
       connection.browser.once("disconnected", () => {
         this.#clearSession(id);
+        void activeTransport.disconnect().catch(() => {
+          // The browser is already disconnected. Keep cleanup best-effort and
+          // never re-lock the provider because transport teardown also failed.
+        });
       });
 
       const context = connection.browser.contexts()[0];
@@ -144,9 +149,9 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
     } finally {
       if (
         !this.#connections.has(id) &&
-        this.#activeSessionId === id
+        DockerCdpBrowserProvider.#activeSessionId === id
       ) {
-        this.#activeSessionId = undefined;
+        DockerCdpBrowserProvider.#activeSessionId = undefined;
       }
     }
   }
@@ -163,8 +168,8 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
 
   #clearSession(sessionId: string): void {
     this.#connections.delete(sessionId);
-    if (this.#activeSessionId === sessionId) {
-      this.#activeSessionId = undefined;
+    if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
+      DockerCdpBrowserProvider.#activeSessionId = undefined;
     }
   }
 
