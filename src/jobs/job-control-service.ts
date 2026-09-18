@@ -3,6 +3,7 @@ import type {
   ActionRequestRepository,
   CheckpointData,
   Job,
+  JobNotFoundError,
   JobRepository,
   JobStatus,
   JsonValue,
@@ -42,7 +43,6 @@ export interface EnterWaitingResult {
 
 export interface RequestClarificationInput {
   readonly jobId: string;
-  readonly status: Exclude<JobStatus, "waiting_for_login" | "waiting_for_approval" | "succeeded" | "failed">;
   readonly checkpoint: CheckpointData;
   readonly step: EnterWaitingInput["step"];
   readonly action: {
@@ -83,14 +83,37 @@ export class JobControlService {
   }
 
   requestClarification(input: RequestClarificationInput): EnterWaitingResult {
-    return this.#commitHumanPause(
-      input.jobId,
-      input.status,
-      input.checkpoint,
-      input.step,
-      input.action,
-      "clarification_required",
-    );
+    return this.#runInTransaction(() => {
+      const currentJob = this.#jobs.getById(input.jobId);
+      if (!currentJob) {
+        throw new JobNotFoundError(input.jobId);
+      }
+
+      if (
+        currentJob.status !== "created" &&
+        currentJob.status !== "preparing_materials" &&
+        currentJob.status !== "preparing_publish"
+      ) {
+        throw new Error(
+          `clarification_required is not allowed while job ${input.jobId} is ${currentJob.status}`,
+        );
+      }
+
+      const job = this.#jobs.commitCheckpoint(input.jobId, {
+        status: currentJob.status,
+        checkpoint: input.checkpoint,
+        step: input.step,
+      });
+
+      const action = this.#actionRequests.open({
+        id: input.action.id,
+        jobId: input.jobId,
+        type: "clarification_required",
+        payload: input.action.payload ?? null,
+      });
+
+      return { job, action };
+    });
   }
 
   #commitHumanPause(
