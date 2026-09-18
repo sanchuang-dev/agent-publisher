@@ -1,11 +1,12 @@
 import {
   ActionRequestNotFoundError,
   ActionRequestStateError,
+  InvalidActionRequestResolutionError,
   JobNotFoundError,
   OpenActionRequestConflictError,
+  isApprovalResolution,
   type ActionRequest,
   type ActionRequestRepository as ActionRequestRepositoryContract,
-  type ActionRequestType,
   type JsonValue,
   type OpenActionRequestInput,
 } from "../contracts/job.js";
@@ -105,22 +106,6 @@ export class ActionRequestRepository implements ActionRequestRepositoryContract 
     return this.#findCurrentOpenForJob(jobId);
   }
 
-  getLatestForJob(jobId: string, type: ActionRequestType): ActionRequest | null {
-    this.#requireJob(jobId);
-
-    const row = this.#db
-      .prepare(
-        `SELECT ${selectColumns}
-         FROM action_requests
-         WHERE job_id = ? AND type = ?
-         ORDER BY created_at DESC, rowid DESC
-         LIMIT 1`,
-      )
-      .get(jobId, type) as ActionRequestRow | undefined;
-
-    return row ? mapActionRequest(row) : null;
-  }
-
   resolve(id: string, resolution?: JsonValue | null): ActionRequest {
     return this.#close(id, "resolved", resolution ?? null);
   }
@@ -143,6 +128,14 @@ export class ActionRequestRepository implements ActionRequestRepositoryContract 
 
       if (existing.status !== "open") {
         throw new ActionRequestStateError(id, existing.status, nextStatus);
+      }
+
+      if (
+        nextStatus === "resolved" &&
+        existing.type === "approval_required" &&
+        !isApprovalResolution(resolution)
+      ) {
+        throw new InvalidActionRequestResolutionError(id, existing.type);
       }
 
       const now = new Date().toISOString();
