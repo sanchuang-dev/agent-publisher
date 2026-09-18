@@ -146,7 +146,7 @@ export class JobRepository implements JobRepositoryContract {
                version         = version + 1
            WHERE id = ?`,
         )
-        .run(input.status, step.stepKey, checkpointJson, now, jobId);
+        .run(input.status, step.stepKey, checkpointJson, now, input.status, now, jobId);
 
       if (result.changes !== 1) {
         throw new JobNotFoundError(jobId);
