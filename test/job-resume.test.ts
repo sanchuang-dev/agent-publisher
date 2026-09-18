@@ -163,6 +163,86 @@ describe("ResumeService restart recovery", () => {
     }
   });
 
+  test("approval waiting requires the persisted approval action and resolves to ready", () => {
+    const { root, databasePath } = makeTempDb();
+    cleanupRoots.push(root);
+
+    const db = openDatabase({ databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    const control = new JobControlService({
+      jobs,
+      actionRequests: actions,
+      runInTransaction: (work) => db.transaction(work)(),
+    });
+
+    jobs.create({
+      id: "job-approval-resume",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+    advanceToPreparingPublish(jobs, "job-approval-resume");
+    control.enterWaiting({
+      jobId: "job-approval-resume",
+      status: "waiting_for_approval",
+      checkpoint: { reason: "approval_required" },
+      step: { id: "approval-step", stepKey: "verify_prepared", status: "succeeded" },
+      action: { id: "approval-action" },
+    });
+
+    const resume = new ResumeService({ jobs, actionRequests: actions });
+    expect(resume.resume("job-approval-resume")).toMatchObject({
+      kind: "waiting_for_action",
+      action: { id: "approval-action", type: "approval_required", status: "open" },
+    });
+
+    actions.resolve("approval-action", { approved: true });
+    expect(resume.resume("job-approval-resume")).toMatchObject({
+      kind: "ready_to_continue",
+      job: { status: "waiting_for_approval" },
+      resolvedAction: { id: "approval-action", status: "resolved" },
+    });
+
+    db.close();
+  });
+
+  test("clarification_required pauses an ordinary running state without inventing a new Job status", () => {
+    const { root, databasePath } = makeTempDb();
+    cleanupRoots.push(root);
+
+    const db = openDatabase({ databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+
+    jobs.create({
+      id: "job-clarification",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+    jobs.commitCheckpoint("job-clarification", {
+      status: "preparing_materials",
+      checkpoint: { phase: "brief" },
+      step: { id: "clarify-step", stepKey: "generate_plan", status: "running" },
+    });
+    actions.open({
+      id: "clarification-action",
+      jobId: "job-clarification",
+      type: "clarification_required",
+      payload: { field: "audience" },
+    });
+
+    const resume = new ResumeService({ jobs, actionRequests: actions });
+    expect(resume.resume("job-clarification")).toMatchObject({
+      kind: "waiting_for_action",
+      job: { status: "preparing_materials" },
+      action: { id: "clarification-action", type: "clarification_required", status: "open" },
+    });
+
+    db.close();
+  });
+
   test("terminal jobs never resume into deterministic execution", () => {
     const { root, databasePath } = makeTempDb();
     cleanupRoots.push(root);
