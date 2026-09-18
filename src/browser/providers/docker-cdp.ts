@@ -86,12 +86,17 @@ async function resolveCdpWebSocketEndpoint(
   versionUrl.search = "";
   versionUrl.hash = "";
 
-  const response = await fetch(versionUrl, {
+  const requestInit: RequestInit = {
     headers: {
       accept: "application/json",
     },
-    signal: timeoutMs === 0 ? undefined : AbortSignal.timeout(timeoutMs),
-  });
+  };
+
+  if (timeoutMs > 0) {
+    requestInit.signal = AbortSignal.timeout(timeoutMs);
+  }
+
+  const response = await fetch(versionUrl, requestInit);
 
   if (!response.ok) {
     throw new Error(
