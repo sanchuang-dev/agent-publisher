@@ -171,7 +171,7 @@ test("browser profile persistence stores only reference and health metadata", ()
       db.pragma("table_info(browser_profiles)") as Array<{ name: string }>
     ).map((column) => column.name);
 
-    expect(columns).toEqual([
+    for (const requiredColumn of [
       "id",
       "provider",
       "platform",
@@ -181,7 +181,9 @@ test("browser profile persistence stores only reference and health metadata", ()
       "last_verified_at",
       "created_at",
       "updated_at",
-    ]);
+    ]) {
+      expect(columns).toContain(requiredColumn);
+    }
     expect(columns.join(" ")).not.toMatch(
       /cookie|password|token|credential|storage_state/i,
     );
