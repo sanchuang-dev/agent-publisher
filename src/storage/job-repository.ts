@@ -58,7 +58,7 @@ interface JobStepRow {
 function mapJob(row: JobRow): Job {
   return {
     id: row.id,
-    platform: row.platform,
+    platform: row.platform as Job["platform"],
     publishMode: row.publish_mode as Job["publishMode"],
     status: row.status as Job["status"],
     currentStep: row.current_step,
