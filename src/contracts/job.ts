@@ -1,3 +1,5 @@
+import type { PublishPlatform } from "./publish-job.js";
+
 /**
  * Minimal job persistence contracts for M2-02.
  *
@@ -26,11 +28,17 @@ export const publishModes = ["image_text", "video"] as const;
 
 export type PublishMode = (typeof publishModes)[number];
 
-export type CheckpointData = Record<string, unknown>;
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue =
+  | JsonPrimitive
+  | { readonly [key: string]: JsonValue }
+  | readonly JsonValue[];
+
+export type CheckpointData = Readonly<Record<string, JsonValue>>;
 
 export interface Job {
   readonly id: string;
-  readonly platform: string;
+  readonly platform: PublishPlatform;
   readonly publishMode: PublishMode;
   readonly status: JobStatus;
   readonly currentStep: string | null;
@@ -66,7 +74,7 @@ export interface JobCheckpoint {
 
 export interface CreateJobInput {
   readonly id: string;
-  readonly platform: string;
+  readonly platform: PublishPlatform;
   readonly publishMode: PublishMode;
   readonly briefJson: string;
 }
