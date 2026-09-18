@@ -46,6 +46,7 @@ export interface Job {
   readonly checkpoint: CheckpointData | null;
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly completedAt: string | null;
 }
 
 export interface JobStep {
