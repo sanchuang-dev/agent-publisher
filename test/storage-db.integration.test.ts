@@ -50,12 +50,12 @@ test("initializes an empty database and safely re-runs migrations", () => {
       expect(indexNames.includes(expectedIndex), `${expectedIndex} should exist`).toBe(true);
     }
 
-    expect(first.pragma("user_version", { simple: true })).toBe(1);
+    expect(first.pragma("user_version", { simple: true })).toBe(2);
     first.close();
 
     const second = openDatabase({ databasePath });
     expect(readNames(second, "table")).toEqual([...expectedTables]);
-    expect(second.pragma("user_version", { simple: true })).toBe(1);
+    expect(second.pragma("user_version", { simple: true })).toBe(2);
     second.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -102,11 +102,11 @@ test("rejects a database schema newer than this build supports", () => {
 
   try {
     const db = openDatabase({ databasePath });
-    db.pragma("user_version = 2");
+    db.pragma("user_version = 3");
     db.close();
 
     expect(() => openDatabase({ databasePath })).toThrow(
-      /Database schema version 2 is newer than supported version 1/,
+      /Database schema version 3 is newer than supported version 2/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

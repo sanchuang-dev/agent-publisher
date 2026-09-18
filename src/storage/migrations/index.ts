@@ -130,6 +130,13 @@ export const migrations: readonly Migration[] = [
       db.exec(initialSchemaSql);
     },
   },
+  {
+    version: 2,
+    name: "add-checkpoint-json",
+    up(db) {
+      db.exec("ALTER TABLE jobs ADD COLUMN checkpoint_json TEXT");
+    },
+  },
 ];
 
 function readUserVersion(db: Database.Database): number {
