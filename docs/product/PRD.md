@@ -9,6 +9,8 @@ It does **not** replace GitHub Issues as the contract for individual work items,
 
 Frontend interaction and prototype details are defined in [FRONTEND.md](./FRONTEND.md).
 
+Implementation architecture and runtime design are defined in [TECHNICAL-DESIGN.md](../engineering/TECHNICAL-DESIGN.md).
+
 ## 1. Product statement
 
 Agent Publisher is a small, real product for agent-assisted content production and browser-based publishing.
