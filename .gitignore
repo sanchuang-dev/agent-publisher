@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+artifacts/
+profiles/
+storage-state/
+sessions/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
