@@ -531,6 +531,7 @@ test("release keeps the single-session lease until transport teardown settles", 
   const first = await provider.acquire({});
   const releasePromise = provider.release(first.id);
 
+  await Promise.resolve();
   expect(firstDisconnectCalls).toBe(1);
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session already active/,
@@ -595,4 +596,85 @@ test("disconnect during acquisition releases the reservation instead of returnin
   await provider.release(recovered.id);
 
   expect(transports[1]?.disconnectCalls).toBe(1);
+});
+
+
+test("concurrent release calls share one teardown and keep the lease until it finishes", async () => {
+  let finishDisconnect: (() => void) | undefined;
+  const disconnectGate = new Promise<void>((resolve) => {
+    finishDisconnect = resolve;
+  });
+  let disconnectCalls = 0;
+
+  const transport = {
+    send: () => {},
+    close: () => {},
+    disconnect: async () => {
+      disconnectCalls += 1;
+      await disconnectGate;
+    },
+  };
+  const recoveredTransport = managedTransportStub();
+  let transportAttempt = 0;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () =>
+      transportAttempt++ === 0 ? transport : recoveredTransport.transport,
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const session = await provider.acquire({});
+  const firstRelease = provider.release(session.id);
+  const secondRelease = provider.release(session.id);
+
+  await Promise.resolve();
+  expect(disconnectCalls).toBe(1);
+  await expect(provider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+
+  finishDisconnect?.();
+  await Promise.all([firstRelease, secondRelease]);
+
+  const recovered = await provider.acquire({});
+  await provider.release(recovered.id);
+  expect(recoveredTransport.disconnectCalls).toBe(1);
+});
+
+test("failed acquire still releases the reservation when transport cleanup also fails", async () => {
+  const failingTransport = managedTransportStub({
+    disconnectError: new Error("cleanup failed"),
+  });
+  const recoveredTransport = managedTransportStub();
+  let transportAttempt = 0;
+  let browserAttempt = 0;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () =>
+      transportAttempt++ === 0
+        ? failingTransport.transport
+        : recoveredTransport.transport,
+    connectOverCDP: async () => {
+      browserAttempt += 1;
+      return browserStub({
+        contexts:
+          browserAttempt === 1
+            ? []
+            : [contextStub({ pages: [pageStub()] })],
+      });
+    },
+  });
+
+  await expect(provider.acquire({})).rejects.toThrow(
+    /acquisition failed and the app-side CDP connection could not be released/,
+  );
+
+  const recovered = await provider.acquire({});
+  await provider.release(recovered.id);
+
+  expect(failingTransport.disconnectCalls).toBe(1);
+  expect(recoveredTransport.disconnectCalls).toBe(1);
 });
