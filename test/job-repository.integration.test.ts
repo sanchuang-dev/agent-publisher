@@ -3,12 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
+import { JobNotFoundError, type JobRepository as JobRepositoryContract } from "../src/contracts/job.js";
 import { openDatabase } from "../src/storage/db.js";
 import { JobRepository } from "../src/storage/job-repository.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function makeTempDb() {
   const root = mkdtempSync(join(tmpdir(), "agent-publisher-jobrepo-"));
@@ -16,32 +13,27 @@ function makeTempDb() {
   return { root, databasePath };
 }
 
-// ---------------------------------------------------------------------------
-// Test suite
-// ---------------------------------------------------------------------------
-
 describe("JobRepository integration", () => {
   let root: string;
   let databasePath: string;
-  let db: ReturnType<typeof openDatabase>;
+  let db: ReturnType<typeof openDatabase> | null;
   let repo: JobRepository;
 
   beforeEach(() => {
     ({ root, databasePath } = makeTempDb());
     db = openDatabase({ databasePath });
     repo = new JobRepository(db);
+
+    const contract: JobRepositoryContract = repo;
+    expect(contract).toBe(repo);
   });
 
   afterEach(() => {
-    db.close();
+    db?.close();
     rmSync(root, { recursive: true, force: true });
   });
 
-  // -------------------------------------------------------------------------
-  // create → getById
-  // -------------------------------------------------------------------------
-
-  test("create persists a job that can be read back by id", () => {
+  test("create persists a created job that can be read back by id", () => {
     const job = repo.create({
       id: "job-001",
       platform: "xiaohongshu",
@@ -49,28 +41,44 @@ describe("JobRepository integration", () => {
       briefJson: JSON.stringify({ title: "hello" }),
     });
 
-    expect(job.id).toBe("job-001");
-    expect(job.platform).toBe("xiaohongshu");
-    expect(job.publishMode).toBe("image_text");
-    expect(job.status).toBe("pending");
-    expect(job.currentStep).toBeNull();
-    expect(job.checkpoint).toBeNull();
+    expect(job).toMatchObject({
+      id: "job-001",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      status: "created",
+      currentStep: null,
+      checkpoint: null,
+    });
 
-    const fetched = repo.getById("job-001");
-    expect(fetched).not.toBeNull();
-    expect(fetched?.id).toBe("job-001");
-    expect(fetched?.status).toBe("pending");
+    expect(repo.getById("job-001")).toEqual(job);
   });
 
-  test("getById returns null for an unknown id", () => {
-    expect(repo.getById("does-not-exist")).toBeNull();
+  test("missing jobs have explicit read and mutation behavior", () => {
+    expect(repo.getById("missing")).toBeNull();
+    expect(() => repo.loadLastCheckpoint("missing")).toThrow(JobNotFoundError);
+    expect(() => repo.getStepsForJob("missing")).toThrow(JobNotFoundError);
+
+    expect(() =>
+      repo.commitCheckpoint("missing", {
+        status: "preparing_materials",
+        checkpoint: { phase: "plan" },
+        step: { id: "missing-step", stepKey: "generate_plan", status: "running" },
+      }),
+    ).toThrow(JobNotFoundError);
   });
 
-  // -------------------------------------------------------------------------
-  // checkpoint – status / current_step / job_steps consistency
-  // -------------------------------------------------------------------------
+  test("loadLastCheckpoint returns null before the first committed checkpoint", () => {
+    repo.create({
+      id: "job-no-checkpoint",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
 
-  test("checkpoint updates status, currentStep and records a job_step atomically", () => {
+    expect(repo.loadLastCheckpoint("job-no-checkpoint")).toBeNull();
+  });
+
+  test("commitCheckpoint atomically updates job state and records its matching step", () => {
     repo.create({
       id: "job-002",
       platform: "douyin",
@@ -78,161 +86,148 @@ describe("JobRepository integration", () => {
       briefJson: "{}",
     });
 
-    const updated = repo.checkpoint("job-002", {
-      status: "running",
-      currentStep: "prepare-material",
+    const updated = repo.commitCheckpoint("job-002", {
+      status: "preparing_materials",
       checkpoint: { progress: 10 },
       step: {
         id: "step-001",
-        stepKey: "prepare-material",
+        stepKey: "generate_plan",
         status: "succeeded",
         startedAt: "2026-09-18T01:00:00.000Z",
         finishedAt: "2026-09-18T01:00:05.000Z",
       },
     });
 
-    expect(updated.status).toBe("running");
-    expect(updated.currentStep).toBe("prepare-material");
+    expect(updated.status).toBe("preparing_materials");
+    expect(updated.currentStep).toBe("generate_plan");
     expect(updated.checkpoint).toEqual({ progress: 10 });
+
+    expect(repo.loadLastCheckpoint("job-002")).toMatchObject({
+      jobId: "job-002",
+      status: "preparing_materials",
+      currentStep: "generate_plan",
+      checkpoint: { progress: 10 },
+    });
 
     const steps = repo.getStepsForJob("job-002");
     expect(steps).toHaveLength(1);
-    expect(steps[0]?.stepKey).toBe("prepare-material");
-    expect(steps[0]?.status).toBe("succeeded");
-    expect(steps[0]?.jobId).toBe("job-002");
+    expect(steps[0]).toMatchObject({
+      jobId: "job-002",
+      stepKey: "generate_plan",
+      status: "succeeded",
+      attempt: 1,
+    });
   });
 
-  test("multiple checkpoints accumulate job_steps in order", () => {
-    repo.create({ id: "job-003", platform: "xiaohongshu", publishMode: "image_text", briefJson: "{}" });
-
-    repo.checkpoint("job-003", {
-      status: "running",
-      currentStep: "step-a",
-      checkpoint: { phase: "a" },
-      step: { id: "s-a", stepKey: "step-a", status: "succeeded" },
+  test("the latest committed checkpoint is the recovery state after multiple steps", () => {
+    repo.create({
+      id: "job-003",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
     });
 
-    repo.checkpoint("job-003", {
-      status: "running",
-      currentStep: "step-b",
-      checkpoint: { phase: "b" },
-      step: { id: "s-b", stepKey: "step-b", status: "running" },
+    repo.commitCheckpoint("job-003", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "s-a", stepKey: "generate_copy", status: "succeeded" },
     });
 
-    const job = repo.getById("job-003");
-    expect(job?.currentStep).toBe("step-b");
-    expect(job?.checkpoint).toEqual({ phase: "b" });
+    repo.commitCheckpoint("job-003", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: { id: "s-b", stepKey: "acquire_browser", status: "running" },
+    });
 
-    const steps = repo.getStepsForJob("job-003");
-    expect(steps.map((s) => s.stepKey)).toEqual(["step-a", "step-b"]);
+    expect(repo.loadLastCheckpoint("job-003")).toMatchObject({
+      status: "preparing_publish",
+      currentStep: "acquire_browser",
+      checkpoint: { phase: "browser" },
+    });
+
+    expect(repo.getStepsForJob("job-003").map((step) => step.stepKey)).toEqual([
+      "generate_copy",
+      "acquire_browser",
+    ]);
   });
 
-  // -------------------------------------------------------------------------
-  // Transaction rollback – no half-state
-  // -------------------------------------------------------------------------
+  test("step insert failure rolls back status, current_step and checkpoint together", () => {
+    repo.create({
+      id: "job-004",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
 
-  test("transaction rollback leaves the job unchanged if step insert fails", () => {
-    repo.create({ id: "job-004", platform: "xiaohongshu", publishMode: "image_text", briefJson: "{}" });
-
-    // First valid checkpoint
-    repo.checkpoint("job-004", {
-      status: "running",
-      currentStep: "step-1",
+    repo.commitCheckpoint("job-004", {
+      status: "preparing_materials",
       checkpoint: { phase: 1 },
-      step: { id: "step-id-1", stepKey: "step-1", status: "succeeded" },
+      step: {
+        id: "step-id-1",
+        stepKey: "generate_copy",
+        status: "succeeded",
+        attempt: 1,
+      },
     });
 
-    // A second checkpoint that tries to insert a duplicate step id (PRIMARY KEY clash)
-    // should rollback the entire transaction so job is still at phase 1.
     expect(() =>
-      repo.checkpoint("job-004", {
-        status: "running",
-        currentStep: "step-2",
+      repo.commitCheckpoint("job-004", {
+        status: "preparing_publish",
         checkpoint: { phase: 2 },
-        step: { id: "step-id-1", stepKey: "step-2", status: "running" }, // duplicate id
+        step: {
+          id: "step-id-2",
+          stepKey: "generate_copy",
+          status: "running",
+          attempt: 1,
+        },
       }),
     ).toThrow();
 
-    // Job must still reflect the last successful checkpoint
-    const job = repo.getById("job-004");
-    expect(job?.currentStep).toBe("step-1");
-    expect(job?.checkpoint).toEqual({ phase: 1 });
-
-    // Only one step should exist
-    const steps = repo.getStepsForJob("job-004");
-    expect(steps).toHaveLength(1);
-    expect(steps[0]?.stepKey).toBe("step-1");
+    expect(repo.getById("job-004")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: 1 },
+    });
+    expect(repo.loadLastCheckpoint("job-004")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: 1 },
+    });
+    expect(repo.getStepsForJob("job-004")).toHaveLength(1);
   });
 
-  // -------------------------------------------------------------------------
-  // Restart recovery smoke – close DB, reopen, read last checkpoint
-  // -------------------------------------------------------------------------
-
-  test("closing and reopening the database preserves the last committed checkpoint", () => {
-    repo.create({ id: "job-005", platform: "xiaohongshu", publishMode: "image_text", briefJson: "{}" });
-
-    repo.checkpoint("job-005", {
-      status: "running",
-      currentStep: "upload",
-      checkpoint: { uploadedBytes: 4096 },
-      step: { id: "step-upload", stepKey: "upload", status: "succeeded" },
+  test("reopen recovery loads the last committed checkpoint and step history", () => {
+    repo.create({
+      id: "job-005",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
     });
 
-    // Close the first connection
-    db.close();
+    repo.commitCheckpoint("job-005", {
+      status: "preparing_publish",
+      checkpoint: { uploadedBytes: 4096 },
+      step: { id: "step-upload", stepKey: "upload_assets", status: "succeeded" },
+    });
 
-    // Reopen – simulates process restart
-    const db2 = openDatabase({ databasePath });
-    const repo2 = new JobRepository(db2);
+    db?.close();
+    db = null;
+
+    const reopenedDb = openDatabase({ databasePath });
+    const reopenedRepo = new JobRepository(reopenedDb);
 
     try {
-      const recovered = repo2.getById("job-005");
-      expect(recovered).not.toBeNull();
-      expect(recovered?.status).toBe("running");
-      expect(recovered?.currentStep).toBe("upload");
-      expect(recovered?.checkpoint).toEqual({ uploadedBytes: 4096 });
+      expect(reopenedRepo.loadLastCheckpoint("job-005")).toMatchObject({
+        jobId: "job-005",
+        status: "preparing_publish",
+        currentStep: "upload_assets",
+        checkpoint: { uploadedBytes: 4096 },
+      });
 
-      const steps = repo2.getStepsForJob("job-005");
-      expect(steps).toHaveLength(1);
-      expect(steps[0]?.stepKey).toBe("upload");
+      expect(reopenedRepo.getStepsForJob("job-005")).toHaveLength(1);
+      expect(reopenedRepo.getStepsForJob("job-005")[0]?.stepKey).toBe("upload_assets");
     } finally {
-      db2.close();
-      // prevent afterEach from closing db a second time
-      db = db2;
+      reopenedDb.close();
     }
-  });
-
-  // -------------------------------------------------------------------------
-  // completedAt set on terminal status
-  // -------------------------------------------------------------------------
-
-  test("completedAt is set when status transitions to succeeded", () => {
-    repo.create({ id: "job-006", platform: "douyin", publishMode: "video", briefJson: "{}" });
-
-    const done = repo.checkpoint("job-006", {
-      status: "succeeded",
-      currentStep: "publish",
-      checkpoint: { url: "https://example.com/video" },
-      step: { id: "step-pub", stepKey: "publish", status: "succeeded" },
-    });
-
-    expect(done.completedAt).not.toBeNull();
-    expect(done.status).toBe("succeeded");
-  });
-
-  // -------------------------------------------------------------------------
-  // JobRepository does not expose driver types
-  // -------------------------------------------------------------------------
-
-  test("JobRepository constructor accepts a plain DatabaseHandle without importing better-sqlite3", async () => {
-    // This test imports the repository module at the type level and verifies that
-    // no better-sqlite3 import is pulled in at the module boundary.
-    const mod = await import("../src/storage/job-repository.js");
-    expect(typeof mod.JobRepository).toBe("function");
-    // The module must not have a direct better-sqlite3 dependency; verified by
-    // the fact that the DatabaseHandle interface (not the concrete Database type)
-    // is what the constructor accepts.
-    const instance = new mod.JobRepository(db);
-    expect(instance).toBeInstanceOf(mod.JobRepository);
   });
 });

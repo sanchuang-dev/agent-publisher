@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
     "test:unit": "vitest run",
     "test:browser": "tsx --test web/test/browser-smoke.test.ts",
+    "test:browser-provider": "vitest run test/browser-provider.test.ts",
+    "smoke:browser-provider": "tsx scripts/browser-provider-smoke.ts",
     "test": "npm run test:unit && npm run test:browser",
     "check": "npm run typecheck && npm run test && npm run build",
     "dev:web": "vite web",

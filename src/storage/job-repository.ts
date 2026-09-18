@@ -1,41 +1,31 @@
 /**
- * JobRepository – transactional job & checkpoint persistence on top of SQLite.
- *
- * The repository accepts a `Database.Database` via constructor injection so
- * that callers control the database lifecycle (open/close) without coupling
- * to the driver type at the product-domain boundary.
- *
- * The exported `JobRepository` class depends only on the abstract
- * `DatabaseHandle` interface, which does not import better-sqlite3.
+ * SQLite implementation of the driver-agnostic JobRepository contract.
  */
 
-import type {
-  CheckpointInput,
-  CreateJobInput,
-  Job,
-  JobStep,
+import {
+  JobNotFoundError,
+  type CheckpointInput,
+  type CreateJobInput,
+  type Job,
+  type JobCheckpoint,
+  type JobRepository as JobRepositoryContract,
+  type JobStep,
 } from "../contracts/job.js";
 
-// ---------------------------------------------------------------------------
-// Driver-agnostic database interface
-// ---------------------------------------------------------------------------
+interface RunResult {
+  readonly changes: number;
+}
 
-/** Minimal prepared-statement abstraction – driver-agnostic. */
-export interface Statement {
-  run(...params: unknown[]): unknown;
+interface Statement {
+  run(...params: unknown[]): RunResult;
   get(...params: unknown[]): unknown;
   all(...params: unknown[]): unknown[];
 }
 
-/** Minimal database handle – does not expose better-sqlite3 types. */
-export interface DatabaseHandle {
+interface DatabaseHandle {
   prepare(sql: string): Statement;
   transaction<T>(fn: () => T): () => T;
 }
-
-// ---------------------------------------------------------------------------
-// Row shapes returned by SQLite
-// ---------------------------------------------------------------------------
 
 interface JobRow {
   id: string;
@@ -47,7 +37,6 @@ interface JobRow {
   checkpoint_json: string | null;
   created_at: string;
   updated_at: string;
-  completed_at: string | null;
 }
 
 interface JobStepRow {
@@ -66,10 +55,6 @@ interface JobStepRow {
   updated_at: string;
 }
 
-// ---------------------------------------------------------------------------
-// Row → domain object mapping
-// ---------------------------------------------------------------------------
-
 function mapJob(row: JobRow): Job {
   return {
     id: row.id,
@@ -81,7 +66,6 @@ function mapJob(row: JobRow): Job {
     checkpoint: row.checkpoint_json ? (JSON.parse(row.checkpoint_json) as Job["checkpoint"]) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    completedAt: row.completed_at,
   };
 }
 
@@ -103,20 +87,12 @@ function mapJobStep(row: JobStepRow): JobStep {
   };
 }
 
-// ---------------------------------------------------------------------------
-// JobRepository
-// ---------------------------------------------------------------------------
-
-export class JobRepository {
+export class JobRepository implements JobRepositoryContract {
   readonly #db: DatabaseHandle;
 
   constructor(db: DatabaseHandle) {
     this.#db = db;
   }
-
-  // -------------------------------------------------------------------------
-  // create
-  // -------------------------------------------------------------------------
 
   create(input: CreateJobInput): Job {
     const now = new Date().toISOString();
@@ -127,66 +103,49 @@ export class JobRepository {
           id, platform, publish_mode, status, current_step,
           brief_json, checkpoint_json, version,
           created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, 'pending', NULL, ?, NULL, 0, ?, ?, NULL)`,
+        ) VALUES (?, ?, ?, 'created', NULL, ?, NULL, 0, ?, ?, NULL)`,
       )
       .run(input.id, input.platform, input.publishMode, input.briefJson, now, now);
 
-    return this.getById(input.id) as Job;
+    return this.#requireJob(input.id);
   }
-
-  // -------------------------------------------------------------------------
-  // getById
-  // -------------------------------------------------------------------------
 
   getById(id: string): Job | null {
     const row = this.#db
       .prepare(
         `SELECT id, platform, publish_mode, status, current_step,
-                brief_json, checkpoint_json,
-                created_at, updated_at, completed_at
-         FROM jobs WHERE id = ?`,
+                brief_json, checkpoint_json, created_at, updated_at
+         FROM jobs
+         WHERE id = ?`,
       )
       .get(id) as JobRow | undefined;
 
     return row ? mapJob(row) : null;
   }
 
-  // -------------------------------------------------------------------------
-  // checkpoint – transactional update of job + job_steps
-  // -------------------------------------------------------------------------
-
-  checkpoint(jobId: string, input: CheckpointInput): Job {
+  commitCheckpoint(jobId: string, input: CheckpointInput): Job {
     const now = new Date().toISOString();
-    const completedAt =
-      input.status === "succeeded" || input.status === "failed" || input.status === "cancelled"
-        ? now
-        : null;
+    const checkpointJson = JSON.stringify(input.checkpoint);
+    const step = input.step;
+    const attempt = step.attempt ?? 1;
 
-    const run = this.#db.transaction(() => {
-      // Update the job row
-      this.#db
+    const commit = this.#db.transaction(() => {
+      const result = this.#db
         .prepare(
           `UPDATE jobs
            SET status          = ?,
                current_step    = ?,
                checkpoint_json = ?,
                updated_at      = ?,
-               completed_at    = COALESCE(completed_at, ?),
                version         = version + 1
            WHERE id = ?`,
         )
-        .run(
-          input.status,
-          input.currentStep,
-          JSON.stringify(input.checkpoint),
-          now,
-          completedAt,
-          jobId,
-        );
+        .run(input.status, step.stepKey, checkpointJson, now, jobId);
 
-      // Insert the corresponding step record
-      const step = input.step;
-      const attempt = step.attempt ?? 1;
+      if (result.changes !== 1) {
+        throw new JobNotFoundError(jobId);
+      }
+
       this.#db
         .prepare(
           `INSERT INTO job_steps (
@@ -195,14 +154,7 @@ export class JobRepository {
             error_code, error_message,
             started_at, finished_at,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(job_id, step_key, attempt) DO UPDATE SET
-            status        = excluded.status,
-            output_json   = excluded.output_json,
-            error_code    = excluded.error_code,
-            error_message = excluded.error_message,
-            finished_at   = excluded.finished_at,
-            updated_at    = excluded.updated_at`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           step.id,
@@ -221,20 +173,33 @@ export class JobRepository {
         );
     });
 
-    run();
-
-    const updated = this.getById(jobId);
-    if (!updated) {
-      throw new Error(`Job not found after checkpoint: ${jobId}`);
-    }
-    return updated;
+    commit();
+    return this.#requireJob(jobId);
   }
 
-  // -------------------------------------------------------------------------
-  // getStepsForJob
-  // -------------------------------------------------------------------------
+  loadLastCheckpoint(jobId: string): JobCheckpoint | null {
+    const job = this.#requireJob(jobId);
 
-  getStepsForJob(jobId: string): JobStep[] {
+    if (job.checkpoint === null) {
+      return null;
+    }
+
+    if (job.currentStep === null) {
+      throw new Error(`Invalid persisted checkpoint without current_step for job: ${jobId}`);
+    }
+
+    return {
+      jobId: job.id,
+      status: job.status,
+      currentStep: job.currentStep,
+      checkpoint: job.checkpoint,
+      committedAt: job.updatedAt,
+    };
+  }
+
+  getStepsForJob(jobId: string): readonly JobStep[] {
+    this.#requireJob(jobId);
+
     return (
       this.#db
         .prepare(
@@ -245,9 +210,17 @@ export class JobRepository {
                   created_at, updated_at
            FROM job_steps
            WHERE job_id = ?
-           ORDER BY created_at ASC`,
+           ORDER BY created_at ASC, rowid ASC`,
         )
         .all(jobId) as JobStepRow[]
     ).map(mapJobStep);
+  }
+
+  #requireJob(jobId: string): Job {
+    const job = this.getById(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+    return job;
   }
 }

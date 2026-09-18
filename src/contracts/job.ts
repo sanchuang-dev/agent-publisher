@@ -1,17 +1,19 @@
 /**
- * Minimal job domain contract for M2-02.
+ * Minimal job persistence contracts for M2-02.
  *
- * Only exposes the fields needed by the JobRepository layer;
- * does not import or re-export any SQLite driver types.
+ * Product/domain code depends on these types rather than the SQLite driver.
+ * State-transition legality remains owned by M2-03.
  */
 
 export const jobStatuses = [
-  "pending",
-  "running",
-  "paused",
+  "created",
+  "preparing_materials",
+  "preparing_publish",
+  "waiting_for_login",
+  "waiting_for_approval",
+  "publishing",
   "succeeded",
   "failed",
-  "cancelled",
 ] as const;
 
 export type JobStatus = (typeof jobStatuses)[number];
@@ -24,7 +26,6 @@ export const publishModes = ["image_text", "video"] as const;
 
 export type PublishMode = (typeof publishModes)[number];
 
-/** Persisted checkpoint data – arbitrary serialisable value. */
 export type CheckpointData = Record<string, unknown>;
 
 export interface Job {
@@ -37,7 +38,6 @@ export interface Job {
   readonly checkpoint: CheckpointData | null;
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly completedAt: string | null;
 }
 
 export interface JobStep {
@@ -56,6 +56,14 @@ export interface JobStep {
   readonly updatedAt: string;
 }
 
+export interface JobCheckpoint {
+  readonly jobId: string;
+  readonly status: JobStatus;
+  readonly currentStep: string;
+  readonly checkpoint: CheckpointData;
+  readonly committedAt: string;
+}
+
 export interface CreateJobInput {
   readonly id: string;
   readonly platform: string;
@@ -64,13 +72,13 @@ export interface CreateJobInput {
 }
 
 export interface CheckpointInput {
-  /** New status to apply to the job. */
   readonly status: JobStatus;
-  /** The step key that was just completed/started. */
-  readonly currentStep: string;
-  /** Arbitrary checkpoint payload to persist. */
   readonly checkpoint: CheckpointData;
-  /** Step record to append inside the same transaction. */
+  /**
+   * The durable current_step is derived from this stepKey. Keeping one source
+   * prevents a checkpoint from claiming a different current step than the
+   * job_steps record committed with it.
+   */
   readonly step: {
     readonly id: string;
     readonly stepKey: string;
@@ -83,4 +91,26 @@ export interface CheckpointInput {
     readonly startedAt?: string | null;
     readonly finishedAt?: string | null;
   };
+}
+
+export class JobNotFoundError extends Error {
+  constructor(readonly jobId: string) {
+    super(`Job not found: ${jobId}`);
+    this.name = "JobNotFoundError";
+  }
+}
+
+/**
+ * Driver-agnostic contract consumed by orchestration/recovery code.
+ *
+ * Durable status/current-step progress is committed through commitCheckpoint;
+ * standalone mutators are intentionally absent so callers cannot advance a job
+ * without recording the corresponding step in the same transaction.
+ */
+export interface JobRepository {
+  create(input: CreateJobInput): Job;
+  getById(id: string): Job | null;
+  commitCheckpoint(jobId: string, input: CheckpointInput): Job;
+  loadLastCheckpoint(jobId: string): JobCheckpoint | null;
+  getStepsForJob(jobId: string): readonly JobStep[];
 }
