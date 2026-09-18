@@ -55,6 +55,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
   static readonly #connections = new Map<string, ManagedCdpTransport>();
+  static readonly #releasePromises = new Map<string, Promise<void>>();
   static readonly #releasingSessionIds = new Set<string>();
   static #activeSessionId: string | undefined;
 
@@ -163,18 +164,29 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async release(sessionId: string): Promise<void> {
+    const existingRelease =
+      DockerCdpBrowserProvider.#releasePromises.get(sessionId);
+    if (existingRelease) {
+      await existingRelease;
+      return;
+    }
+
     const transport = DockerCdpBrowserProvider.#connections.get(sessionId);
     if (!transport) {
       return;
     }
 
     DockerCdpBrowserProvider.#releasingSessionIds.add(sessionId);
-    try {
-      await transport.disconnect();
-    } finally {
-      DockerCdpBrowserProvider.#releasingSessionIds.delete(sessionId);
-      this.#clearSession(sessionId);
-    }
+    const releasePromise = Promise.resolve()
+      .then(() => transport.disconnect())
+      .finally(() => {
+        DockerCdpBrowserProvider.#releasingSessionIds.delete(sessionId);
+        this.#clearSession(sessionId);
+        DockerCdpBrowserProvider.#releasePromises.delete(sessionId);
+      });
+
+    DockerCdpBrowserProvider.#releasePromises.set(sessionId, releasePromise);
+    await releasePromise;
   }
 
   #clearSession(sessionId: string): void {
