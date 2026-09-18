@@ -234,7 +234,6 @@ describe("ResumeService restart recovery", () => {
     });
     control.requestClarification({
       jobId: "job-clarification",
-      status: "preparing_materials",
       checkpoint: { phase: "brief", reason: "clarification_required" },
       step: { id: "clarify-step", stepKey: "generate_plan", status: "running" },
       action: {
