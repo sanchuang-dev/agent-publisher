@@ -113,7 +113,7 @@ test(
         "about:blank",
       ],
       {
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
 
