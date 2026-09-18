@@ -59,10 +59,7 @@ describe("JobControlService waiting atomicity", () => {
     const result = control.enterWaiting({
       jobId: "job-control",
       status: "waiting_for_login",
-      checkpoint: {
-        reason: "login_required",
-        actionRequestId: "action-login",
-      },
+      checkpoint: { reason: "login_required" },
       step: { id: "step-login", stepKey: "ensure_login", status: "running" },
       action: {
         id: "action-login",
@@ -73,7 +70,10 @@ describe("JobControlService waiting atomicity", () => {
     expect(result.job).toMatchObject({
       status: "waiting_for_login",
       currentStep: "ensure_login",
-      checkpoint: { reason: "login_required" },
+      checkpoint: {
+        reason: "login_required",
+        actionRequestId: "action-login",
+      },
     });
     expect(result.action).toMatchObject({
       id: "action-login",
@@ -92,10 +92,7 @@ describe("JobControlService waiting atomicity", () => {
     const result = control.enterWaiting({
       jobId: "job-control",
       status: "waiting_for_approval",
-      checkpoint: {
-        reason: "approval_required",
-        actionRequestId: "action-approval",
-      },
+      checkpoint: { reason: "approval_required" },
       step: { id: "step-approval", stepKey: "verify_prepared", status: "succeeded" },
       action: {
         id: "action-approval",
@@ -106,7 +103,10 @@ describe("JobControlService waiting atomicity", () => {
     expect(result.job).toMatchObject({
       status: "waiting_for_approval",
       currentStep: "verify_prepared",
-      checkpoint: { reason: "approval_required" },
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "action-approval",
+      },
     });
     expect(result.action).toMatchObject({
       id: "action-approval",
@@ -116,42 +116,52 @@ describe("JobControlService waiting atomicity", () => {
     expect(actions.getCurrentOpenForJob("job-control")).toEqual(result.action);
   });
 
-  test("replaying the same waiting pause reuses the existing action and step attempt", () => {
+  test("replaying an open approval freezes the checkpoint and human-facing payload", () => {
     const first = control.enterWaiting({
       jobId: "job-control",
-      status: "waiting_for_login",
-      checkpoint: { reason: "login_required" },
+      status: "waiting_for_approval",
+      checkpoint: { reason: "approval_required", summaryVersion: 1 },
       step: {
-        id: "step-login-replay",
-        stepKey: "ensure_login",
-        status: "running",
+        id: "step-approval-replay",
+        stepKey: "verify_prepared",
+        status: "succeeded",
         attempt: 1,
       },
-      action: { id: "action-login-replay" },
+      action: {
+        id: "action-approval-replay",
+        payload: { summaryVersion: 1 },
+      },
     });
 
     const replay = control.enterWaiting({
       jobId: "job-control",
-      status: "waiting_for_login",
-      checkpoint: { reason: "login_required", replayed: true },
+      status: "waiting_for_approval",
+      checkpoint: { reason: "approval_required", summaryVersion: 2 },
       step: {
-        id: "different-step-id-is-ignored-by-upsert",
-        stepKey: "ensure_login",
-        status: "running",
+        id: "different-step-id-must-not-replace-the-pause",
+        stepKey: "verify_prepared",
+        status: "succeeded",
         attempt: 1,
       },
-      action: { id: "action-login-duplicate" },
+      action: {
+        id: "action-approval-duplicate",
+        payload: { summaryVersion: 2 },
+      },
     });
 
-    expect(first.action.id).toBe("action-login-replay");
-    expect(replay.action.id).toBe("action-login-replay");
+    expect(first.action).toMatchObject({
+      id: "action-approval-replay",
+      payload: { summaryVersion: 1 },
+    });
+    expect(replay.action).toEqual(first.action);
+    expect(replay.job).toEqual(first.job);
     expect(replay.job).toMatchObject({
-      status: "waiting_for_login",
-      currentStep: "ensure_login",
+      status: "waiting_for_approval",
+      currentStep: "verify_prepared",
       checkpoint: {
-        reason: "login_required",
-        replayed: true,
-        actionRequestId: "action-login-replay",
+        reason: "approval_required",
+        summaryVersion: 1,
+        actionRequestId: "action-approval-replay",
       },
     });
     expect(
@@ -160,7 +170,7 @@ describe("JobControlService waiting atomicity", () => {
       ).get("job-control"),
     ).toEqual({ count: 1 });
     expect(
-      jobs.getStepsForJob("job-control").filter((step) => step.stepKey === "ensure_login"),
+      jobs.getStepsForJob("job-control").filter((step) => step.stepKey === "verify_prepared"),
     ).toHaveLength(1);
   });
 
