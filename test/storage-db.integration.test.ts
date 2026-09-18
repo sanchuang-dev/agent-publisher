@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import { expect, test } from "vitest";
 
 import { openDatabase } from "../src/storage/db.js";
 
@@ -43,20 +42,20 @@ test("initializes an empty database and safely re-runs migrations", () => {
 
   try {
     const first = openDatabase({ databasePath });
-    assert.equal(existsSync(databasePath), true);
-    assert.deepEqual(readNames(first, "table"), [...expectedTables]);
+    expect(existsSync(databasePath)).toBe(true);
+    expect(readNames(first, "table")).toEqual([...expectedTables]);
 
     const indexNames = readNames(first, "index");
     for (const expectedIndex of expectedIndexes) {
-      assert.equal(indexNames.includes(expectedIndex), true, `${expectedIndex} should exist`);
+      expect(indexNames.includes(expectedIndex), `${expectedIndex} should exist`).toBe(true);
     }
 
-    assert.equal(first.pragma("user_version", { simple: true }), 1);
+    expect(first.pragma("user_version", { simple: true })).toBe(1);
     first.close();
 
     const second = openDatabase({ databasePath });
-    assert.deepEqual(readNames(second, "table"), [...expectedTables]);
-    assert.equal(second.pragma("user_version", { simple: true }), 1);
+    expect(readNames(second, "table")).toEqual([...expectedTables]);
+    expect(second.pragma("user_version", { simple: true })).toBe(1);
     second.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -70,25 +69,24 @@ test("enables the required SQLite pragmas", () => {
   try {
     const db = openDatabase({ databasePath });
 
-    assert.equal(db.pragma("foreign_keys", { simple: true }), 1);
-    assert.equal(db.pragma("journal_mode", { simple: true }), "wal");
-    assert.equal(db.pragma("busy_timeout", { simple: true }), 5000);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+    expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
+    expect(db.pragma("busy_timeout", { simple: true })).toBe(5000);
 
-    assert.throws(
-      () => {
-        db.prepare(
-          `INSERT INTO job_steps (
+    expect(() => {
+      db.prepare(
+        `INSERT INTO job_steps (
              id, job_id, step_key, status, created_at, updated_at
            ) VALUES (?, ?, ?, ?, ?, ?)`,
-        ).run(
-          "step-1",
-          "missing-job",
-          "prepare",
-          "pending",
-          "2026-09-18T00:00:00.000Z",
-          "2026-09-18T00:00:00.000Z",
-        );
-      },
+      ).run(
+        "step-1",
+        "missing-job",
+        "prepare",
+        "pending",
+        "2026-09-18T00:00:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+      );
+    }).toThrow(
       /FOREIGN KEY constraint failed/,
     );
 
@@ -107,8 +105,7 @@ test("rejects a database schema newer than this build supports", () => {
     db.pragma("user_version = 2");
     db.close();
 
-    assert.throws(
-      () => openDatabase({ databasePath }),
+    expect(() => openDatabase({ databasePath })).toThrow(
       /Database schema version 2 is newer than supported version 1/,
     );
   } finally {
