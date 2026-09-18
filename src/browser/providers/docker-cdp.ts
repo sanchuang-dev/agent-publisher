@@ -54,7 +54,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #profileRef: string;
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
-  readonly #connections = new Map<string, ManagedCdpTransport>();
+  static readonly #connections = new Map<string, ManagedCdpTransport>();
   static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
@@ -126,7 +126,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         context.pages().find((candidate) => !candidate.isClosed()) ??
         (await context.newPage());
 
-      this.#connections.set(id, connection.transport);
+      DockerCdpBrowserProvider.#connections.set(id, connection.transport);
 
       return {
         id,
@@ -148,7 +148,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       throw error;
     } finally {
       if (
-        !this.#connections.has(id) &&
+        !DockerCdpBrowserProvider.#connections.has(id) &&
         DockerCdpBrowserProvider.#activeSessionId === id
       ) {
         DockerCdpBrowserProvider.#activeSessionId = undefined;
@@ -157,7 +157,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async release(sessionId: string): Promise<void> {
-    const transport = this.#connections.get(sessionId);
+    const transport = DockerCdpBrowserProvider.#connections.get(sessionId);
     if (!transport) {
       return;
     }
@@ -167,7 +167,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   #clearSession(sessionId: string): void {
-    this.#connections.delete(sessionId);
+    DockerCdpBrowserProvider.#connections.delete(sessionId);
     if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
       DockerCdpBrowserProvider.#activeSessionId = undefined;
     }
