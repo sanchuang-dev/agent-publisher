@@ -55,7 +55,7 @@ function browserStub(options: {
   return browser as unknown as Browser;
 }
 
-function managedTransportStub() {
+function managedTransportStub(options: { disconnectError?: Error } = {}) {
   let disconnectCalls = 0;
   let closeCalls = 0;
 
@@ -66,6 +66,9 @@ function managedTransportStub() {
     },
     disconnect: async () => {
       disconnectCalls += 1;
+      if (options.disconnectError) {
+        throw options.disconnectError;
+      }
     },
   };
 
@@ -458,4 +461,35 @@ test("single-session lease spans multiple provider instances in the same process
   expect(secondTransportRequests).toBe(1);
   expect(firstTransport.disconnectCalls).toBe(1);
   expect(secondTransport.disconnectCalls).toBe(1);
+});
+
+
+test("release clears the process-wide lease even when transport disconnect fails", async () => {
+  const failingTransport = managedTransportStub({
+    disconnectError: new Error("disconnect failed"),
+  });
+  const recoveredTransport = managedTransportStub();
+  let transportAttempt = 0;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () => {
+      const transport =
+        transportAttempt++ === 0 ? failingTransport : recoveredTransport;
+      return transport.transport;
+    },
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const first = await provider.acquire({});
+
+  await expect(provider.release(first.id)).rejects.toThrow("disconnect failed");
+  expect(failingTransport.disconnectCalls).toBe(1);
+
+  const recovered = await provider.acquire({});
+  await provider.release(recovered.id);
+
+  expect(recoveredTransport.disconnectCalls).toBe(1);
 });
