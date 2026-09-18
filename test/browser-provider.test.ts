@@ -493,3 +493,49 @@ test("release clears the process-wide lease even when transport disconnect fails
 
   expect(recoveredTransport.disconnectCalls).toBe(1);
 });
+
+
+test("release keeps the single-session lease until transport teardown settles", async () => {
+  let finishDisconnect: (() => void) | undefined;
+  const disconnectGate = new Promise<void>((resolve) => {
+    finishDisconnect = resolve;
+  });
+  let firstDisconnectCalls = 0;
+  const firstTransport = {
+    send: () => {},
+    close: () => {},
+    disconnect: async () => {
+      firstDisconnectCalls += 1;
+      await disconnectGate;
+    },
+  };
+  const recoveredTransport = managedTransportStub();
+  let transportAttempt = 0;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () =>
+      transportAttempt++ === 0
+        ? firstTransport
+        : recoveredTransport.transport,
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const first = await provider.acquire({});
+  const releasePromise = provider.release(first.id);
+
+  expect(firstDisconnectCalls).toBe(1);
+  await expect(provider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+
+  finishDisconnect?.();
+  await releasePromise;
+
+  const recovered = await provider.acquire({});
+  await provider.release(recovered.id);
+
+  expect(recoveredTransport.disconnectCalls).toBe(1);
+});
