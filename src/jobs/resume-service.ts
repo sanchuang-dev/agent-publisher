@@ -1,4 +1,6 @@
 import {
+  getCheckpointActionRequestId,
+  isApprovalResolution,
   JobNotFoundError,
   type ActionRequest,
   type ActionRequestRepository,
@@ -23,6 +25,21 @@ export interface ReadyToContinueDecision {
   readonly resolvedAction: ActionRequest | null;
 }
 
+export interface ApprovalRejectedDecision {
+  readonly kind: "approval_rejected";
+  readonly job: Job;
+  readonly checkpoint: JobCheckpoint;
+  readonly action: ActionRequest;
+  readonly nextStatus: "preparing_publish";
+}
+
+export interface ActionCancelledDecision {
+  readonly kind: "action_cancelled";
+  readonly job: Job;
+  readonly checkpoint: JobCheckpoint;
+  readonly action: ActionRequest;
+}
+
 export interface TerminalDecision {
   readonly kind: "terminal";
   readonly job: Job;
@@ -32,6 +49,8 @@ export interface TerminalDecision {
 export type ResumeDecision =
   | WaitingForActionDecision
   | ReadyToContinueDecision
+  | ApprovalRejectedDecision
+  | ActionCancelledDecision
   | TerminalDecision;
 
 export class ResumeInvariantError extends Error {
@@ -81,50 +100,34 @@ export class ResumeService {
 
     const expectedActionType = expectedWaitingActionType[job.status];
 
-    if (openAction) {
-      if (expectedActionType && openAction.type !== expectedActionType) {
-        throw new ResumeInvariantError(
-          jobId,
-          `${job.status} requires ${expectedActionType}, found ${openAction.type}`,
-        );
-      }
-
-      if (!expectedActionType && openAction.type !== "clarification_required") {
-        throw new ResumeInvariantError(
-          jobId,
-          `non-waiting status ${job.status} cannot own open ${openAction.type}`,
-        );
-      }
-
-      if (!checkpoint) {
+    if (!checkpoint) {
+      if (openAction) {
         throw new ResumeInvariantError(jobId, "open ActionRequest has no committed checkpoint");
       }
-
-      return {
-        kind: "waiting_for_action",
-        job,
-        checkpoint,
-        action: openAction,
-      };
-    }
-
-    if (expectedActionType) {
-      if (!checkpoint) {
+      if (expectedActionType) {
         throw new ResumeInvariantError(jobId, `${job.status} has no committed checkpoint`);
       }
 
-      const latestAction = this.#actionRequests.getLatestForJob(jobId, expectedActionType);
-      if (!latestAction) {
+      return {
+        kind: "ready_to_continue",
+        job,
+        checkpoint: null,
+        resolvedAction: null,
+      };
+    }
+
+    const boundActionId = getCheckpointActionRequestId(checkpoint.checkpoint);
+    if (!boundActionId) {
+      if (openAction) {
         throw new ResumeInvariantError(
           jobId,
-          `${job.status} has no persisted ${expectedActionType} ActionRequest`,
+          `open ${openAction.type} is not bound to the committed checkpoint`,
         );
       }
-
-      if (latestAction.status !== "resolved") {
+      if (expectedActionType) {
         throw new ResumeInvariantError(
           jobId,
-          `${expectedActionType} is ${latestAction.status}, not resolved`,
+          `${job.status} checkpoint is not bound to ${expectedActionType}`,
         );
       }
 
@@ -132,15 +135,94 @@ export class ResumeService {
         kind: "ready_to_continue",
         job,
         checkpoint,
-        resolvedAction: latestAction,
+        resolvedAction: null,
       };
+    }
+
+    const action = this.#actionRequests.getById(boundActionId);
+    if (!action) {
+      throw new ResumeInvariantError(
+        jobId,
+        `checkpoint references missing ActionRequest ${boundActionId}`,
+      );
+    }
+    if (action.jobId !== jobId) {
+      throw new ResumeInvariantError(
+        jobId,
+        `checkpoint ActionRequest ${boundActionId} belongs to another job`,
+      );
+    }
+
+    if (expectedActionType) {
+      if (action.type !== expectedActionType) {
+        throw new ResumeInvariantError(
+          jobId,
+          `${job.status} requires ${expectedActionType}, found ${action.type}`,
+        );
+      }
+    } else if (action.type !== "clarification_required") {
+      throw new ResumeInvariantError(
+        jobId,
+        `non-waiting status ${job.status} cannot be bound to ${action.type}`,
+      );
+    }
+
+    if (action.status === "open") {
+      if (!openAction || openAction.id !== action.id) {
+        throw new ResumeInvariantError(
+          jobId,
+          `checkpoint-bound ActionRequest ${action.id} is open but is not the current open action`,
+        );
+      }
+
+      return {
+        kind: "waiting_for_action",
+        job,
+        checkpoint,
+        action,
+      };
+    }
+
+    if (openAction) {
+      throw new ResumeInvariantError(
+        jobId,
+        `checkpoint is bound to ${action.id}, but current open action is ${openAction.id}`,
+      );
+    }
+
+    if (action.status === "cancelled") {
+      return {
+        kind: "action_cancelled",
+        job,
+        checkpoint,
+        action,
+      };
+    }
+
+    if (action.type === "approval_required") {
+      if (!isApprovalResolution(action.resolution)) {
+        throw new ResumeInvariantError(
+          jobId,
+          `approval ActionRequest ${action.id} has no valid approval decision`,
+        );
+      }
+
+      if (!action.resolution.approved) {
+        return {
+          kind: "approval_rejected",
+          job,
+          checkpoint,
+          action,
+          nextStatus: "preparing_publish",
+        };
+      }
     }
 
     return {
       kind: "ready_to_continue",
       job,
       checkpoint,
-      resolvedAction: null,
+      resolvedAction: action,
     };
   }
 }
