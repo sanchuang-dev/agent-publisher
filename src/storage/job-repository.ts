@@ -37,6 +37,7 @@ interface JobRow {
   checkpoint_json: string | null;
   created_at: string;
   updated_at: string;
+  completed_at: string | null;
 }
 
 interface JobStepRow {
@@ -66,6 +67,7 @@ function mapJob(row: JobRow): Job {
     checkpoint: row.checkpoint_json ? (JSON.parse(row.checkpoint_json) as Job["checkpoint"]) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    completedAt: row.completed_at,
   };
 }
 
@@ -114,7 +116,7 @@ export class JobRepository implements JobRepositoryContract {
     const row = this.#db
       .prepare(
         `SELECT id, platform, publish_mode, status, current_step,
-                brief_json, checkpoint_json, created_at, updated_at
+                brief_json, checkpoint_json, created_at, updated_at, completed_at
          FROM jobs
          WHERE id = ?`,
       )
@@ -137,6 +139,10 @@ export class JobRepository implements JobRepositoryContract {
                current_step    = ?,
                checkpoint_json = ?,
                updated_at      = ?,
+               completed_at    = CASE
+                 WHEN ? IN ('succeeded', 'failed') THEN COALESCE(completed_at, ?)
+                 ELSE completed_at
+               END,
                version         = version + 1
            WHERE id = ?`,
         )
@@ -154,7 +160,16 @@ export class JobRepository implements JobRepositoryContract {
             error_code, error_message,
             started_at, finished_at,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(job_id, step_key, attempt) DO UPDATE SET
+            status        = excluded.status,
+            input_json    = excluded.input_json,
+            output_json   = excluded.output_json,
+            error_code    = excluded.error_code,
+            error_message = excluded.error_message,
+            started_at    = COALESCE(job_steps.started_at, excluded.started_at),
+            finished_at   = excluded.finished_at,
+            updated_at    = excluded.updated_at`,
         )
         .run(
           step.id,
