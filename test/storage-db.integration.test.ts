@@ -1,9 +1,12 @@
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import Database from "better-sqlite3";
 import { expect, test } from "vitest";
 
 import { openDatabase } from "../src/storage/db.js";
+import { migrations, runMigrations } from "../src/storage/migrations/index.js";
 
 const expectedTables = [
   "action_requests",
@@ -50,13 +53,59 @@ test("initializes an empty database and safely re-runs migrations", () => {
       expect(indexNames.includes(expectedIndex), `${expectedIndex} should exist`).toBe(true);
     }
 
-    expect(first.pragma("user_version", { simple: true })).toBe(1);
+    expect(first.pragma("user_version", { simple: true })).toBe(2);
     first.close();
 
     const second = openDatabase({ databasePath });
     expect(readNames(second, "table")).toEqual([...expectedTables]);
-    expect(second.pragma("user_version", { simple: true })).toBe(1);
+    expect(second.pragma("user_version", { simple: true })).toBe(2);
     second.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("upgrades a populated v1 database without losing the existing job", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-db-upgrade-"));
+  const databasePath = join(root, "app.db");
+
+  try {
+    const legacy = new Database(databasePath);
+    runMigrations(legacy, migrations.slice(0, 1));
+    legacy
+      .prepare(
+        `INSERT INTO jobs (
+          id, platform, publish_mode, status, brief_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-job",
+        "xiaohongshu",
+        "image_text",
+        "created",
+        "{}",
+        "2026-09-18T00:00:00.000Z",
+        "2026-09-18T00:00:00.000Z",
+      );
+    expect(legacy.pragma("user_version", { simple: true })).toBe(1);
+    legacy.close();
+
+    const upgraded = openDatabase({ databasePath });
+    const row = upgraded
+      .prepare("SELECT id, status, checkpoint_json FROM jobs WHERE id = ?")
+      .get("legacy-job") as {
+      id: string;
+      status: string;
+      checkpoint_json: string | null;
+    };
+
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(2);
+    expect(row).toEqual({
+      id: "legacy-job",
+      status: "created",
+      checkpoint_json: null,
+    });
+    upgraded.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -86,9 +135,7 @@ test("enables the required SQLite pragmas", () => {
         "2026-09-18T00:00:00.000Z",
         "2026-09-18T00:00:00.000Z",
       );
-    }).toThrow(
-      /FOREIGN KEY constraint failed/,
-    );
+    }).toThrow(/FOREIGN KEY constraint failed/);
 
     db.close();
   } finally {
@@ -102,11 +149,11 @@ test("rejects a database schema newer than this build supports", () => {
 
   try {
     const db = openDatabase({ databasePath });
-    db.pragma("user_version = 2");
+    db.pragma("user_version = 3");
     db.close();
 
     expect(() => openDatabase({ databasePath })).toThrow(
-      /Database schema version 2 is newer than supported version 1/,
+      /Database schema version 3 is newer than supported version 2/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
