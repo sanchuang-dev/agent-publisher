@@ -1,0 +1,18 @@
+services:
+  browser-runtime:
+    build:
+      context: docker/browser-runtime
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - browser-profile:/data/profile
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9222/json/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    # 9222 is intentionally not published to the host; it is Compose-internal only.
+
+volumes:
+  browser-profile:
