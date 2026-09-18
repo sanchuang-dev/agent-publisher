@@ -151,6 +151,40 @@ describe("JobRepository integration", () => {
     ]);
   });
 
+  test("an outer transaction can atomically compose commitCheckpoint with later persistence", () => {
+    repo.create({
+      id: "job-outer-transaction",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    const outerTransaction = db!.transaction(() => {
+      repo.commitCheckpoint("job-outer-transaction", {
+        status: "waiting_for_login",
+        checkpoint: { reason: "login_required" },
+        step: {
+          id: "step-login",
+          stepKey: "ensure_login",
+          status: "succeeded",
+        },
+      });
+
+      // Simulates a later ActionRequest write failing in M2-03.
+      throw new Error("action request insert failed");
+    });
+
+    expect(outerTransaction).toThrow("action request insert failed");
+
+    expect(repo.getById("job-outer-transaction")).toMatchObject({
+      status: "created",
+      currentStep: null,
+      checkpoint: null,
+    });
+    expect(repo.loadLastCheckpoint("job-outer-transaction")).toBeNull();
+    expect(repo.getStepsForJob("job-outer-transaction")).toHaveLength(0);
+  });
+
   test("step insert failure rolls back status, current_step and checkpoint together", () => {
     repo.create({
       id: "job-004",
