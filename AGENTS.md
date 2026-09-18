@@ -67,3 +67,12 @@ Match evidence to the claim.
 ## POC Discipline
 
 Prefer the smallest coherent change that proves the next product risk. Reuse working libraries and services where their license and operational boundary are acceptable. Avoid speculative abstractions that do not help the current publishing loop.
+
+
+## AI Review
+
+Repository-specific review focus lives in `.github/ai-review/profile.md`.
+
+Organization AI Review is advisory and read-only. It must not execute PR-controlled code, publish content, mutate external platforms, merge, accept work, close Issues, or change Project state.
+
+A green AI Review is evidence only; it is not product acceptance or release authority.
