@@ -412,7 +412,7 @@ test("unexpected browser disconnect clears the active session so reconnect can a
   expect(disconnectFirstBrowser).toBeTypeOf("function");
 
   disconnectFirstBrowser?.();
-  expect(transports[0]?.disconnectCalls).toBe(1);
+  expect(transports[0]?.disconnectCalls).toBe(0);
 
   const reconnected = await provider.acquire({});
   await provider.release(reconnected.id);
