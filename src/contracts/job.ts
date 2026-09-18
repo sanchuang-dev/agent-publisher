@@ -139,12 +139,11 @@ export type ApprovalResolution = Readonly<Record<string, JsonValue>> & {
 export const humanActionCheckpointKey = "actionRequestId" as const;
 
 export function isApprovalResolution(value: JsonValue | null): value is ApprovalResolution {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    typeof value.approved === "boolean"
-  );
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  return typeof (value as { readonly approved?: unknown }).approved === "boolean";
 }
 
 export function getCheckpointActionRequestId(checkpoint: CheckpointData): string | null {
