@@ -224,13 +224,23 @@ describe("ResumeService restart recovery", () => {
     jobs.commitCheckpoint("job-clarification", {
       status: "preparing_materials",
       checkpoint: { phase: "brief" },
-      step: { id: "clarify-step", stepKey: "generate_plan", status: "running" },
+      step: { id: "clarify-step-start", stepKey: "generate_plan", status: "running" },
     });
-    actions.open({
-      id: "clarification-action",
+
+    const control = new JobControlService({
+      jobs,
+      actionRequests: actions,
+      runInTransaction: (work) => db.transaction(work)(),
+    });
+    control.requestClarification({
       jobId: "job-clarification",
-      type: "clarification_required",
-      payload: { field: "audience" },
+      status: "preparing_materials",
+      checkpoint: { phase: "brief", reason: "clarification_required" },
+      step: { id: "clarify-step", stepKey: "generate_plan", status: "running" },
+      action: {
+        id: "clarification-action",
+        payload: { field: "audience" },
+      },
     });
 
     const resume = new ResumeService({ jobs, actionRequests: actions });
