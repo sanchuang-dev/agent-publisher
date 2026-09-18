@@ -119,25 +119,14 @@ export class JobControlService {
         );
       }
 
-      const actionId = this.#selectActionRequestId(
+      return this.#commitHumanPause(
         input.jobId,
+        currentJob.status,
+        input.checkpoint,
+        input.step,
+        input.action,
         "clarification_required",
-        input.action.id,
       );
-      const job = this.#jobs.commitCheckpoint(input.jobId, {
-        status: currentJob.status,
-        checkpoint: this.#bindAction(input.checkpoint, actionId),
-        step: input.step,
-      });
-
-      const action = this.#actionRequests.open({
-        id: input.action.id,
-        jobId: input.jobId,
-        type: "clarification_required",
-        payload: input.action.payload ?? null,
-      });
-
-      return { job, action };
     });
   }
 
@@ -205,10 +194,39 @@ export class JobControlService {
     actionType: ActionRequestType,
   ): EnterWaitingResult {
     return this.#runInTransaction(() => {
-      const actionId = this.#selectActionRequestId(jobId, actionType, actionInput.id);
+      const existing = this.#actionRequests.getCurrentOpenForJob(jobId);
+      if (existing) {
+        if (existing.type !== actionType) {
+          throw new OpenActionRequestConflictError(jobId, existing.type, actionType);
+        }
+
+        const currentJob = this.#jobs.getById(jobId);
+        if (!currentJob) {
+          throw new JobNotFoundError(jobId);
+        }
+        if (currentJob.status !== status) {
+          throw new Error(
+            `Cannot replay ${actionType} for job ${jobId}: durable status is ${currentJob.status}, expected ${status}`,
+          );
+        }
+        if (
+          !currentJob.checkpoint ||
+          getCheckpointActionRequestId(currentJob.checkpoint) !== existing.id
+        ) {
+          throw new Error(
+            `Cannot replay ${actionType} for job ${jobId}: open action is not bound to the durable checkpoint`,
+          );
+        }
+
+        // An open human action freezes the exact checkpoint/payload the human
+        // is reviewing. Crash/retry reuses that durable pause instead of
+        // silently moving the approval/login/clarification target underneath it.
+        return { job: currentJob, action: existing };
+      }
+
       const job = this.#jobs.commitCheckpoint(jobId, {
         status,
-        checkpoint: this.#bindAction(checkpoint, actionId),
+        checkpoint: this.#bindAction(checkpoint, actionInput.id),
         step,
       });
 
@@ -221,23 +239,6 @@ export class JobControlService {
 
       return { job, action };
     });
-  }
-
-  #selectActionRequestId(
-    jobId: string,
-    actionType: ActionRequestType,
-    requestedId: string,
-  ): string {
-    const existing = this.#actionRequests.getCurrentOpenForJob(jobId);
-    if (!existing) {
-      return requestedId;
-    }
-
-    if (existing.type !== actionType) {
-      throw new OpenActionRequestConflictError(jobId, existing.type, actionType);
-    }
-
-    return existing.id;
   }
 
   #bindAction(checkpoint: CheckpointData, actionRequestId: string): CheckpointData {
