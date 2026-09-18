@@ -122,7 +122,7 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   const expectedText: Record<(typeof states)[number], string> = {
     preparing_materials: "Material Pack",
     preparing_publish: "执行秘书正在操作",
-    waiting_for_login: "请接管登录",
+    waiting_for_login: "等待 Browser Live View",
     waiting_for_approval: "执行秘书已准备好发布",
     succeeded: "发布已完成",
     failed: "任务在安全边界内停止",
