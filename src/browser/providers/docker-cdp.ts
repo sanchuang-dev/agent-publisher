@@ -107,11 +107,13 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       // A runtime restart or transport loss invalidates the app-side session.
       // Chromium itself is owned by browser-runtime and must not be closed here.
       connection.browser.once("disconnected", () => {
-        const activeTransport = this.#takeSession(id);
+        const activeTransport =
+          DockerCdpBrowserProvider.#connections.get(id);
         if (!activeTransport) {
           return;
         }
 
+        this.#clearSession(id);
         void activeTransport.disconnect().catch(() => {
           // The browser is already disconnected. Keep cleanup best-effort and
           // never re-lock the provider because transport teardown also failed.
@@ -160,23 +162,24 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async release(sessionId: string): Promise<void> {
-    const transport = this.#takeSession(sessionId);
+    const transport = DockerCdpBrowserProvider.#connections.get(sessionId);
     if (!transport) {
       return;
     }
 
-    await transport.disconnect();
+    try {
+      await transport.disconnect();
+    } finally {
+      this.#clearSession(sessionId);
+    }
   }
 
-  #takeSession(sessionId: string): ManagedCdpTransport | undefined {
-    const transport = DockerCdpBrowserProvider.#connections.get(sessionId);
+  #clearSession(sessionId: string): void {
     DockerCdpBrowserProvider.#connections.delete(sessionId);
 
     if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
       DockerCdpBrowserProvider.#activeSessionId = undefined;
     }
-
-    return transport;
   }
 
   async health(): Promise<BrowserProviderHealth> {
