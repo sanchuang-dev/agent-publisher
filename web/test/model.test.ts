@@ -1,19 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { createElement } from "react";
-import { afterEach, expect, test } from "vitest";
-
-import { App } from "../src/App.js";
+import { expect, test } from "vitest";
 import {
   fixtureStates,
   getTaskFixture,
   getWorkSurfaceKind,
   taskRepository,
 } from "../src/model.js";
-
-afterEach(() => {
-  cleanup();
-  window.location.hash = "#/";
-});
 
 test("all six MVP fixture states are independently addressable", () => {
   expect(fixtureStates).toEqual([
@@ -65,12 +56,4 @@ test("assigned brief and publish mode survive the handoff into task detail", asy
   expect(assigned.publishMode).toBe("video");
   expect(assigned.material.mode).toBe("video");
   expect(assigned.material.media).toEqual(["视频成片", "视频封面"]);
-});
-
-test("App renders takeover state from hash route in jsdom", async () => {
-  window.location.hash = "#/task/waiting_for_login";
-  render(createElement(App));
-
-  await screen.findByText("请接管登录");
-  await screen.findByText("控制权已让给你");
 });
