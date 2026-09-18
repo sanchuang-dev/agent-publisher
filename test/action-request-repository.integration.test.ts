@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import {
   ActionRequestStateError,
+  InvalidActionRequestResolutionError,
   OpenActionRequestConflictError,
   type ActionRequestRepository as ActionRequestRepositoryContract,
 } from "../src/contracts/job.js";
@@ -101,7 +102,7 @@ describe("ActionRequestRepository integration", () => {
     expect(resolved.resolution).toEqual({ loginDetected: true });
     expect(resolved.resolvedAt).not.toBeNull();
     expect(actionRequests.getCurrentOpenForJob("job-action")).toBeNull();
-    expect(actionRequests.getLatestForJob("job-action", "login_required")).toEqual(resolved);
+    expect(actionRequests.getById(login.id)).toEqual(resolved);
 
     const approval = actionRequests.open({
       id: "action-approval",
@@ -109,6 +110,29 @@ describe("ActionRequestRepository integration", () => {
       type: "approval_required",
     });
     expect(approval.status).toBe("open");
+  });
+
+  test("approval resolution requires an explicit boolean decision", () => {
+    const approval = actionRequests.open({
+      id: "action-approval-decision",
+      jobId: "job-action",
+      type: "approval_required",
+    });
+
+    expect(() => actionRequests.resolve(approval.id)).toThrow(
+      InvalidActionRequestResolutionError,
+    );
+    expect(actionRequests.getById(approval.id)).toMatchObject({
+      status: "open",
+      resolution: null,
+    });
+
+    const rejected = actionRequests.resolve(approval.id, { approved: false });
+    expect(rejected).toMatchObject({
+      id: approval.id,
+      status: "resolved",
+      resolution: { approved: false },
+    });
   });
 
   test("cancel is durable and a conflicting second close is rejected", () => {
