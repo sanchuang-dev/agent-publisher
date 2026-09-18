@@ -76,23 +76,36 @@ async function waitForDevToolsEndpoint(
 }
 
 async function stopProcess(
-  process: ChildProcessWithoutNullStreams,
+  child: ChildProcessWithoutNullStreams,
 ): Promise<void> {
-  if (process.exitCode !== null || process.signalCode !== null) {
+  const killProcessTree = (signal: NodeJS.Signals) => {
+    if (process.platform !== "win32" && child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, signal);
+        return;
+      } catch {
+        // Fall back to the direct child below.
+      }
+    }
+
+    child.kill(signal);
+  };
+
+  if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
 
   await new Promise<void>((resolve) => {
     const timer = setTimeout(() => {
-      process.kill("SIGKILL");
+      killProcessTree("SIGKILL");
     }, 2_000);
 
-    process.once("exit", () => {
+    child.once("exit", () => {
       clearTimeout(timer);
       resolve();
     });
 
-    process.kill("SIGTERM");
+    killProcessTree("SIGTERM");
   });
 }
 
@@ -115,6 +128,7 @@ test(
       ],
       {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       },
     );
 
