@@ -132,6 +132,26 @@ export interface OpenActionRequestInput {
   readonly payload?: JsonValue | null;
 }
 
+export type ApprovalResolution = Readonly<Record<string, JsonValue>> & {
+  readonly approved: boolean;
+};
+
+export const humanActionCheckpointKey = "actionRequestId" as const;
+
+export function isApprovalResolution(value: JsonValue | null): value is ApprovalResolution {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value.approved === "boolean"
+  );
+}
+
+export function getCheckpointActionRequestId(checkpoint: CheckpointData): string | null {
+  const value = checkpoint[humanActionCheckpointKey];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export class JobNotFoundError extends Error {
   constructor(readonly jobId: string) {
     super(`Job not found: ${jobId}`);
@@ -172,6 +192,18 @@ export class ActionRequestStateError extends Error {
   }
 }
 
+export class InvalidActionRequestResolutionError extends Error {
+  constructor(
+    readonly actionRequestId: string,
+    readonly actionRequestType: ActionRequestType,
+  ) {
+    super(
+      `ActionRequest ${actionRequestId} (${actionRequestType}) has an invalid resolution payload`,
+    );
+    this.name = "InvalidActionRequestResolutionError";
+  }
+}
+
 /**
  * Driver-agnostic contract consumed by orchestration/recovery code.
  *
@@ -191,7 +223,6 @@ export interface ActionRequestRepository {
   open(input: OpenActionRequestInput): ActionRequest;
   getById(id: string): ActionRequest | null;
   getCurrentOpenForJob(jobId: string): ActionRequest | null;
-  getLatestForJob(jobId: string, type: ActionRequestType): ActionRequest | null;
   resolve(id: string, resolution?: JsonValue | null): ActionRequest;
   cancel(id: string, resolution?: JsonValue | null): ActionRequest;
 }
