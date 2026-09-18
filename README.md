@@ -2,6 +2,12 @@
 
 Company POC for agent-assisted multi-platform content production and publishing.
 
+## Core product document
+
+The canonical product definition is [docs/product/PRD.md](docs/product/PRD.md).
+
+The PRD owns durable product intent, MVP boundaries, interaction model, and product decisions. Individual work-item scope and acceptance remain in GitHub Issues.
+
 ## Goal
 
 Given a content intent or source material, the system should be able to:
@@ -12,7 +18,7 @@ Given a content intent or source material, the system should be able to:
 4. prepare the publish form and request approval before irreversible publication;
 5. publish and retain evidence of the result.
 
-Initial platform targets are Xiaohongshu, Douyin, and WeChat Official Accounts.
+Initial platform targets are Xiaohongshu, Douyin, and WeChat Official Accounts. Xiaohongshu is the first MVP path.
 
 ## POC boundaries
 
