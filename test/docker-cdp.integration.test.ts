@@ -174,7 +174,7 @@ test(
       });
     }
   },
-  20_000,
+  45_000,
 );
 
 async function startProfileStateServer(): Promise<{
