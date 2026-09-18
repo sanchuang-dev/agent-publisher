@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; color: #303034; background: #f8f8fa; }
+    .page { padding: 24px; }
+    .platform { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: white; border: 1px solid #e2e0e4; border-radius: 14px; }
+    .platform strong { font-size: 15px; }
+    .chip { padding: 6px 9px; border-radius: 9px; background: #eee8f6; color: #5e4a78; font-size: 11px; }
+    .content { margin-top: 16px; display: grid; grid-template-columns: 150px 1fr; gap: 14px; }
+    .media { height: 210px; border-radius: 14px; background: #ebe7ee; display: grid; place-items: center; color: #7c7580; font-size: 12px; }
+    .form { padding: 16px; background: white; border: 1px solid #e2e0e4; border-radius: 14px; display: grid; gap: 12px; }
+    .line { height: 12px; border-radius: 6px; background: #eeecef; }
+    .line.short { width: 45%; }
+    .line.medium { width: 72%; }
+    .notice { margin-top: 16px; padding: 13px; border-radius: 12px; background: #f2ecff; color: #5a457c; font-size: 12px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="platform">
+      <strong>小红书创作服务 · Live View Placeholder</strong>
+      <span class="chip">adapter URL</span>
+    </div>
+    <div class="content">
+      <div class="media">媒体上传区</div>
+      <div class="form">
+        <div class="line short"></div>
+        <div class="line"></div>
+        <div class="line"></div>
+        <div class="line medium"></div>
+        <div class="line"></div>
+      </div>
+    </div>
+    <div class="notice">真实 Browser Runtime 接入后，由 adapter 将此 URL 替换为受保护的 Live View。</div>
+  </div>
+</body>
+</html>

@@ -4,91 +4,75 @@
 
 This repository is governed by the current `sanchuang-dev/.github/AGENTS.md` plus the repository-specific rules below.
 
-For work-item lifecycle, source-of-truth, environment promotion, testing, permissions, and Organization AI Review, load the current Organization guidance when those concerns apply.
+Load the current Organization policy when work touches work items, environment promotion, testing, permissions, or AI Review.
 
-GitHub Project lifecycle (`Todo -> In Progress -> Done`) is management state only and is separate from branch/environment position.
+## Product Contract
 
-## Product and Safety Boundary
+`docs/product/PRD.md` is the canonical repository product definition for durable product intent, MVP boundaries, interaction model, and product decisions.
 
-Agent Publisher is a company POC for agent-assisted content preparation and publishing.
+It does not replace:
 
-The system may prepare content, operate authenticated browser sessions, fill publish forms, and retain evidence. It must preserve explicit human control around identity verification and irreversible publication.
+- GitHub Issues as individual work-item contracts and outcome records;
+- Project Status as lifecycle projection;
+- code/configuration/runtime as current technical reality.
 
-Do not:
+When a current Issue intentionally changes product behavior, update the PRD when that decision becomes durable rather than maintaining contradictory product rules.
 
-- design around bypassing CAPTCHA, MFA, platform risk controls, or identity checks;
-- store raw account passwords when persistent authenticated profiles or other safer session mechanisms are available;
-- silently publish, delete, or materially alter external content without authority defined by the current task/approval contract;
-- infer publication success from a local action alone when platform/runtime evidence can verify the result.
+## Repository Role
 
-## Architecture Boundary
+`agent-publisher` is a company POC for agent-assisted content production and browser-based publishing.
 
-Prefer:
-
-```text
-intent/source
-  -> content preparation
-  -> platform adapter / skill
-  -> authenticated browser/runtime
-  -> human verification/approval when required
-  -> external side effect
-  -> evidence
-```
-
-Keep platform-specific browser logic isolated behind adapters/skills.
-
-Use deterministic automation for stable interaction mechanics. Use model/agent reasoning only where it materially reduces brittle hard-coded logic.
-
-Do not turn the POC into a general-purpose browser agent unless the product contract explicitly changes.
+The initial product target is a small, real publishing loop across Xiaohongshu, Douyin, and WeChat Official Accounts. Xiaohongshu is the first MVP path. Do not expand the project into a general-purpose browser agent unless an explicit task changes that boundary.
 
 ## Branch / Environment Policy
 
-The repository follows the Organization default:
+The active flow is:
 
 ```text
 feat/* -> dev -> test -> prod
 ```
 
-- `dev`: normal integration branch and normal base for feature work.
-- `test`: acceptance/regression promotion stage.
-- `prod`: production/release source.
-- `main`: landing/governance branch; not a production environment.
+- `dev`: normal integration base for engineering work.
+- `test`: acceptance and smoke verification.
+- `prod`: production source if/when a production deployment is introduced.
+- `main`: landing/governance branch only; it is not an environment and must not bypass `prod`.
 
-Do not bypass `prod` for production release semantics.
+## Architecture Baseline
 
-## Change Policy
+- Node.js + TypeScript.
+- Playwright is the deterministic browser automation baseline.
+- Prefer deterministic browser steps for known flows; use an Agent/model when it materially reduces brittle recovery or content-generation logic.
+- Keep browser runtime/provider concerns behind an adapter so local, self-hosted, and managed browsers can be swapped during the POC.
+- Keep platform-specific behavior in platform skills/adapters rather than spreading selectors and platform rules through orchestration code.
+- Reuse external AI/media capabilities instead of rebuilding image, video, or model infrastructure during the POC.
 
-- Read the current Issue/task contract and relevant implementation before editing.
-- Keep changes small, coherent, and reversible.
-- Preserve platform/session/publishing boundaries unless the accepted contract changes them.
-- Avoid broad framework, browser-runtime, or dependency upgrades unless they are required by the task.
-- Treat retries, duplicate submissions, idempotency, account/session state, and partial publication failure as first-class concerns for side-effecting flows.
+## Identity and Side Effects
+
+- Do not commit or log passwords, cookies, browser profiles, storage state, tokens, QR-login artifacts, or other session credentials.
+- Prefer persistent browser profile/session state over storing raw passwords.
+- MFA, CAPTCHA, SSO, device verification, and similar identity checks should hand control to the authorized human; do not build bypass mechanisms.
+- Publishing, deleting, overwriting, or otherwise causing an external irreversible side effect requires explicit approval by default unless the current task contract grants a narrower automation policy.
+- Treat screenshots, traces, recordings, downloaded files, and browser artifacts as potentially sensitive.
 
 ## Verification
 
 Match evidence to the claim.
 
-For ordinary logic, focused tests may be sufficient. For browser/publishing flows, evidence may require:
+- Pure orchestration/contract logic: focused automated tests are usually sufficient.
+- Browser flow changes: verify against the actual supported page/runtime when practical.
+- Authentication/session changes: require stronger evidence and never expose credential material.
+- A successful script or CI run is not evidence that an external post was published; verify the resulting platform state when publication is part of the claim.
+- Record external-service or account-access gaps explicitly instead of guessing.
 
-- deterministic tests of adapter logic;
-- browser/session integration checks;
-- platform form-state verification;
-- explicit human verification when identity/risk controls intervene;
-- proof of external publish/delete outcome when the task claims it;
-- duplicate/retry and failure-path checks where side effects are possible.
+## POC Discipline
 
-Do not call a publish flow verified merely because Playwright completed without throwing.
+Prefer the smallest coherent change that proves the next product risk. Reuse working libraries and services where their license and operational boundary are acceptable. Avoid speculative abstractions that do not help the current publishing loop.
 
-## Secrets and Sensitive State
-
-Never print or reproduce API keys, browser-profile secrets, session cookies, tokens, credentials, or provider secrets in reports, Issues, PR text, AI Review output, or logs.
-
-Authenticated browser profiles and session state are sensitive even when they do not contain a raw password.
-
-PR-controlled code must not receive reviewer/provider credentials.
 
 ## AI Review
 
 Repository-specific review focus lives in `.github/ai-review/profile.md`.
 
-Organization AI Review is advisory and read-only. It must not publish content, mutate external platforms, merge, accept work, close Issues, or change Project state.
+Organization AI Review is advisory and read-only. It must not execute PR-controlled code, publish content, mutate external platforms, merge, accept work, close Issues, or change Project state.
+
+A green AI Review is evidence only; it is not product acceptance or release authority.
