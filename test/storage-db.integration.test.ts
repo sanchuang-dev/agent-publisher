@@ -183,6 +183,75 @@ test("upgrades populated v2 action history and enforces one current open action 
   }
 });
 
+test("v3 migration rejects ambiguous legacy jobs with multiple open actions without advancing schema", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-db-v2-conflict-"));
+  const databasePath = join(root, "app.db");
+
+  try {
+    const legacy = new Database(databasePath);
+    runMigrations(legacy, migrations.slice(0, 2));
+    legacy
+      .prepare(
+        `INSERT INTO jobs (
+          id, platform, publish_mode, status, brief_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-conflict-job",
+        "xiaohongshu",
+        "image_text",
+        "preparing_publish",
+        "{}",
+        "2026-09-18T00:10:00.000Z",
+        "2026-09-18T00:10:00.000Z",
+      );
+
+    const insertAction = legacy.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, created_at
+      ) VALUES (?, ?, ?, 'open', ?)`,
+    );
+    insertAction.run(
+      "legacy-open-login",
+      "legacy-conflict-job",
+      "login_required",
+      "2026-09-18T00:10:01.000Z",
+    );
+    insertAction.run(
+      "legacy-open-approval",
+      "legacy-conflict-job",
+      "approval_required",
+      "2026-09-18T00:10:02.000Z",
+    );
+    expect(legacy.pragma("user_version", { simple: true })).toBe(2);
+    legacy.close();
+
+    expect(() => openDatabase({ databasePath })).toThrow(
+      /legacy-conflict-job has multiple open requests/,
+    );
+
+    const inspected = new Database(databasePath);
+    expect(inspected.pragma("user_version", { simple: true })).toBe(2);
+    expect(
+      inspected
+        .prepare(
+          "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'index' AND name = ?",
+        )
+        .get("idx_action_requests_single_open"),
+    ).toEqual({ count: 0 });
+    expect(
+      inspected
+        .prepare(
+          "SELECT COUNT(*) AS count FROM action_requests WHERE job_id = ? AND status = 'open'",
+        )
+        .get("legacy-conflict-job"),
+    ).toEqual({ count: 2 });
+    inspected.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("enables the required SQLite pragmas", () => {
   const root = mkdtempSync(join(tmpdir(), "agent-publisher-db-"));
   const databasePath = join(root, "app.db");
