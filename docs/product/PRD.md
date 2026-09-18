@@ -5,7 +5,7 @@ Phase: POC / MVP
 
 This document is the repository's canonical product definition for Agent Publisher. It owns product intent, user-facing scope, MVP boundaries, core interaction model, and durable product decisions.
 
-It does **not** replace GitHub Issues as the contract for individual work items, Project Status as lifecycle state, or code/configuration as current technical reality.
+It does **not** replace GitHub Issues as the contract for individual work items, Project Status as lifecycle state, or code/configuration as current technical reality.\n\nFrontend interaction and prototype decisions are defined in [FRONTEND.md](./FRONTEND.md).
 
 ## 1. Product statement
 
