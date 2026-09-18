@@ -137,6 +137,34 @@ export const migrations: readonly Migration[] = [
       db.exec("ALTER TABLE jobs ADD COLUMN checkpoint_json TEXT");
     },
   },
+  {
+    version: 3,
+    name: "enforce-single-open-action-request",
+    up(db) {
+      const duplicate = db
+        .prepare(
+          `SELECT job_id
+           FROM action_requests
+           WHERE status = 'open'
+           GROUP BY job_id
+           HAVING COUNT(*) > 1
+           LIMIT 1`,
+        )
+        .get() as { job_id: string } | undefined;
+
+      if (duplicate) {
+        throw new Error(
+          `Cannot enforce single open ActionRequest: job ${duplicate.job_id} has multiple open requests`,
+        );
+      }
+
+      db.exec(
+        `CREATE UNIQUE INDEX idx_action_requests_single_open
+         ON action_requests(job_id)
+         WHERE status = 'open'`,
+      );
+    },
+  },
 ];
 
 function readUserVersion(db: Database.Database): number {

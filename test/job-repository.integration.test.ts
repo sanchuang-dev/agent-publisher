@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { JobNotFoundError, type JobRepository as JobRepositoryContract } from "../src/contracts/job.js";
+import { IllegalJobStatusTransitionError } from "../src/jobs/state-machine.js";
 import { openDatabase } from "../src/storage/db.js";
 import { JobRepository } from "../src/storage/job-repository.js";
 
@@ -179,13 +180,23 @@ describe("JobRepository integration", () => {
       briefJson: "{}",
     });
 
+    repo.commitCheckpoint("job-terminal", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: {
+        id: "step-prepare-terminal",
+        stepKey: "generate_copy",
+        status: "succeeded",
+      },
+    });
+
     const completed = repo.commitCheckpoint("job-terminal", {
-      status: "succeeded",
+      status: "failed",
       checkpoint: { phase: "done" },
       step: {
         id: "step-terminal",
         stepKey: "verify_result",
-        status: "succeeded",
+        status: "failed",
       },
     });
 
@@ -233,6 +244,25 @@ describe("JobRepository integration", () => {
       briefJson: "{}",
     });
 
+    repo.commitCheckpoint("job-outer-transaction", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: {
+        id: "step-outer-prepare",
+        stepKey: "generate_copy",
+        status: "succeeded",
+      },
+    });
+    repo.commitCheckpoint("job-outer-transaction", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: {
+        id: "step-outer-browser",
+        stepKey: "open_platform",
+        status: "succeeded",
+      },
+    });
+
     const outerTransaction = db!.transaction(() => {
       repo.commitCheckpoint("job-outer-transaction", {
         status: "waiting_for_login",
@@ -251,12 +281,16 @@ describe("JobRepository integration", () => {
     expect(outerTransaction).toThrow("action request insert failed");
 
     expect(repo.getById("job-outer-transaction")).toMatchObject({
-      status: "created",
-      currentStep: null,
-      checkpoint: null,
+      status: "preparing_publish",
+      currentStep: "open_platform",
+      checkpoint: { phase: "browser" },
     });
-    expect(repo.loadLastCheckpoint("job-outer-transaction")).toBeNull();
-    expect(repo.getStepsForJob("job-outer-transaction")).toHaveLength(0);
+    expect(repo.loadLastCheckpoint("job-outer-transaction")).toMatchObject({
+      status: "preparing_publish",
+      currentStep: "open_platform",
+      checkpoint: { phase: "browser" },
+    });
+    expect(repo.getStepsForJob("job-outer-transaction")).toHaveLength(2);
   });
 
   test("step insert failure rolls back status, current_step and checkpoint together", () => {
@@ -306,12 +340,53 @@ describe("JobRepository integration", () => {
     expect(repo.getStepsForJob("job-004")).toHaveLength(1);
   });
 
+  test("illegal status transitions fail without mutating the persisted checkpoint", () => {
+    repo.create({
+      id: "job-illegal-transition",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-illegal-transition", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "step-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+
+    expect(() =>
+      repo.commitCheckpoint("job-illegal-transition", {
+        status: "publishing",
+        checkpoint: { phase: "publish" },
+        step: { id: "step-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toThrow(IllegalJobStatusTransitionError);
+
+    expect(repo.getById("job-illegal-transition")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: "copy" },
+    });
+    expect(repo.loadLastCheckpoint("job-illegal-transition")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: "copy" },
+    });
+    expect(repo.getStepsForJob("job-illegal-transition")).toHaveLength(1);
+  });
+
   test("reopen recovery loads the last committed checkpoint and step history", () => {
     repo.create({
       id: "job-005",
       platform: "xiaohongshu",
       publishMode: "image_text",
       briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-005", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "step-copy", stepKey: "generate_copy", status: "succeeded" },
     });
 
     repo.commitCheckpoint("job-005", {
@@ -334,8 +409,11 @@ describe("JobRepository integration", () => {
         checkpoint: { uploadedBytes: 4096 },
       });
 
-      expect(reopenedRepo.getStepsForJob("job-005")).toHaveLength(1);
-      expect(reopenedRepo.getStepsForJob("job-005")[0]?.stepKey).toBe("upload_assets");
+      expect(reopenedRepo.getStepsForJob("job-005")).toHaveLength(2);
+      expect(reopenedRepo.getStepsForJob("job-005").map((step) => step.stepKey)).toEqual([
+        "generate_copy",
+        "upload_assets",
+      ]);
     } finally {
       reopenedDb.close();
     }

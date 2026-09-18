@@ -11,6 +11,7 @@ import {
   type JobRepository as JobRepositoryContract,
   type JobStep,
 } from "../contracts/job.js";
+import { assertJobStatusTransitionAllowed } from "../jobs/state-machine.js";
 
 interface RunResult {
   readonly changes: number;
@@ -132,6 +133,9 @@ export class JobRepository implements JobRepositoryContract {
     const attempt = step.attempt ?? 1;
 
     const commit = this.#db.transaction(() => {
+      const currentJob = this.#requireJob(jobId);
+      assertJobStatusTransitionAllowed(currentJob.status, input.status);
+
       const result = this.#db
         .prepare(
           `UPDATE jobs
