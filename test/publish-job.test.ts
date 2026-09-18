@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "vitest";
 
 import {
   isPublishPlatform,
@@ -7,12 +6,12 @@ import {
 } from "../src/contracts/publish-job.js";
 
 test("the POC exposes the agreed initial publishing targets", () => {
-  assert.deepEqual(publishPlatforms, [
+  expect(publishPlatforms).toEqual([
     "xiaohongshu",
     "douyin",
     "wechat-official-account",
   ]);
 
-  assert.equal(isPublishPlatform("xiaohongshu"), true);
-  assert.equal(isPublishPlatform("generic-browser-agent"), false);
+  expect(isPublishPlatform("xiaohongshu")).toBe(true);
+  expect(isPublishPlatform("generic-browser-agent")).toBe(false);
 });

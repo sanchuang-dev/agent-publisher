@@ -1,6 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
-
+import { expect, test } from "vitest";
 import {
   fixtureStates,
   getTaskFixture,
@@ -9,7 +7,7 @@ import {
 } from "../src/model.js";
 
 test("all six MVP fixture states are independently addressable", () => {
-  assert.deepEqual(fixtureStates, [
+  expect(fixtureStates).toEqual([
     "preparing_materials",
     "preparing_publish",
     "waiting_for_login",
@@ -19,12 +17,12 @@ test("all six MVP fixture states are independently addressable", () => {
   ]);
 
   for (const state of fixtureStates) {
-    assert.equal(getTaskFixture(state).state, state);
+    expect(getTaskFixture(state).state).toBe(state);
   }
 });
 
 test("work surface mapping follows the approved product states", () => {
-  assert.deepEqual(fixtureStates.map(getWorkSurfaceKind), [
+  expect(fixtureStates.map(getWorkSurfaceKind)).toEqual([
     "material",
     "browser",
     "takeover",
@@ -39,13 +37,10 @@ test("login, approval and success fixtures expose required payloads", () => {
   const approval = getTaskFixture("waiting_for_approval");
   const succeeded = getTaskFixture("succeeded");
 
-  assert.equal(
-    login.browserLiveViewUrl,
-    "/browser-live-view-placeholder.html",
-  );
-  assert.equal(login.needsHuman, true);
-  assert.ok(approval.approval?.warnings.length);
-  assert.ok((succeeded.evidence?.length ?? 0) >= 3);
+  expect(login.browserLiveViewUrl).toBe("/browser-live-view-placeholder.html");
+  expect(login.needsHuman).toBe(true);
+  expect(approval.approval?.warnings.length).toBeTruthy();
+  expect((succeeded.evidence?.length ?? 0) >= 3).toBe(true);
 });
 
 
@@ -57,8 +52,8 @@ test("assigned brief and publish mode survive the handoff into task detail", asy
 
   const assigned = await taskRepository.get("preparing_materials");
 
-  assert.equal(assigned.brief, "用自定义 brief 发布一条视频任务");
-  assert.equal(assigned.publishMode, "video");
-  assert.equal(assigned.material.mode, "video");
-  assert.deepEqual(assigned.material.media, ["视频成片", "视频封面"]);
+  expect(assigned.brief).toBe("用自定义 brief 发布一条视频任务");
+  expect(assigned.publishMode).toBe("video");
+  expect(assigned.material.mode).toBe("video");
+  expect(assigned.material.media).toEqual(["视频成片", "视频封面"]);
 });
