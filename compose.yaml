@@ -4,7 +4,10 @@ services:
       context: ./docker/browser-runtime
     shm_size: "1gb"
     expose:
+      - "6080"
       - "9222"
+    ports:
+      - "127.0.0.1:6080:6080"
     volumes:
       - browser-profile:/data/profile
     restart: unless-stopped

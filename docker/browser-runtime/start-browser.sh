@@ -3,6 +3,8 @@ set -eu
 
 display="${DISPLAY:-:99}"
 profile_dir="${BROWSER_PROFILE_DIR:-/data/profile}"
+vnc_port="${VNC_PORT:-5900}"
+novnc_port="${NOVNC_PORT:-6080}"
 display_number="${display#:}"
 x_socket="/tmp/.X11-unix/X${display_number}"
 
@@ -11,10 +13,18 @@ chown -R browser:browser "${profile_dir}"
 
 xvfb_pid=""
 chromium_pid=""
+x11vnc_pid=""
+websockify_pid=""
 
 cleanup() {
   if [ -n "${chromium_pid}" ]; then
     kill "${chromium_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${websockify_pid}" ]; then
+    kill "${websockify_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${x11vnc_pid}" ]; then
+    kill "${x11vnc_pid}" 2>/dev/null || true
   fi
   if [ -n "${xvfb_pid}" ]; then
     kill "${xvfb_pid}" 2>/dev/null || true
@@ -22,6 +32,12 @@ cleanup() {
 
   if [ -n "${chromium_pid}" ]; then
     wait "${chromium_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${websockify_pid}" ]; then
+    wait "${websockify_pid}" 2>/dev/null || true
+  fi
+  if [ -n "${x11vnc_pid}" ]; then
+    wait "${x11vnc_pid}" 2>/dev/null || true
   fi
   if [ -n "${xvfb_pid}" ]; then
     wait "${xvfb_pid}" 2>/dev/null || true
@@ -62,4 +78,39 @@ gosu browser chromium \
   about:blank &
 chromium_pid=$!
 
-wait "${chromium_pid}"
+gosu browser x11vnc \
+  -display "${display}" \
+  -rfbport "${vnc_port}" \
+  -localhost \
+  -forever \
+  -shared \
+  -nopw \
+  -xkb &
+x11vnc_pid=$!
+
+gosu browser websockify \
+  --web=/usr/share/novnc/ \
+  "${novnc_port}" \
+  "127.0.0.1:${vnc_port}" &
+websockify_pid=$!
+
+while :; do
+  if ! kill -0 "${xvfb_pid}" 2>/dev/null; then
+    echo "Xvfb exited unexpectedly" >&2
+    exit 1
+  fi
+  if ! kill -0 "${chromium_pid}" 2>/dev/null; then
+    echo "Chromium exited unexpectedly" >&2
+    exit 1
+  fi
+  if ! kill -0 "${x11vnc_pid}" 2>/dev/null; then
+    echo "x11vnc exited unexpectedly" >&2
+    exit 1
+  fi
+  if ! kill -0 "${websockify_pid}" 2>/dev/null; then
+    echo "websockify exited unexpectedly" >&2
+    exit 1
+  fi
+
+  sleep 1
+done
