@@ -48,6 +48,7 @@ describe("JobRepository integration", () => {
       status: "created",
       currentStep: null,
       checkpoint: null,
+      completedAt: null,
     });
 
     expect(repo.getById("job-001")).toEqual(job);
@@ -117,6 +118,79 @@ describe("JobRepository integration", () => {
       status: "succeeded",
       attempt: 1,
     });
+  });
+
+  test("repeated checkpoint commits for the same step attempt update the durable step idempotently", () => {
+    repo.create({
+      id: "job-replay",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-replay", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy", progress: 10 },
+      step: {
+        id: "step-replay",
+        stepKey: "generate_copy",
+        status: "running",
+        attempt: 1,
+        startedAt: "2026-09-18T01:00:00.000Z",
+      },
+    });
+
+    repo.commitCheckpoint("job-replay", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy", progress: 100 },
+      step: {
+        id: "step-replay",
+        stepKey: "generate_copy",
+        status: "succeeded",
+        attempt: 1,
+        startedAt: "2026-09-18T01:00:00.000Z",
+        finishedAt: "2026-09-18T01:00:05.000Z",
+      },
+    });
+
+    expect(repo.loadLastCheckpoint("job-replay")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: "copy", progress: 100 },
+    });
+
+    const steps = repo.getStepsForJob("job-replay");
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({
+      id: "step-replay",
+      stepKey: "generate_copy",
+      status: "succeeded",
+      attempt: 1,
+      startedAt: "2026-09-18T01:00:00.000Z",
+      finishedAt: "2026-09-18T01:00:05.000Z",
+    });
+  });
+
+  test("terminal checkpoint records completion time", () => {
+    repo.create({
+      id: "job-terminal",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    const completed = repo.commitCheckpoint("job-terminal", {
+      status: "succeeded",
+      checkpoint: { phase: "done" },
+      step: {
+        id: "step-terminal",
+        stepKey: "verify_result",
+        status: "succeeded",
+      },
+    });
+
+    expect(completed.completedAt).not.toBeNull();
+    expect(Number.isNaN(Date.parse(completed.completedAt ?? ""))).toBe(false);
   });
 
   test("the latest committed checkpoint is the recovery state after multiple steps", () => {
@@ -209,8 +283,10 @@ describe("JobRepository integration", () => {
         status: "preparing_publish",
         checkpoint: { phase: 2 },
         step: {
-          id: "step-id-2",
-          stepKey: "generate_copy",
+          // Same primary-key id but a different logical step forces a real
+          // step-write failure; same-step retries are intentionally upserted.
+          id: "step-id-1",
+          stepKey: "open_platform",
           status: "running",
           attempt: 1,
         },
