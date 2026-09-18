@@ -497,6 +497,7 @@ test("release clears the process-wide lease even when transport disconnect fails
 
 test("release keeps the single-session lease until transport teardown settles", async () => {
   let finishDisconnect: (() => void) | undefined;
+  let disconnectBrowser: (() => void) | undefined;
   const disconnectGate = new Promise<void>((resolve) => {
     finishDisconnect = resolve;
   });
@@ -506,6 +507,7 @@ test("release keeps the single-session lease until transport teardown settles", 
     close: () => {},
     disconnect: async () => {
       firstDisconnectCalls += 1;
+      disconnectBrowser?.();
       await disconnectGate;
     },
   };
@@ -520,6 +522,9 @@ test("release keeps the single-session lease until transport teardown settles", 
     connectOverCDP: async () =>
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
+        captureDisconnected: (disconnect) => {
+          disconnectBrowser ??= disconnect;
+        },
       }),
   });
 
@@ -538,4 +543,56 @@ test("release keeps the single-session lease until transport teardown settles", 
   await provider.release(recovered.id);
 
   expect(recoveredTransport.disconnectCalls).toBe(1);
+});
+
+
+test("disconnect during acquisition releases the reservation instead of returning a dead session", async () => {
+  const transports = [managedTransportStub(), managedTransportStub()];
+  let transportAttempt = 0;
+  let browserAttempt = 0;
+  let disconnectDuringAcquire: (() => void) | undefined;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () => {
+      const transport = transports[transportAttempt++];
+      if (!transport) {
+        throw new Error("unexpected extra transport request");
+      }
+      return transport.transport;
+    },
+    connectOverCDP: async () => {
+      browserAttempt += 1;
+
+      if (browserAttempt === 1) {
+        return browserStub({
+          contexts: [
+            contextStub({
+              pages: [],
+              newPage: pageStub(),
+              onNewPage: () => {
+                disconnectDuringAcquire?.();
+              },
+            }),
+          ],
+          captureDisconnected: (disconnect) => {
+            disconnectDuringAcquire = disconnect;
+          },
+        });
+      }
+
+      return browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      });
+    },
+  });
+
+  await expect(provider.acquire({})).rejects.toThrow(
+    /Browser session disconnected during acquisition/,
+  );
+  expect(transports[0]?.disconnectCalls).toBe(1);
+
+  const recovered = await provider.acquire({});
+  await provider.release(recovered.id);
+
+  expect(transports[1]?.disconnectCalls).toBe(1);
 });
