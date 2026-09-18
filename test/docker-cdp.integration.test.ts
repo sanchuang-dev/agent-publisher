@@ -245,6 +245,7 @@ test(
         ],
         {
           stdio: ["pipe", "pipe", "pipe"],
+          detached: process.platform !== "win32",
         },
       );
 
