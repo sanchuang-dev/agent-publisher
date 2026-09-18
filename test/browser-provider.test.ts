@@ -449,7 +449,8 @@ test("single-session lease spans multiple provider instances in the same process
   );
   expect(secondTransportRequests).toBe(0);
 
-  await firstProvider.release(first.id);
+  await secondProvider.release(first.id);
+  expect(firstTransport.disconnectCalls).toBe(1);
 
   const second = await secondProvider.acquire({});
   await secondProvider.release(second.id);
