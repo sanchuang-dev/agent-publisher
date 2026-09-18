@@ -13,7 +13,7 @@ chromium \
   --no-sandbox \
   --disable-dev-shm-usage \
   --disable-gpu \
-  --remote-debugging-address=0.0.0.0 \
+  --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9222 \
   --user-data-dir="${CHROMIUM_PROFILE_DIR}" \
   --no-first-run \
@@ -24,5 +24,12 @@ CHROMIUM_PID=$!
 # Forward signals to child processes
 trap 'kill ${CHROMIUM_PID} ${XVFB_PID} 2>/dev/null; exit 0' SIGTERM SIGINT
 
-# Wait for Chromium to exit; if Xvfb dies first the container exits too
-wait ${CHROMIUM_PID}
+# Exit the container if either Xvfb or Chromium exits, so Docker can restart it.
+wait_any() {
+  while kill -0 "${XVFB_PID}" 2>/dev/null && kill -0 "${CHROMIUM_PID}" 2>/dev/null; do
+    sleep 2
+  done
+}
+wait_any
+kill ${CHROMIUM_PID} ${XVFB_PID} 2>/dev/null
+exit 1
