@@ -7,12 +7,24 @@ body:
       value: |
         Keep this Issue focused on the work contract. Project Status, Priority/Effort/dates, assignees, linked PRs, and other GitHub-owned metadata should not be duplicated here.
         Creating this Issue does not by itself authorize implementation, acceptance, closure, release, or deployment.
+        Do not use "Ready for acceptance" as a lifecycle state; leave completed-but-unaccepted work open until an authorized acceptance/closure decision.
+
+  - type: dropdown
+    id: work_item_kind
+    attributes:
+      label: Work item kind
+      description: Implementation slices are directly executable. Milestone shells must be decomposed into small child Issues before implementation.
+      options:
+        - Implementation slice
+        - Milestone shell
+    validations:
+      required: true
 
   - type: textarea
     id: goal
     attributes:
       label: Goal
-      description: What outcome should this work item create?
+      description: What one outcome should this work item create?
     validations:
       required: true
 
@@ -20,7 +32,7 @@ body:
     id: context
     attributes:
       label: Context
-      description: Current facts, constraints, and relevant links.
+      description: Current facts, constraints, relevant links, and dependencies. For an implementation slice include the parent outcome (if any) and explicit implementation base, e.g. "Implementation base: dev".
     validations:
       required: true
 
@@ -28,7 +40,7 @@ body:
     id: scope
     attributes:
       label: Scope
-      description: What concrete surfaces does this work item own?
+      description: What concrete surfaces does this work item own? If independently releasable/verifiable concerns are mixed here, split the work first.
     validations:
       required: true
 
@@ -44,7 +56,7 @@ body:
     id: acceptance
     attributes:
       label: Acceptance criteria
-      description: Observable conditions that must be true for completion.
+      description: Observable conditions that must be true for this work item itself to be complete.
     validations:
       required: true
 
@@ -52,7 +64,7 @@ body:
     id: verification
     attributes:
       label: Verification / evidence
-      description: Tests, CI, build, screenshots, device/runtime checks, deployment evidence, or human checks needed to prove the criteria.
+      description: Behavioral evidence needed to prove the criteria. CI/AI Review may supplement this evidence but are not product acceptance by themselves.
     validations:
       required: true
 
@@ -61,5 +73,13 @@ body:
     attributes:
       label: Dependencies / risks
       description: Material blockers, ordering constraints, rollback concerns, or known uncertainty.
+    validations:
+      required: false
+
+  - type: textarea
+    id: slices
+    attributes:
+      label: Implementation slices
+      description: Required for a Milestone shell. Link the small executable child Issues. If not decomposed yet, state that implementation must not start from this parent.
     validations:
       required: false
