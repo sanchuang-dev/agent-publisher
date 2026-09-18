@@ -148,7 +148,12 @@ test(
       expect(chromiumProcess.signalCode).toBeNull();
     } finally {
       await stopProcess(chromiumProcess);
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   },
   20_000,
