@@ -4,8 +4,12 @@ set -eu
 display="${DISPLAY:-:99}"
 profile_dir="${BROWSER_PROFILE_DIR:-/data/profile}"
 runtime_dir="${BROWSER_RUNTIME_DIR:-/run/browser-runtime}"
-vnc_port="${VNC_PORT:-5900}"
-novnc_port="${NOVNC_PORT:-6080}"
+
+# Internal browser-runtime transport contract. Host/reverse-proxy exposure belongs
+# to Compose or the application boundary instead of a second container port config.
+vnc_port="5900"
+novnc_port="6080"
+
 display_number="${display#:}"
 x_socket="/tmp/.X11-unix/X${display_number}"
 
