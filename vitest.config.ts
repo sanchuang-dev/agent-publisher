@@ -11,6 +11,7 @@ export default defineConfig({
         },
       },
       {
+        extends: "./web/vite.config.ts",
         test: {
           name: "web",
           include: ["web/test/**/*.test.ts", "web/test/**/*.test.tsx"],
