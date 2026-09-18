@@ -85,6 +85,31 @@ describe("JobControlService waiting atomicity", () => {
     ]);
   });
 
+  test("entering waiting_for_approval commits checkpoint and approval action together", () => {
+    const result = control.enterWaiting({
+      jobId: "job-control",
+      status: "waiting_for_approval",
+      checkpoint: { reason: "approval_required" },
+      step: { id: "step-approval", stepKey: "verify_prepared", status: "succeeded" },
+      action: {
+        id: "action-approval",
+        payload: { summaryVersion: 1 },
+      },
+    });
+
+    expect(result.job).toMatchObject({
+      status: "waiting_for_approval",
+      currentStep: "verify_prepared",
+      checkpoint: { reason: "approval_required" },
+    });
+    expect(result.action).toMatchObject({
+      id: "action-approval",
+      type: "approval_required",
+      status: "open",
+    });
+    expect(actions.getCurrentOpenForJob("job-control")).toEqual(result.action);
+  });
+
   test("an ActionRequest insert failure rolls back the waiting checkpoint and step", () => {
     const occupied = actions.open({
       id: "action-collision",
@@ -118,6 +143,12 @@ describe("JobControlService waiting atomicity", () => {
       "open_platform",
     ]);
     expect(actions.getCurrentOpenForJob("job-control")).toBeNull();
+    expect(actions.getById("action-collision")).toMatchObject({
+      id: "action-collision",
+      type: "clarification_required",
+      status: "resolved",
+      resolution: { answered: true },
+    });
     expect(
       db.prepare("SELECT COUNT(*) AS count FROM action_requests WHERE job_id = ?").get("job-control"),
     ).toEqual({ count: 1 });
