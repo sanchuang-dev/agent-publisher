@@ -409,9 +409,52 @@ test("unexpected browser disconnect clears the active session so reconnect can a
   expect(disconnectFirstBrowser).toBeTypeOf("function");
 
   disconnectFirstBrowser?.();
+  expect(transports[0]?.disconnectCalls).toBe(1);
 
   const reconnected = await provider.acquire({});
   await provider.release(reconnected.id);
 
   expect(transports[1]?.disconnectCalls).toBe(1);
+});
+
+
+test("single-session lease spans multiple provider instances in the same process", async () => {
+  const firstTransport = managedTransportStub();
+  const secondTransport = managedTransportStub();
+  let secondTransportRequests = 0;
+
+  const firstProvider = new DockerCdpBrowserProvider({
+    createTransport: async () => firstTransport.transport,
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const secondProvider = new DockerCdpBrowserProvider({
+    createTransport: async () => {
+      secondTransportRequests += 1;
+      return secondTransport.transport;
+    },
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const first = await firstProvider.acquire({});
+
+  await expect(secondProvider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+  expect(secondTransportRequests).toBe(0);
+
+  await firstProvider.release(first.id);
+
+  const second = await secondProvider.acquire({});
+  await secondProvider.release(second.id);
+
+  expect(secondTransportRequests).toBe(1);
+  expect(firstTransport.disconnectCalls).toBe(1);
+  expect(secondTransport.disconnectCalls).toBe(1);
 });
