@@ -6,11 +6,23 @@ This repository is governed by the current `sanchuang-dev/.github/AGENTS.md` plu
 
 Load the current Organization policy when work touches work items, environment promotion, testing, permissions, or AI Review.
 
+## Product Contract
+
+`docs/product/PRD.md` is the canonical repository product definition for durable product intent, MVP boundaries, interaction model, and product decisions.
+
+It does not replace:
+
+- GitHub Issues as individual work-item contracts and outcome records;
+- Project Status as lifecycle projection;
+- code/configuration/runtime as current technical reality.
+
+When a current Issue intentionally changes product behavior, update the PRD when that decision becomes durable rather than maintaining contradictory product rules.
+
 ## Repository Role
 
 `agent-publisher` is a company POC for agent-assisted content production and browser-based publishing.
 
-The initial product target is a small, real publishing loop across Xiaohongshu, Douyin, and WeChat Official Accounts. Do not expand the project into a general-purpose browser agent unless an explicit task changes that boundary.
+The initial product target is a small, real publishing loop across Xiaohongshu, Douyin, and WeChat Official Accounts. Xiaohongshu is the first MVP path. Do not expand the project into a general-purpose browser agent unless an explicit task changes that boundary.
 
 ## Branch / Environment Policy
 
