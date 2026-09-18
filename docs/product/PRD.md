@@ -246,6 +246,8 @@ Provider responsibilities:
 
 Canva, image models, and video models are provider implementations, not core product dependencies.
 
+Concrete vendor selection is intentionally deferred for the MVP. Keep provider slots for `TextProvider`, `ImageProvider`, `DesignProvider`, and `VideoProvider`. Unconfigured providers should report capability unavailable instead of forcing early vendor lock-in.
+
 ### Graceful degradation
 
 Video is an enhancement, not a hard dependency for the MVP.
@@ -385,14 +387,9 @@ The product must remain practical for:
 
 Core product logic must not own one specific Chrome installation.
 
-Use a BrowserProvider boundary so the runtime may be:
+The first MVP implementation is a DevTools/CDP-backed BrowserProvider. It attaches to an already-running Chromium-family browser with Playwright `connectOverCDP()`, while platform skills continue to use Playwright Page/Locator APIs rather than raw CDP commands. This makes existing login state and visible human takeover easy to reuse.
 
-- local Playwright;
-- self-hosted browser worker;
-- managed/cloud browser;
-- remote CDP-compatible browser.
-
-Platform skills should depend on browser/session capabilities rather than deployment location.
+The BrowserProvider contract must still allow later alternatives such as a Playwright-managed browser/server, self-hosted browser worker, managed cloud browser, or another remote CDP-compatible browser. Platform skills depend on browser/session capabilities rather than deployment location or a hard-coded executable path.
 
 ### Asset portability
 
@@ -422,7 +419,56 @@ Current baseline:
 
 Frontend interaction specifics remain in [FRONTEND.md](./FRONTEND.md).
 
-## 12. MVP scope
+### SQLite persistence design
+
+SQLite is the MVP source of truth for task execution and resume state.
+
+Baseline tables:
+
+```text
+jobs
+job_steps
+action_requests
+browser_profiles
+assets
+evidence
+external_actions
+```
+
+- `jobs`: job identity, platform, 图文/视频 mode, status/current step, profile reference, brief/material summary, timestamps, optimistic version.
+- `job_steps`: checkpointed step execution, attempts, idempotency key, input/output/error summary, timestamps.
+- `action_requests`: login, approval, and clarification requests plus resolution state.
+- `browser_profiles`: provider/profile reference, platform/account label, session health metadata, last verified time. Keep browser secrets outside ordinary product tables.
+- `assets`: material references, type, URI, MIME/metadata, checksum/status.
+- `evidence`: result URL/content ID/screenshot or other verification references.
+- `external_actions`: irreversible external actions with a unique action key and states such as `prepared | started | succeeded | unknown | failed`.
+
+Enable foreign keys, use WAL mode for the local app, set a practical busy timeout, and commit checkpoint/state changes transactionally.
+
+If an irreversible action reaches an uncertain result, move to verification/recovery before any retry. Do not repeat the action until duplicate effects have been ruled out.
+
+## 12. Xiaohongshu MVP skill boundary
+
+The Xiaohongshu publisher is a bounded platform skill.
+
+Deterministic automation owns the normal path:
+
+1. open the publishing entry;
+2. detect authenticated session state;
+3. select 图文 or 视频 from the job;
+4. upload prepared assets;
+5. fill known fields;
+6. wait for uploads/processing;
+7. read back and validate the prepared form;
+8. pause for publish approval;
+9. execute the approved publish action once;
+10. verify the result and capture evidence.
+
+Agent reasoning is reserved for bounded recovery when the deterministic path fails, such as interpreting changed labels, unexpected dialogs, relocated controls, or deciding that human takeover is safer. Recovery should prefer inspection before mutation.
+
+The recovery path may not change accepted content without user intent, publish without approval, or repeat a publication whose previous result is uncertain. When recovery cannot confidently restore the known path, transition to human takeover or a visible failure state.
+
+## 13. MVP scope
 
 ### In scope
 
@@ -453,7 +499,7 @@ Frontend interaction specifics remain in [FRONTEND.md](./FRONTEND.md).
 - making DSH/PiAgent concepts visible to end users;
 - full autonomous decision-making about whether the user wants 图文 or 视频.
 
-## 13. Safety and trust boundaries
+## 14. Safety and trust boundaries
 
 - Never commit or intentionally log account credentials, cookies, storage state, browser profiles, tokens, or QR-login artifacts.
 - Prefer user-mediated authentication and persistent browser state over password custody.
@@ -462,7 +508,7 @@ Frontend interaction specifics remain in [FRONTEND.md](./FRONTEND.md).
 - Browser traces, screenshots, recordings, and downloaded artifacts may contain sensitive information and must be handled accordingly.
 - Human approval and resume logic must not accidentally repeat an already-completed irreversible action.
 
-## 14. MVP success criteria
+## 15. MVP success criteria
 
 The MVP is established when the team can demonstrate the following real flow on the agreed test account:
 
@@ -472,7 +518,7 @@ For the MVP, text + image output must remain dependable even if video generation
 
 The result must be verified on the real platform. A passing unit test, browser script, or CI run alone does not satisfy this product criterion.
 
-## 15. Product principles
+## 16. Product principles
 
 - Small and real beats broad and conceptual.
 - Reuse before rebuild.
