@@ -1,0 +1,13 @@
+services:
+  browser-runtime:
+    build:
+      context: ./docker/browser-runtime
+    shm_size: "1gb"
+    expose:
+      - "9222"
+    volumes:
+      - browser-profile:/data/profile
+    restart: unless-stopped
+
+volumes:
+  browser-profile:
