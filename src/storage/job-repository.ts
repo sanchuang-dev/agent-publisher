@@ -3,6 +3,8 @@
  */
 
 import {
+  getCheckpointActionRequestId,
+  isApprovalResolution,
   JobNotFoundError,
   type CheckpointInput,
   type CreateJobInput,
@@ -39,6 +41,14 @@ interface JobRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+interface ActionRequestApprovalRow {
+  id: string;
+  job_id: string;
+  type: string;
+  status: string;
+  resolution_json: string | null;
 }
 
 interface JobStepRow {
@@ -135,6 +145,10 @@ export class JobRepository implements JobRepositoryContract {
     const commit = this.#db.transaction(() => {
       const currentJob = this.#requireJob(jobId);
       assertJobStatusTransitionAllowed(currentJob.status, input.status);
+
+      if (currentJob.status === "waiting_for_approval" && input.status === "publishing") {
+        this.#assertAffirmativeApproval(jobId, currentJob);
+      }
 
       const result = this.#db
         .prepare(
@@ -233,6 +247,44 @@ export class JobRepository implements JobRepositoryContract {
         )
         .all(jobId) as JobStepRow[]
     ).map(mapJobStep);
+  }
+
+  #assertAffirmativeApproval(jobId: string, job: Job): void {
+    if (!job.checkpoint) {
+      throw new Error(`Cannot publish job ${jobId}: approval checkpoint is missing`);
+    }
+
+    const actionRequestId = getCheckpointActionRequestId(job.checkpoint);
+    if (!actionRequestId) {
+      throw new Error(
+        `Cannot publish job ${jobId}: approval checkpoint is not bound to an ActionRequest`,
+      );
+    }
+
+    const row = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE id = ?`,
+      )
+      .get(actionRequestId) as ActionRequestApprovalRow | undefined;
+
+    const resolution = row?.resolution_json
+      ? (JSON.parse(row.resolution_json) as Job["checkpoint"])
+      : null;
+
+    if (
+      !row ||
+      row.job_id !== jobId ||
+      row.type !== "approval_required" ||
+      row.status !== "resolved" ||
+      !isApprovalResolution(resolution) ||
+      !resolution.approved
+    ) {
+      throw new Error(
+        `Cannot publish job ${jobId}: affirmative approval is not persisted`,
+      );
+    }
   }
 
   #requireJob(jobId: string): Job {
