@@ -55,6 +55,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
   static readonly #connections = new Map<string, ManagedCdpTransport>();
+  static readonly #releasingSessionIds = new Set<string>();
   static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
@@ -107,17 +108,13 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       // A runtime restart or transport loss invalidates the app-side session.
       // Chromium itself is owned by browser-runtime and must not be closed here.
       connection.browser.once("disconnected", () => {
-        const activeTransport =
-          DockerCdpBrowserProvider.#connections.get(id);
-        if (!activeTransport) {
+        // release() owns cleanup while an intentional transport teardown is
+        // in progress; otherwise this is an unexpected session loss.
+        if (DockerCdpBrowserProvider.#releasingSessionIds.has(id)) {
           return;
         }
 
         this.#clearSession(id);
-        void activeTransport.disconnect().catch(() => {
-          // The browser is already disconnected. Keep cleanup best-effort and
-          // never re-lock the provider because transport teardown also failed.
-        });
       });
 
       const context = connection.browser.contexts()[0];
@@ -130,6 +127,10 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       const page =
         context.pages().find((candidate) => !candidate.isClosed()) ??
         (await context.newPage());
+
+      if (DockerCdpBrowserProvider.#activeSessionId !== id) {
+        throw new Error("Browser session disconnected during acquisition");
+      }
 
       DockerCdpBrowserProvider.#connections.set(id, connection.transport);
 
@@ -167,9 +168,11 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       return;
     }
 
+    DockerCdpBrowserProvider.#releasingSessionIds.add(sessionId);
     try {
       await transport.disconnect();
     } finally {
+      DockerCdpBrowserProvider.#releasingSessionIds.delete(sessionId);
       this.#clearSession(sessionId);
     }
   }
