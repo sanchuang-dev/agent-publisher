@@ -222,10 +222,9 @@ test("Task Home assignment carries edited brief and video mode into detail", asy
   await page.getByRole("heading", { name: brief }).waitFor({
     state: "visible",
   });
-  assert.equal(
-    await page.locator(".segmented.compact .selected").textContent(),
-    "视频",
-  );
+  await page.locator(".detail-meta").getByText("视频", { exact: true }).waitFor({
+    state: "visible",
+  });
   await page.getByText("视频成片").waitFor({ state: "visible" });
   await page.getByText("VIDEO").first().waitFor({ state: "visible" });
 });
