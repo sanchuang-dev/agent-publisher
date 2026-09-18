@@ -159,3 +159,35 @@ test("rejects a database schema newer than this build supports", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("browser profile persistence stores only reference and health metadata", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-db-"));
+  const databasePath = join(root, "app.db");
+
+  try {
+    const db = openDatabase({ databasePath });
+    const columns = (
+      db.pragma("table_info(browser_profiles)") as Array<{ name: string }>
+    ).map((column) => column.name);
+
+    expect(columns).toEqual([
+      "id",
+      "provider",
+      "platform",
+      "display_name",
+      "profile_ref",
+      "health_status",
+      "last_verified_at",
+      "created_at",
+      "updated_at",
+    ]);
+    expect(columns.join(" ")).not.toMatch(
+      /cookie|password|token|credential|storage_state/i,
+    );
+
+    db.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
