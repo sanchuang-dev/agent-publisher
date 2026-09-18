@@ -59,7 +59,10 @@ describe("JobControlService waiting atomicity", () => {
     const result = control.enterWaiting({
       jobId: "job-control",
       status: "waiting_for_login",
-      checkpoint: { reason: "login_required" },
+      checkpoint: {
+        reason: "login_required",
+        actionRequestId: "action-login",
+      },
       step: { id: "step-login", stepKey: "ensure_login", status: "running" },
       action: {
         id: "action-login",
@@ -89,7 +92,10 @@ describe("JobControlService waiting atomicity", () => {
     const result = control.enterWaiting({
       jobId: "job-control",
       status: "waiting_for_approval",
-      checkpoint: { reason: "approval_required" },
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "action-approval",
+      },
       step: { id: "step-approval", stepKey: "verify_prepared", status: "succeeded" },
       action: {
         id: "action-approval",
@@ -108,6 +114,54 @@ describe("JobControlService waiting atomicity", () => {
       status: "open",
     });
     expect(actions.getCurrentOpenForJob("job-control")).toEqual(result.action);
+  });
+
+  test("replaying the same waiting pause reuses the existing action and step attempt", () => {
+    const first = control.enterWaiting({
+      jobId: "job-control",
+      status: "waiting_for_login",
+      checkpoint: { reason: "login_required" },
+      step: {
+        id: "step-login-replay",
+        stepKey: "ensure_login",
+        status: "running",
+        attempt: 1,
+      },
+      action: { id: "action-login-replay" },
+    });
+
+    const replay = control.enterWaiting({
+      jobId: "job-control",
+      status: "waiting_for_login",
+      checkpoint: { reason: "login_required", replayed: true },
+      step: {
+        id: "different-step-id-is-ignored-by-upsert",
+        stepKey: "ensure_login",
+        status: "running",
+        attempt: 1,
+      },
+      action: { id: "action-login-duplicate" },
+    });
+
+    expect(first.action.id).toBe("action-login-replay");
+    expect(replay.action.id).toBe("action-login-replay");
+    expect(replay.job).toMatchObject({
+      status: "waiting_for_login",
+      currentStep: "ensure_login",
+      checkpoint: {
+        reason: "login_required",
+        replayed: true,
+        actionRequestId: "action-login-replay",
+      },
+    });
+    expect(
+      db.prepare(
+        "SELECT COUNT(*) AS count FROM action_requests WHERE job_id = ? AND status = 'open'",
+      ).get("job-control"),
+    ).toEqual({ count: 1 });
+    expect(
+      jobs.getStepsForJob("job-control").filter((step) => step.stepKey === "ensure_login"),
+    ).toHaveLength(1);
   });
 
   test("an ActionRequest insert failure rolls back the waiting checkpoint and step", () => {
