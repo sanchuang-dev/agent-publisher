@@ -97,3 +97,21 @@ test("enables the required SQLite pragmas", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("rejects a database schema newer than this build supports", () => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-db-"));
+  const databasePath = join(root, "app.db");
+
+  try {
+    const db = openDatabase({ databasePath });
+    db.pragma("user_version = 2");
+    db.close();
+
+    assert.throws(
+      () => openDatabase({ databasePath }),
+      /Database schema version 2 is newer than supported version 1/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

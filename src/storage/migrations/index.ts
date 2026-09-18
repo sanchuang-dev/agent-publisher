@@ -136,26 +136,44 @@ function readUserVersion(db: Database.Database): number {
   return db.pragma("user_version", { simple: true }) as number;
 }
 
-export function runMigrations(
-  db: Database.Database,
-  migrationList: readonly Migration[] = migrations,
-): readonly string[] {
-  let currentVersion = readUserVersion(db);
-  const applied: string[] = [];
+function validateMigrationList(migrationList: readonly Migration[]): number {
+  let expectedVersion = 1;
 
   for (const migration of migrationList) {
     if (!Number.isSafeInteger(migration.version) || migration.version <= 0) {
       throw new Error(`Invalid migration version: ${migration.version}`);
     }
 
-    if (migration.version <= currentVersion) {
-      continue;
+    if (migration.version !== expectedVersion) {
+      throw new Error(
+        `Migration ${migration.name} has version ${migration.version}; expected ${expectedVersion}`,
+      );
     }
 
-    if (migration.version !== currentVersion + 1) {
-      throw new Error(
-        `Migration ${migration.name} has version ${migration.version}; expected ${currentVersion + 1}`,
-      );
+    expectedVersion += 1;
+  }
+
+  return expectedVersion - 1;
+}
+
+export function runMigrations(
+  db: Database.Database,
+  migrationList: readonly Migration[] = migrations,
+): readonly string[] {
+  let currentVersion = readUserVersion(db);
+  const latestSupportedVersion = validateMigrationList(migrationList);
+
+  if (currentVersion > latestSupportedVersion) {
+    throw new Error(
+      `Database schema version ${currentVersion} is newer than supported version ${latestSupportedVersion}`,
+    );
+  }
+
+  const applied: string[] = [];
+
+  for (const migration of migrationList) {
+    if (migration.version <= currentVersion) {
+      continue;
     }
 
     db.transaction(() => {
