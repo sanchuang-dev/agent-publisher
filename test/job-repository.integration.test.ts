@@ -375,6 +375,123 @@ describe("JobRepository integration", () => {
     expect(repo.getStepsForJob("job-illegal-transition")).toHaveLength(1);
   });
 
+  test("direct publishing transition is rejected without affirmative persisted approval", () => {
+    repo.create({
+      id: "job-approval-gate",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "gate-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: { id: "gate-browser", stepKey: "open_platform", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "waiting_for_approval",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-action",
+      },
+      step: { id: "gate-approval", stepKey: "verify_prepared", status: "succeeded" },
+    });
+
+    expect(() =>
+      repo.commitCheckpoint("job-approval-gate", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toThrow(/affirmative approval is not persisted/);
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-gate-action",
+      "job-approval-gate",
+      JSON.stringify({ approved: false }),
+      "2026-09-18T02:00:00.000Z",
+      "2026-09-18T02:00:01.000Z",
+    );
+
+    expect(() =>
+      repo.commitCheckpoint("job-approval-gate", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-publish-2", stepKey: "publish_once", status: "running", attempt: 2 },
+      }),
+    ).toThrow(/affirmative approval is not persisted/);
+
+    expect(repo.getById("job-approval-gate")).toMatchObject({
+      status: "waiting_for_approval",
+      currentStep: "verify_prepared",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-action",
+      },
+    });
+  });
+
+  test("direct publishing transition succeeds only with the checkpoint-bound affirmative approval", () => {
+    repo.create({
+      id: "job-approval-gate-ok",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "gate-ok-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: { id: "gate-ok-browser", stepKey: "open_platform", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "waiting_for_approval",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-ok-action",
+      },
+      step: { id: "gate-ok-approval", stepKey: "verify_prepared", status: "succeeded" },
+    });
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-gate-ok-action",
+      "job-approval-gate-ok",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:10:00.000Z",
+      "2026-09-18T02:10:01.000Z",
+    );
+
+    expect(
+      repo.commitCheckpoint("job-approval-gate-ok", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-ok-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toMatchObject({
+      status: "publishing",
+      currentStep: "publish_once",
+      checkpoint: { phase: "publishing" },
+    });
+  });
+
   test("reopen recovery loads the last committed checkpoint and step history", () => {
     repo.create({
       id: "job-005",
