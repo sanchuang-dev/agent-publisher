@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import {
   getWorkSurfaceKind,
@@ -455,18 +455,50 @@ function Browser({
   task: TaskFixture;
   takeover: boolean;
 }) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const liveViewMode = task.browserLiveViewMode ?? "blocked";
+  const hasRuntime = liveViewMode === "runtime";
+  const isInteractive =
+    hasRuntime && takeover && task.controlOwner === "human";
+  const controlLabel =
+    !hasRuntime
+      ? liveViewMode === "placeholder"
+        ? "Live View 未连接"
+        : "Live View 不可用"
+      : task.controlOwner === "human"
+        ? "人工控制"
+        : task.controlOwner === "agent"
+          ? "执行秘书控制"
+          : "控制状态未知";
+  const description =
+    liveViewMode === "placeholder"
+      ? "尚未连接 Browser runtime；当前显示受控占位内容。"
+      : liveViewMode === "blocked"
+        ? "Live View 配置不可用，已停止嵌入该地址。"
+        : takeover
+          ? "执行秘书已停止页面变更。请在浏览器区域完成扫码、2FA 或设备验证。"
+          : "Browser Live View 通过 runtime adapter 接入受控浏览器画面。";
+
+  useLayoutEffect(() => {
+    if (!isInteractive) {
+      frameRef.current?.blur();
+    }
+  }, [isInteractive]);
+
   return (
     <aside className="work-surface">
       <Card
         eyebrow="Browser Live View"
-        title={takeover ? "请接管登录" : "执行秘书正在操作"}
-        description={
-          takeover
-            ? "执行秘书已停止页面变更。请在浏览器区域完成扫码、2FA 或设备验证。"
-            : "Browser Live View 通过 adapter URL 接入；本轮先使用受控占位页。"
+        title={
+          takeover && hasRuntime
+            ? "请接管登录"
+            : takeover
+              ? "等待 Browser Live View"
+              : "执行秘书正在操作"
         }
+        description={description}
       >
-        {takeover && (
+        {isInteractive && (
           <div className="takeover-banner">
             <strong>控制权已让给你</strong>
             <span>
@@ -482,13 +514,19 @@ function Browser({
             <div>publisher.xiaohongshu.com</div>
           </div>
           <iframe
-            title="Browser Live View placeholder"
+            ref={frameRef}
+            className={
+              isInteractive ? "live-view-interactive" : "live-view-view-only"
+            }
+            tabIndex={isInteractive ? 0 : -1}
+            referrerPolicy="no-referrer"
+            title="Browser Live View"
             src={task.browserLiveViewUrl}
           />
         </div>
         <div className="browser-footer">
-          <span className="live-indicator" />
-          <span>{takeover ? "人工控制" : "执行秘书控制"}</span>
+          {hasRuntime && <span className="live-indicator" />}
+          <span>{controlLabel}</span>
           <code>adapter://browser-live-view</code>
         </div>
       </Card>
