@@ -8,7 +8,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         chromium \
-        chromium-sandbox \
         curl \
         fonts-liberation \
         gosu \
@@ -23,14 +22,13 @@ RUN apt-get update \
     && chown -R browser:browser /data
 
 COPY start-browser.sh /usr/local/bin/start-browser
+COPY health-browser.sh /usr/local/bin/health-browser
 
-RUN chmod +x /usr/local/bin/start-browser
+RUN chmod +x /usr/local/bin/start-browser /usr/local/bin/health-browser
 
 EXPOSE 6080 9222
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=15s --retries=12 \
-  CMD curl --fail --silent --show-error http://127.0.0.1:9222/json/version >/dev/null \
-    && curl --fail --silent --show-error http://127.0.0.1:6080/vnc.html >/dev/null \
-    || exit 1
+  CMD ["/usr/local/bin/health-browser"]
 
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/start-browser"]
