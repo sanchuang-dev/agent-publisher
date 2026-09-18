@@ -10,7 +10,7 @@ export const allowedJobStatusTransitions = {
     "failed",
   ],
   waiting_for_login: ["waiting_for_login", "preparing_publish", "failed"],
-  waiting_for_approval: ["waiting_for_approval", "publishing", "failed"],
+  waiting_for_approval: ["waiting_for_approval", "preparing_publish", "publishing", "failed"],
   publishing: ["publishing", "succeeded", "failed"],
   succeeded: ["succeeded"],
   failed: ["failed"],
