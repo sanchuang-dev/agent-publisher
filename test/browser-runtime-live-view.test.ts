@@ -192,7 +192,9 @@ test("browser profile uses the named persistent volume and Chromium user-data-di
   expect(composeFile).toMatch(
     /volumes:\n\s+- browser-profile:\/data\/profile/,
   );
-  expect(composeFile).toMatch(/\nvolumes:\n\s+browser-profile:\s*\n?$/);
+  expect(composeFile).toMatch(
+    /(?:^|\\n)volumes:\\s*\\n(?:[ \\t]+[^\\n]*\\n)*[ \\t]+browser-profile:\\s*(?:\\n|$)/,
+  );
   expect(startScript).toMatch(
     /profile_dir="\$\{BROWSER_PROFILE_DIR:-\/data\/profile\}"/,
   );
