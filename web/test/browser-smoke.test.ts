@@ -34,14 +34,14 @@ function findChrome(): string {
   return executable;
 }
 
-async function waitForServer(process: ChildProcess): Promise<void> {
+async function waitForServer(process: ChildProcess, url = baseUrl): Promise<void> {
   for (let attempt = 0; attempt < 80; attempt += 1) {
     if (process.exitCode !== null) {
       assert.fail(`Vite exited before smoke started: ${process.exitCode}`);
     }
 
     try {
-      const response = await fetch(baseUrl);
+      const response = await fetch(url);
       if (response.ok) return;
     } catch {
       // Retry until Vite is accepting requests.
@@ -190,15 +190,7 @@ test("Task Home assignment carries edited brief and video mode into detail", asy
     }
   });
 
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    try {
-      const response = await fetch(assignmentBaseUrl);
-      if (response.ok) break;
-    } catch {
-      // Retry until Vite is accepting requests.
-    }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-  }
+  await waitForServer(server, assignmentBaseUrl);
 
   browser = await chromium.launch({
     executablePath: findChrome(),
