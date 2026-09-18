@@ -12,9 +12,11 @@
     "check": "npm run typecheck && npm test"
   },
   "dependencies": {
+    "better-sqlite3": "13.0.3",
     "playwright": "1.63.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
     "@types/node": "22.20.3",
     "tsx": "4.23.13",
     "typescript": "7.0.2"
