@@ -4,6 +4,8 @@ import * as path from "path";
 import { getConfig } from "../config";
 import { runMigrations } from "./migrate";
 
+// better-sqlite3 is fully synchronous; Node.js is single-threaded, so the
+// check-then-assign pattern below is safe without an explicit lock.
 let _db: Database.Database | null = null;
 
 export function getDb(): Database.Database {

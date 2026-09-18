@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
 
+// __dirname is available in CommonJS output (module: "CommonJS" in tsconfig).
 const MIGRATIONS_DIR = path.join(__dirname, "migrations");
 
 export function runMigrations(db: Database.Database): void {

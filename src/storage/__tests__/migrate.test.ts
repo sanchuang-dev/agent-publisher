@@ -87,6 +87,7 @@ describe("runMigrations", () => {
   });
 
   it("sets busy_timeout to 5000", () => {
+    runMigrations(db);
     const timeout = (db.pragma("busy_timeout") as { timeout: number }[])[0]?.timeout;
     expect(timeout).toBe(5000);
   });
