@@ -4,6 +4,7 @@ import type {
   CheckpointData,
   Job,
   JobRepository,
+  JobStatus,
   JsonValue,
   StepStatus,
 } from "../contracts/job.js";
@@ -39,6 +40,17 @@ export interface EnterWaitingResult {
   readonly action: ActionRequest;
 }
 
+export interface RequestClarificationInput {
+  readonly jobId: string;
+  readonly status: Exclude<JobStatus, "waiting_for_login" | "waiting_for_approval" | "succeeded" | "failed">;
+  readonly checkpoint: CheckpointData;
+  readonly step: EnterWaitingInput["step"];
+  readonly action: {
+    readonly id: string;
+    readonly payload?: JsonValue | null;
+  };
+}
+
 const actionTypeByWaitingStatus = {
   waiting_for_login: "login_required",
   waiting_for_approval: "approval_required",
@@ -60,18 +72,47 @@ export class JobControlService {
   }
 
   enterWaiting(input: EnterWaitingInput): EnterWaitingResult {
+    return this.#commitHumanPause(
+      input.jobId,
+      input.status,
+      input.checkpoint,
+      input.step,
+      input.action,
+      actionTypeByWaitingStatus[input.status],
+    );
+  }
+
+  requestClarification(input: RequestClarificationInput): EnterWaitingResult {
+    return this.#commitHumanPause(
+      input.jobId,
+      input.status,
+      input.checkpoint,
+      input.step,
+      input.action,
+      "clarification_required",
+    );
+  }
+
+  #commitHumanPause(
+    jobId: string,
+    status: JobStatus,
+    checkpoint: CheckpointData,
+    step: EnterWaitingInput["step"],
+    actionInput: EnterWaitingInput["action"],
+    actionType: "login_required" | "approval_required" | "clarification_required",
+  ): EnterWaitingResult {
     return this.#runInTransaction(() => {
-      const job = this.#jobs.commitCheckpoint(input.jobId, {
-        status: input.status,
-        checkpoint: input.checkpoint,
-        step: input.step,
+      const job = this.#jobs.commitCheckpoint(jobId, {
+        status,
+        checkpoint,
+        step,
       });
 
       const action = this.#actionRequests.open({
-        id: input.action.id,
-        jobId: input.jobId,
-        type: actionTypeByWaitingStatus[input.status],
-        payload: input.action.payload ?? null,
+        id: actionInput.id,
+        jobId,
+        type: actionType,
+        payload: actionInput.payload ?? null,
       });
 
       return { job, action };
