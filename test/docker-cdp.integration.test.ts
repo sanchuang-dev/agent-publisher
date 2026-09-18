@@ -74,25 +74,56 @@ async function waitForDevToolsEndpoint(
   });
 }
 
-async function stopProcess(
-  process: ChildProcessWithoutNullStreams,
-): Promise<void> {
-  if (process.exitCode !== null || process.signalCode !== null) {
-    return;
+function signalProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+): void {
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ESRCH"
+      ) {
+        return;
+      }
+      throw error;
+    }
   }
 
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      process.kill("SIGKILL");
-    }, 2_000);
+  child.kill(signal);
+}
 
-    process.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
+async function stopProcess(
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  const alreadyExited =
+    child.exitCode !== null || child.signalCode !== null;
+
+  if (!alreadyExited) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        signalProcessTree(child, "SIGKILL");
+      }, 2_000);
+
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      signalProcessTree(child, "SIGTERM");
     });
+  }
 
-    process.kill("SIGTERM");
-  });
+  // Chromium can leave renderer/utility descendants alive briefly after the
+  // browser process exits. On POSIX CI runners it is spawned in its own process
+  // group, so make the final cleanup authoritative before removing the profile.
+  if (process.platform !== "win32") {
+    signalProcessTree(child, "SIGKILL");
+  }
 }
 
 test(
@@ -114,6 +145,7 @@ test(
       ],
       {
         stdio: ["pipe", "pipe", "pipe"],
+        detached: process.platform !== "win32",
       },
     );
 
