@@ -224,3 +224,52 @@ test("browser profile uses the named persistent volume and Chromium user-data-di
   );
   expect(startScript).toMatch(/--user-data-dir="\$\{profile_dir\}"/);
 });
+
+
+test("seccomp permits Chromium zygote CLONE_NEWPID without broad clone access", () => {
+  const profile = JSON.parse(
+    read("docker/browser-runtime/seccomp-chromium.json"),
+  ) as {
+    syscalls: Array<{
+      names?: string[];
+      action?: string;
+      args?: Array<{
+        index?: number;
+        value?: number;
+        valueTwo?: number;
+        op?: string;
+      }>;
+      includes?: { arches?: string[] };
+      excludes?: { arches?: string[] };
+    }>;
+  };
+
+  const namespaceMask = 0x7e020000;
+  const cloneNewPid = 0x20000000;
+
+  const allowsNewPidOnly = profile.syscalls.some((rule) =>
+    rule.action === "SCMP_ACT_ALLOW" &&
+    rule.names?.length === 1 &&
+    rule.names[0] === "clone" &&
+    rule.excludes?.arches?.includes("s390") === true &&
+    rule.args?.some(
+      (arg) =>
+        arg.index === 0 &&
+        arg.value === namespaceMask &&
+        arg.valueTwo === cloneNewPid &&
+        arg.op === "SCMP_CMP_MASKED_EQ",
+    ),
+  );
+
+  expect(allowsNewPidOnly).toBe(true);
+
+  const blanketCloneOrUnshare = profile.syscalls.some(
+    (rule) =>
+      rule.action === "SCMP_ACT_ALLOW" &&
+      rule.args === undefined &&
+      rule.names?.some((name) => name === "clone" || name === "unshare") &&
+      !rule.includes,
+  );
+
+  expect(blanketCloneOrUnshare).toBe(false);
+});
