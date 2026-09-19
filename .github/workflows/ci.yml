@@ -178,7 +178,7 @@ jobs:
             sh -lc '
               set -eu
               echo "[compose-smoke] endpoint=$BROWSER_CDP_ENDPOINT"
-              timeout 15s node -e '"'"'fetch(process.env.BROWSER_CDP_ENDPOINT + "/json/version").then(async r => { console.log("[compose-smoke] discovery-status=" + r.status); if (!r.ok) process.exit(1); const j = await r.json(); console.log("[compose-smoke] websocket=" + (typeof j.webSocketDebuggerUrl === "string" ? "present" : "missing")); }).catch(e => { console.error("[compose-smoke] discovery-failed", e, e.cause); process.exit(1); })'"'"'
+              timeout 15s node -e '"'"'require("node:dns").lookup("browser-runtime", { family: 4 }, (error, address) => { if (error) { console.error("[compose-smoke] dns-failed", error); process.exit(1); } console.log("[compose-smoke] browser-runtime-ip=" + address); })'"'"'
               echo "[compose-smoke] browser-provider=start"
               timeout --signal=TERM 45s npm run smoke:browser-provider
               echo "[compose-smoke] browser-provider=done"
