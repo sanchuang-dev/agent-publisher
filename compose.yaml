@@ -10,6 +10,11 @@ services:
       nofile:
         soft: 8192
         hard: 16384
+    # Chromium's namespace sandbox needs clone(CLONE_NEWUSER), which Docker's
+    # default seccomp profile denies. Unconfining seccomp adds no capabilities
+    # and keeps the browser's own sandbox active (unlike --no-sandbox).
+    security_opt:
+      - seccomp=unconfined
     expose:
       - "6080"
       - "9222"
