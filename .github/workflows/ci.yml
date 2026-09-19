@@ -154,13 +154,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          container_id="$(docker compose ps -q browser-runtime)"
-          network_name="$(
-            docker inspect               --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}'               "$container_id"               | head -n 1
-          )"
-          test -n "$network_name"
 
-          docker run --rm             --network "$network_name"             --volume "$PWD:/workspace"             --workdir /workspace             --env BROWSER_CDP_ENDPOINT=http://browser-runtime:9222             node:22-bookworm-slim             sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
+          overlay="$RUNNER_TEMP/compose.browser-provider-smoke.yaml"
+          cat > "$overlay" <<'YAML'
+          services:
+            app-smoke:
+              image: node:22-bookworm-slim
+              working_dir: /workspace
+              volumes:
+                - .:/workspace
+              environment:
+                BROWSER_CDP_ENDPOINT: http://browser-runtime:9222
+              depends_on:
+                browser-runtime:
+                  condition: service_healthy
+          YAML
+
+          docker compose -f compose.yaml -f "$overlay" run --rm app-smoke             sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
 
       - name: Browser-runtime logs on failure
         if: failure()
