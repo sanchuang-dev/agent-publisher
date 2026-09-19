@@ -1,16 +1,20 @@
 # Chromium seccomp profile provenance
 
-`seccomp-chromium.json` is derived from the Moby default seccomp profile and then
-narrowly extended for Chromium's Linux namespace sandbox.
+`seccomp-chromium.json` is the Docker Engine v28 default seccomp profile with
+a narrow local delta for Chromium's Linux namespace sandbox.
 
 ## Upstream base
 
-- Repository: `moby/profiles`
-- File: `seccomp/default.json`
-- Pinned upstream commit: `245180c51918481c0525424b3ee025d2b435d46c`
-- Retrieved for this repository on: 2026-09-19
+- Repository: `moby/moby`
+- File: `profiles/seccomp/default.json`
+- Docker Engine tag: `v28.1.1`
+- Tag commit: `01f442b84d6a669c1e335b800d4670997cd5aa93`
+- Retrieved/verified for this repository on: 2026-09-19
 
-Do not silently refresh this vendored profile. Updating the upstream base is a
+The vendored baseline, after removing the local Chromium rules below, was
+normalized and compared against that tagged upstream file.
+
+Do not silently refresh this profile. Updating the upstream base is a
 security-boundary change and must be reviewed together with the local delta.
 
 ## Local delta
@@ -36,6 +40,7 @@ using privileged mode, setting `seccomp=unconfined`, or starting Chromium with
 
 ## Verification
 
-The repository CI starts the real `browser-runtime` under this profile, waits
-for Chromium health/CDP, checks the noVNC endpoint, rejects `--no-sandbox`, and
-probes that unrelated mount-namespace creation is still denied.
+Repository CI starts the real `browser-runtime` under this profile, waits for
+Chromium health/CDP, opens a renderer target over CDP, checks the noVNC endpoint,
+rejects `--no-sandbox`, and probes that unrelated mount-namespace creation is
+still denied.
