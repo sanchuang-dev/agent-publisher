@@ -251,11 +251,30 @@ export class JobRepository implements JobRepositoryContract {
   }
 
   #assertNoOpenHumanAction(jobId: string, job: Job): void {
-    if (!job.checkpoint) {
-      return;
+    const actionRequestId = job.checkpoint
+      ? getCheckpointActionRequestId(job.checkpoint)
+      : null;
+    const openRow = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE job_id = ? AND status = 'open'
+         LIMIT 1`,
+      )
+      .get(jobId) as ActionRequestApprovalRow | undefined;
+
+    if (openRow) {
+      if (!actionRequestId || openRow.id !== actionRequestId) {
+        throw new Error(
+          `Cannot mutate job ${jobId}: open ActionRequest ${openRow.id} is not bound to the durable checkpoint`,
+        );
+      }
+
+      throw new Error(
+        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is still open`,
+      );
     }
 
-    const actionRequestId = getCheckpointActionRequestId(job.checkpoint);
     if (!actionRequestId) {
       return;
     }
@@ -271,12 +290,6 @@ export class JobRepository implements JobRepositoryContract {
     if (!row || row.job_id !== jobId) {
       throw new Error(
         `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is missing or belongs to another job`,
-      );
-    }
-
-    if (row.status === "open") {
-      throw new Error(
-        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is still open`,
       );
     }
   }
