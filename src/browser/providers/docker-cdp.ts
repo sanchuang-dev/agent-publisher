@@ -177,6 +177,11 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
 
     const transport = this.#connections.get(sessionId);
     if (!transport) {
+      if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
+        throw new Error(
+          "Browser session is owned by another provider instance and cannot be released here",
+        );
+      }
       return;
     }
 
