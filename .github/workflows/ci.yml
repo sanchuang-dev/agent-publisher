@@ -68,6 +68,8 @@ jobs:
 
           test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
           docker compose exec -T browser-runtime curl -fsS http://127.0.0.1:9222/json/version >/dev/null
+          docker compose exec -T browser-runtime curl -fsS -X PUT \
+            'http://127.0.0.1:9222/json/new?data:text/html,%3Ctitle%3Ebrowser-runtime-ci%3C/title%3E' >/dev/null
 
       - name: Verify sandbox boundary and live-view endpoint
         shell: bash
