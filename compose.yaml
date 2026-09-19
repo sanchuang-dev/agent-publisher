@@ -10,9 +10,9 @@ services:
       nofile:
         soft: 8192
         hard: 16384
-    # Scoped seccomp profile: Docker's default deny policy plus clone/unshare,
-    # the minimum Chromium's namespace sandbox needs. Avoids seccomp=unconfined
-    # and requires no extra capability such as SYS_ADMIN.
+    # Scoped seccomp profile: pinned Docker default policy plus argument-filtered
+    # Chromium user/PID/network namespace calls. No seccomp=unconfined, SYS_ADMIN,
+    # privileged mode, or --no-sandbox.
     security_opt:
       - seccomp=./docker/browser-runtime/seccomp-chromium.json
     expose:
