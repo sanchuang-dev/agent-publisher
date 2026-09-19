@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import test from "node:test";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright";
+import { build, preview } from "vite";
 
 const baseUrl = "http://127.0.0.1:4173";
 const states = [
@@ -122,7 +124,7 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   const expectedText: Record<(typeof states)[number], string> = {
     preparing_materials: "Material Pack",
     preparing_publish: "执行秘书正在操作",
-    waiting_for_login: "请接管登录",
+    waiting_for_login: "等待 Browser Live View",
     waiting_for_approval: "执行秘书已准备好发布",
     succeeded: "发布已完成",
     failed: "任务在安全边界内停止",
@@ -150,10 +152,20 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   await page.goto(`${baseUrl}/#/task/waiting_for_login`, {
     waitUntil: "domcontentloaded",
   });
-  await page.locator('iframe[title="Browser Live View placeholder"]').waitFor({
-    state: "visible",
-  });
-  await page.getByText("控制权已让给你").waitFor({ state: "visible" });
+  const fixtureFrame = page.locator('iframe[title="Browser Live View"]');
+  await fixtureFrame.waitFor({ state: "visible" });
+  assert.equal(
+    await fixtureFrame.getAttribute("src"),
+    "/browser-live-view-placeholder.html",
+  );
+  await page.getByText("等待 Browser Live View").waitFor({ state: "visible" });
+  await page.getByText("Live View 未连接").waitFor({ state: "visible" });
+  assert.equal(
+    await fixtureFrame.evaluate((element) => getComputedStyle(element).pointerEvents),
+    "none",
+  );
+  assert.equal(await fixtureFrame.getAttribute("tabindex"), "-1");
+  assert.equal(await page.getByText("控制权已让给你").count(), 0);
 
   await page.goto(`${baseUrl}/#/task/waiting_for_approval`, {
     waitUntil: "domcontentloaded",
@@ -219,4 +231,164 @@ test("Task Home assignment carries edited brief and video mode into detail", asy
   });
   await page.getByText("视频成片").waitFor({ state: "visible" });
   await page.getByText("VIDEO").first().waitFor({ state: "visible" });
+});
+
+
+test("runtime config supports interactive takeover then revokes input on agent resume", async (t) => {
+  const vitePath = resolve("node_modules/vite/bin/vite.js");
+  const injectedBaseUrl = "http://127.0.0.1:4175";
+  const fakeLiveViewUrl = "/fake-novnc/vnc.html";
+  const server = spawn(
+    process.execPath,
+    [vitePath, "web", "--host", "127.0.0.1", "--port", "4175", "--strictPort"],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, VITE_LIVE_VIEW_URL: fakeLiveViewUrl },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+
+  let browser: Browser | undefined;
+
+  t.after(async () => {
+    await browser?.close();
+    if (server.exitCode === null) {
+      server.kill("SIGTERM");
+    }
+  });
+
+  await waitForServer(server, injectedBaseUrl);
+
+  browser = await chromium.launch({
+    executablePath: findChrome(),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+
+  await page.goto(`${injectedBaseUrl}/#/task/waiting_for_login`, {
+    waitUntil: "domcontentloaded",
+  });
+
+  const frame = page.locator('iframe[title="Browser Live View"]');
+  await frame.waitFor({ state: "visible" });
+  assert.equal(await frame.getAttribute("src"), fakeLiveViewUrl);
+  assert.equal(
+    await frame.evaluate((element) => getComputedStyle(element).pointerEvents),
+    "auto",
+  );
+  assert.equal(await frame.getAttribute("tabindex"), "0");
+  await page.getByText("控制权已让给你").waitFor({ state: "visible" });
+
+  await frame.focus();
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.getAttribute("title")),
+    "Browser Live View",
+  );
+
+  await page.evaluate(() => {
+    window.location.hash = "#/task/preparing_publish";
+  });
+  await page.getByText("执行秘书正在操作").waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute("title") !== "Browser Live View",
+  );
+
+  const agentFrame = page.locator('iframe[title="Browser Live View"]');
+  assert.equal(await agentFrame.getAttribute("src"), fakeLiveViewUrl);
+  assert.equal(
+    await agentFrame.evaluate((element) => getComputedStyle(element).pointerEvents),
+    "none",
+  );
+  assert.equal(await agentFrame.getAttribute("tabindex"), "-1");
+  await page.getByText("执行秘书控制").waitFor({ state: "visible" });
+  await assertThreeColumnLayout(page);
+});
+
+
+test("production build preserves injected Live View runtime config", async (t) => {
+  const outDir = mkdtempSync(
+    join(tmpdir(), "agent-publisher-live-view-build-"),
+  );
+  const productionBaseUrl = "http://127.0.0.1:4176";
+  const fakeLiveViewUrl = "/fake-novnc/vnc.html";
+  const previousLiveViewUrl = process.env.VITE_LIVE_VIEW_URL;
+
+  process.env.VITE_LIVE_VIEW_URL = fakeLiveViewUrl;
+  try {
+    await build({
+      root: resolve("web"),
+      configFile: resolve("web/vite.config.ts"),
+      logLevel: "silent",
+      build: {
+        outDir,
+        emptyOutDir: true,
+      },
+    });
+  } finally {
+    if (previousLiveViewUrl === undefined) {
+      delete process.env.VITE_LIVE_VIEW_URL;
+    } else {
+      process.env.VITE_LIVE_VIEW_URL = previousLiveViewUrl;
+    }
+  }
+
+  const previewServer = await preview({
+    root: resolve("web"),
+    configFile: resolve("web/vite.config.ts"),
+    logLevel: "silent",
+    build: {
+      outDir,
+    },
+    preview: {
+      host: "127.0.0.1",
+      port: 4176,
+      strictPort: true,
+    },
+  });
+
+  let browser: Browser | undefined;
+
+  t.after(async () => {
+    await browser?.close();
+    await new Promise<void>((resolveClose, rejectClose) => {
+      previewServer.httpServer.close((error) => {
+        if (error) rejectClose(error);
+        else resolveClose();
+      });
+    });
+    rmSync(outDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  });
+
+  browser = await chromium.launch({
+    executablePath: findChrome(),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+
+  await page.goto(`${productionBaseUrl}/#/task/waiting_for_login`, {
+    waitUntil: "domcontentloaded",
+  });
+
+  const frame = page.locator('iframe[title="Browser Live View"]');
+  await frame.waitFor({ state: "visible" });
+  assert.equal(await frame.getAttribute("src"), fakeLiveViewUrl);
+  assert.equal(
+    await frame.evaluate((element) => getComputedStyle(element).pointerEvents),
+    "auto",
+  );
+  assert.equal(await frame.getAttribute("tabindex"), "0");
+  await page.getByText("控制权已让给你").waitFor({ state: "visible" });
 });

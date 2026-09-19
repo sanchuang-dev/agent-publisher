@@ -1,3 +1,11 @@
+import {
+  getLiveViewDescriptor,
+  readLiveViewRuntimeConfig,
+  type ControlOwner,
+  type LiveViewMode,
+  type LiveViewRuntimeConfig,
+} from "./live-view-adapter.js";
+
 export const fixtureStates = [
   "preparing_materials",
   "preparing_publish",
@@ -46,6 +54,8 @@ export interface TaskFixture {
     media: string[];
   };
   browserLiveViewUrl?: string;
+  browserLiveViewMode?: LiveViewMode;
+  controlOwner?: ControlOwner;
   approval?: {
     accountName: string;
     copySummary: string;
@@ -194,10 +204,15 @@ function createMaterial(publishMode: PublishMode): TaskFixture["material"] {
 export function getTaskFixture(
   state: FixtureState,
   assignment?: TaskAssignmentInput,
+  runtimeConfig: LiveViewRuntimeConfig = {},
 ): TaskFixture {
   const stateMeta = meta[state];
   const publishMode = assignment?.publishMode ?? "image_text";
   const material = createMaterial(publishMode);
+  const liveView =
+    state === "preparing_publish" || state === "waiting_for_login"
+      ? getLiveViewDescriptor(state, runtimeConfig.liveViewUrl)
+      : undefined;
 
   return {
     id: `demo-${state}`,
@@ -213,8 +228,12 @@ export function getTaskFixture(
     needsHuman: stateMeta.needsHuman,
     timeline: timeline(state),
     material,
-    ...(["preparing_publish", "waiting_for_login"].includes(state)
-      ? { browserLiveViewUrl: "/browser-live-view-placeholder.html" }
+    ...(liveView
+      ? {
+          browserLiveViewUrl: liveView.url,
+          browserLiveViewMode: liveView.mode,
+          controlOwner: liveView.controlOwner,
+        }
       : {}),
     ...(state === "waiting_for_approval"
       ? {
@@ -270,11 +289,15 @@ export interface TaskRepository {
 class FixtureTaskRepository implements TaskRepository {
   private assignedTask: TaskFixture | undefined;
 
+  private runtimeConfig(): LiveViewRuntimeConfig {
+    return readLiveViewRuntimeConfig(import.meta.env);
+  }
+
   async list(): Promise<TaskFixture[]> {
     return fixtureStates.map((state) =>
       state === "preparing_materials" && this.assignedTask
         ? this.assignedTask
-        : getTaskFixture(state),
+        : getTaskFixture(state, undefined, this.runtimeConfig()),
     );
   }
 
@@ -283,11 +306,15 @@ class FixtureTaskRepository implements TaskRepository {
       return this.assignedTask;
     }
 
-    return getTaskFixture(state);
+    return getTaskFixture(state, undefined, this.runtimeConfig());
   }
 
   assign(input: TaskAssignmentInput): TaskFixture {
-    this.assignedTask = getTaskFixture("preparing_materials", input);
+    this.assignedTask = getTaskFixture(
+      "preparing_materials",
+      input,
+      this.runtimeConfig(),
+    );
     return this.assignedTask;
   }
 }
