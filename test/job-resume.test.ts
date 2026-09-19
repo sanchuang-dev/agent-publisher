@@ -279,6 +279,9 @@ describe("ResumeService restart recovery", () => {
       action: { id: "approval-action", type: "approval_required", status: "open" },
     });
 
+    const approvalCheckpoint = jobs.loadLastCheckpoint("job-approval-positive");
+    expect(approvalCheckpoint).not.toBeNull();
+
     actions.resolve("approval-action", { approved: true });
 
     expect(resume.resume("job-approval-positive")).toMatchObject({
@@ -293,7 +296,10 @@ describe("ResumeService restart recovery", () => {
 
     const publishing = control.beginPublishingAfterApproval({
       jobId: "job-approval-positive",
-      checkpoint: { phase: "publishing" },
+      checkpoint: {
+        ...approvalCheckpoint!.checkpoint,
+        phase: "publishing",
+      },
       step: { id: "publish-step", stepKey: "publish_once", status: "running" },
     });
 
@@ -302,7 +308,24 @@ describe("ResumeService restart recovery", () => {
       currentStep: "publish_once",
       checkpoint: { phase: "publishing" },
     });
+    expect(publishing.checkpoint).not.toHaveProperty("actionRequestId");
     db.close();
+
+    const reopenedDb = openDatabase({ databasePath });
+    const reopenedResume = new ResumeService({
+      jobs: new JobRepository(reopenedDb),
+      actionRequests: new ActionRequestRepository(reopenedDb),
+    });
+
+    try {
+      expect(reopenedResume.resume("job-approval-positive")).toMatchObject({
+        kind: "ready_to_continue",
+        job: { status: "publishing" },
+        resolvedAction: null,
+      });
+    } finally {
+      reopenedDb.close();
+    }
   });
 
   test("rejected approval is non-continuable and returns to preparing_publish for revision", () => {
@@ -327,7 +350,8 @@ describe("ResumeService restart recovery", () => {
     actions.resolve("approval-reject-action", { approved: false });
 
     const resume = new ResumeService({ jobs, actionRequests: actions });
-    expect(resume.resume("job-approval-rejected")).toMatchObject({
+    const rejected = resume.resume("job-approval-rejected");
+    expect(rejected).toMatchObject({
       kind: "approval_rejected",
       job: { status: "waiting_for_approval" },
       action: {
@@ -337,6 +361,9 @@ describe("ResumeService restart recovery", () => {
       },
       nextStatus: "preparing_publish",
     });
+    if (rejected.kind !== "approval_rejected") {
+      throw new Error("expected approval_rejected decision");
+    }
 
     expect(() =>
       control.beginPublishingAfterApproval({
@@ -348,11 +375,31 @@ describe("ResumeService restart recovery", () => {
 
     const revision = jobs.commitCheckpoint("job-approval-rejected", {
       status: "preparing_publish",
-      checkpoint: { phase: "revision" },
+      checkpoint: {
+        ...rejected.checkpoint.checkpoint,
+        phase: "revision",
+      },
       step: { id: "revision-step", stepKey: "fill_form", status: "running", attempt: 2 },
     });
     expect(revision.status).toBe("preparing_publish");
+    expect(revision.checkpoint).not.toHaveProperty("actionRequestId");
     db.close();
+
+    const reopenedDb = openDatabase({ databasePath });
+    const reopenedResume = new ResumeService({
+      jobs: new JobRepository(reopenedDb),
+      actionRequests: new ActionRequestRepository(reopenedDb),
+    });
+
+    try {
+      expect(reopenedResume.resume("job-approval-rejected")).toMatchObject({
+        kind: "ready_to_continue",
+        job: { status: "preparing_publish" },
+        resolvedAction: null,
+      });
+    } finally {
+      reopenedDb.close();
+    }
   });
 
   test("approval cannot be resolved without an explicit boolean decision", () => {
