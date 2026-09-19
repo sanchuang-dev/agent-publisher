@@ -421,7 +421,7 @@ test("unexpected browser disconnect clears the active session so reconnect can a
 });
 
 
-test("single-session lease spans multiple provider instances in the same process", async () => {
+test("single-session lease spans provider instances without transferring release ownership", async () => {
   const firstTransport = managedTransportStub();
   const secondTransport = managedTransportStub();
   let secondTransportRequests = 0;
@@ -452,15 +452,64 @@ test("single-session lease spans multiple provider instances in the same process
   );
   expect(secondTransportRequests).toBe(0);
 
+  // A different provider instance must not be able to release a session it
+  // did not acquire, even if it is handed the session id.
   await secondProvider.release(first.id);
+  expect(firstTransport.disconnectCalls).toBe(0);
+  await expect(secondProvider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+
+  await firstProvider.release(first.id);
   expect(firstTransport.disconnectCalls).toBe(1);
 
   const second = await secondProvider.acquire({});
   await secondProvider.release(second.id);
 
   expect(secondTransportRequests).toBe(1);
-  expect(firstTransport.disconnectCalls).toBe(1);
   expect(secondTransport.disconnectCalls).toBe(1);
+});
+
+test("unknown and stale release ids do not disturb the active lease", async () => {
+  const transports = [managedTransportStub(), managedTransportStub()];
+  let transportIndex = 0;
+
+  const provider = new DockerCdpBrowserProvider({
+    createTransport: async () => {
+      const transport = transports[transportIndex++];
+      if (!transport) {
+        throw new Error("unexpected extra transport request");
+      }
+      return transport.transport;
+    },
+    connectOverCDP: async () =>
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+  });
+
+  const first = await provider.acquire({});
+
+  await provider.release("unknown-session");
+  expect(transports[0]?.disconnectCalls).toBe(0);
+  await expect(provider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+
+  await provider.release(first.id);
+  expect(transports[0]?.disconnectCalls).toBe(1);
+
+  const second = await provider.acquire({});
+
+  // Releasing the old id after reacquire must not affect the new session.
+  await provider.release(first.id);
+  expect(transports[1]?.disconnectCalls).toBe(0);
+  await expect(provider.acquire({})).rejects.toThrow(
+    /Browser session already active/,
+  );
+
+  await provider.release(second.id);
+  expect(transports[1]?.disconnectCalls).toBe(1);
 });
 
 

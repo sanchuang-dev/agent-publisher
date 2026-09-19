@@ -3,7 +3,11 @@
  */
 
 import {
+  getCheckpointActionRequestId,
+  humanActionCheckpointKey,
+  isApprovalResolution,
   JobNotFoundError,
+  type CheckpointData,
   type CheckpointInput,
   type CreateJobInput,
   type Job,
@@ -11,6 +15,7 @@ import {
   type JobRepository as JobRepositoryContract,
   type JobStep,
 } from "../contracts/job.js";
+import { assertJobStatusTransitionAllowed } from "../jobs/state-machine.js";
 
 interface RunResult {
   readonly changes: number;
@@ -38,6 +43,14 @@ interface JobRow {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+}
+
+interface ActionRequestApprovalRow {
+  id: string;
+  job_id: string;
+  type: string;
+  status: string;
+  resolution_json: string | null;
 }
 
 interface JobStepRow {
@@ -127,11 +140,24 @@ export class JobRepository implements JobRepositoryContract {
 
   commitCheckpoint(jobId: string, input: CheckpointInput): Job {
     const now = new Date().toISOString();
-    const checkpointJson = JSON.stringify(input.checkpoint);
     const step = input.step;
     const attempt = step.attempt ?? 1;
 
     const commit = this.#db.transaction(() => {
+      const currentJob = this.#requireJob(jobId);
+      assertJobStatusTransitionAllowed(currentJob.status, input.status);
+      this.#assertNoOpenHumanAction(jobId, currentJob);
+
+      if (currentJob.status === "waiting_for_approval" && input.status === "publishing") {
+        this.#assertAffirmativeApproval(jobId, currentJob);
+      }
+
+      const checkpoint = this.#clearClosedHumanActionBinding(
+        currentJob,
+        input.checkpoint,
+      );
+      const checkpointJson = JSON.stringify(checkpoint);
+
       const result = this.#db
         .prepare(
           `UPDATE jobs
@@ -229,6 +255,114 @@ export class JobRepository implements JobRepositoryContract {
         )
         .all(jobId) as JobStepRow[]
     ).map(mapJobStep);
+  }
+
+  #assertNoOpenHumanAction(jobId: string, job: Job): void {
+    const actionRequestId = job.checkpoint
+      ? getCheckpointActionRequestId(job.checkpoint)
+      : null;
+    const openRow = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE job_id = ? AND status = 'open'
+         LIMIT 1`,
+      )
+      .get(jobId) as ActionRequestApprovalRow | undefined;
+
+    if (openRow) {
+      if (!actionRequestId || openRow.id !== actionRequestId) {
+        throw new Error(
+          `Cannot mutate job ${jobId}: open ActionRequest ${openRow.id} is not bound to the durable checkpoint`,
+        );
+      }
+
+      throw new Error(
+        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is still open`,
+      );
+    }
+
+    if (!actionRequestId) {
+      return;
+    }
+
+    const row = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE id = ?`,
+      )
+      .get(actionRequestId) as ActionRequestApprovalRow | undefined;
+
+    if (!row || row.job_id !== jobId) {
+      throw new Error(
+        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is missing or belongs to another job`,
+      );
+    }
+  }
+
+  #clearClosedHumanActionBinding(
+    currentJob: Job,
+    checkpoint: CheckpointData,
+  ): CheckpointData {
+    if (!currentJob.checkpoint) {
+      return checkpoint;
+    }
+
+    const currentActionRequestId = getCheckpointActionRequestId(currentJob.checkpoint);
+    if (!currentActionRequestId) {
+      return checkpoint;
+    }
+
+    const nextActionRequestId = getCheckpointActionRequestId(checkpoint);
+    if (nextActionRequestId !== currentActionRequestId) {
+      return checkpoint;
+    }
+
+    const {
+      [humanActionCheckpointKey]: _closedHumanActionRequestId,
+      ...checkpointWithoutClosedHumanAction
+    } = checkpoint;
+
+    return checkpointWithoutClosedHumanAction;
+  }
+
+  #assertAffirmativeApproval(jobId: string, job: Job): void {
+    if (!job.checkpoint) {
+      throw new Error(`Cannot publish job ${jobId}: approval checkpoint is missing`);
+    }
+
+    const actionRequestId = getCheckpointActionRequestId(job.checkpoint);
+    if (!actionRequestId) {
+      throw new Error(
+        `Cannot publish job ${jobId}: approval checkpoint is not bound to an ActionRequest`,
+      );
+    }
+
+    const row = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE id = ?`,
+      )
+      .get(actionRequestId) as ActionRequestApprovalRow | undefined;
+
+    const resolution = row?.resolution_json
+      ? (JSON.parse(row.resolution_json) as Job["checkpoint"])
+      : null;
+
+    if (
+      !row ||
+      row.job_id !== jobId ||
+      row.type !== "approval_required" ||
+      row.status !== "resolved" ||
+      !isApprovalResolution(resolution) ||
+      !resolution.approved
+    ) {
+      throw new Error(
+        `Cannot publish job ${jobId}: affirmative approval is not persisted`,
+      );
+    }
   }
 
   #requireJob(jobId: string): Job {

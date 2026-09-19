@@ -54,9 +54,9 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #profileRef: string;
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
-  static readonly #connections = new Map<string, ManagedCdpTransport>();
-  static readonly #releasePromises = new Map<string, Promise<void>>();
-  static readonly #releasingSessionIds = new Set<string>();
+  readonly #connections = new Map<string, ManagedCdpTransport>();
+  readonly #releasePromises = new Map<string, Promise<void>>();
+  readonly #releasingSessionIds = new Set<string>();
   static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
@@ -111,7 +111,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       connection.browser.once("disconnected", () => {
         // release() owns cleanup while an intentional transport teardown is
         // in progress; otherwise this is an unexpected session loss.
-        if (DockerCdpBrowserProvider.#releasingSessionIds.has(id)) {
+        if (this.#releasingSessionIds.has(id)) {
           return;
         }
 
@@ -133,7 +133,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         throw new Error("Browser session disconnected during acquisition");
       }
 
-      DockerCdpBrowserProvider.#connections.set(id, connection.transport);
+      this.#connections.set(id, connection.transport);
 
       return {
         id,
@@ -155,7 +155,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       throw error;
     } finally {
       if (
-        !DockerCdpBrowserProvider.#connections.has(id) &&
+        !this.#connections.has(id) &&
         DockerCdpBrowserProvider.#activeSessionId === id
       ) {
         DockerCdpBrowserProvider.#activeSessionId = undefined;
@@ -165,32 +165,32 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
 
   async release(sessionId: string): Promise<void> {
     const existingRelease =
-      DockerCdpBrowserProvider.#releasePromises.get(sessionId);
+      this.#releasePromises.get(sessionId);
     if (existingRelease) {
       await existingRelease;
       return;
     }
 
-    const transport = DockerCdpBrowserProvider.#connections.get(sessionId);
+    const transport = this.#connections.get(sessionId);
     if (!transport) {
       return;
     }
 
-    DockerCdpBrowserProvider.#releasingSessionIds.add(sessionId);
+    this.#releasingSessionIds.add(sessionId);
     const releasePromise = Promise.resolve()
       .then(() => transport.disconnect())
       .finally(() => {
-        DockerCdpBrowserProvider.#releasingSessionIds.delete(sessionId);
+        this.#releasingSessionIds.delete(sessionId);
         this.#clearSession(sessionId);
-        DockerCdpBrowserProvider.#releasePromises.delete(sessionId);
+        this.#releasePromises.delete(sessionId);
       });
 
-    DockerCdpBrowserProvider.#releasePromises.set(sessionId, releasePromise);
+    this.#releasePromises.set(sessionId, releasePromise);
     await releasePromise;
   }
 
   #clearSession(sessionId: string): void {
-    DockerCdpBrowserProvider.#connections.delete(sessionId);
+    this.#connections.delete(sessionId);
 
     if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
       DockerCdpBrowserProvider.#activeSessionId = undefined;
