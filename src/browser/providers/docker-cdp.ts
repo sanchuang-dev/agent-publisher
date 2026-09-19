@@ -57,6 +57,10 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #connections = new Map<string, ManagedCdpTransport>();
   readonly #releasePromises = new Map<string, Promise<void>>();
   readonly #releasingSessionIds = new Set<string>();
+  // MVP exclusivity is process-wide: the accepted deployment is one Node app
+  // process driving one browser-runtime/profile. Distributed/multi-replica
+  // locking is intentionally out of scope; release ownership remains local to
+  // the provider instance that acquired the session.
   static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
