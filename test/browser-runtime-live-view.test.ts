@@ -15,7 +15,7 @@ import { expect, test } from "vitest";
 const repoRoot = resolve(import.meta.dirname, "..");
 const startScriptPath = resolve(repoRoot, "docker/browser-runtime/start-browser.sh");
 const healthScriptPath = resolve(repoRoot, "docker/browser-runtime/health-browser.sh");
-const criticalProcesses = ["xvfb", "chromium", "x11vnc", "websockify"] as const;
+const criticalProcesses = ["xvfb", "chromium", "cdp-proxy", "x11vnc", "websockify"] as const;
 
 function read(relativePath: string): string {
   return readFileSync(resolve(repoRoot, relativePath), "utf8");
@@ -87,6 +87,7 @@ test("browser-runtime image includes noVNC dependencies and lifecycle healthchec
   expect(dockerfile).toMatch(/\bchromium-sandbox\b/);
   expect(dockerfile).toMatch(/\bx11vnc\b/);
   expect(dockerfile).toMatch(/\bnovnc\b/);
+  expect(dockerfile).toMatch(/\bsocat\b/);
   expect(dockerfile).toMatch(/\bwebsockify\b/);
   expect(dockerfile).toMatch(/COPY health-browser\.sh \/usr\/local\/bin\/health-browser/);
   expect(dockerfile).toMatch(/EXPOSE 6080 9222/);
@@ -103,6 +104,9 @@ test("browser startup script uses the stable internal Live View transport contra
   expect(script).toMatch(/\bgosu browser Xvfb "\$\{display\}"/);
   expect(script).toMatch(/\bgosu browser x11vnc[\s\S]*-display "\$\{display\}"/);
   expect(script).toMatch(/-rfbport "\$\{vnc_port\}"/);
+  expect(script).toMatch(/--remote-debugging-address=127\.0\.0\.1/);
+  expect(script).toMatch(/--remote-debugging-port=9223/);
+  expect(script).toMatch(/\bgosu browser socat[\s\S]*TCP-LISTEN:9222[\s\S]*TCP:127\.0\.0\.1:9223/);
   expect(script).toMatch(/\bgosu browser websockify\b/);
   expect(script).toMatch(/--web=\/usr\/share\/novnc\//);
   expect(script).toMatch(/"127\.0\.0\.1:\$\{vnc_port\}"/);
@@ -120,9 +124,10 @@ test("browser startup script supervises all critical processes", () => {
 test("healthcheck rejects missing or zombie critical processes before probing endpoints", () => {
   const healthScript = read("docker/browser-runtime/health-browser.sh");
 
-  expect(healthScript).toMatch(/for process_name in xvfb chromium x11vnc websockify/);
+  expect(healthScript).toMatch(/for process_name in xvfb chromium cdp-proxy x11vnc websockify/);
   expect(healthScript).toMatch(/\/proc\/\$\{process_pid\}\/stat/);
   expect(healthScript).toMatch(/"\$\{process_state\}" = "Z"/);
+  expect(healthScript).toMatch(/127\.0\.0\.1:9223\/json\/version/);
   expect(healthScript).toMatch(/127\.0\.0\.1:9222\/json\/version/);
   expect(healthScript).toMatch(/127\.0\.0\.1:6080\/vnc\.html/);
 });
@@ -139,9 +144,10 @@ test("healthcheck executes the fixed CDP and noVNC probes when critical processe
       .trim()
       .split("\n");
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]).toContain("http://127.0.0.1:9222/json/version");
-    expect(calls[1]).toContain("http://127.0.0.1:6080/vnc.html");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toContain("http://127.0.0.1:9223/json/version");
+    expect(calls[1]).toContain("http://127.0.0.1:9222/json/version");
+    expect(calls[2]).toContain("http://127.0.0.1:6080/vnc.html");
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
   }
@@ -169,7 +175,7 @@ test("healthcheck fails when an endpoint probe fails", () => {
 
     expect(result.status).not.toBe(0);
     expect(readFileSync(harness.curlLog, "utf8")).toContain(
-      "http://127.0.0.1:9222/json/version",
+      "http://127.0.0.1:9223/json/version",
     );
   } finally {
     rmSync(harness.root, { recursive: true, force: true });
