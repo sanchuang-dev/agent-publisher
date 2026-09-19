@@ -55,6 +55,13 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #createTransport: CreateCdpTransport;
   readonly #connectOverCDP: ConnectOverCdp;
   readonly #connections = new Map<string, ManagedCdpTransport>();
+  readonly #releasePromises = new Map<string, Promise<void>>();
+  readonly #releasingSessionIds = new Set<string>();
+  // MVP exclusivity is process-wide: the accepted deployment is one Node app
+  // process driving one browser-runtime/profile. Distributed/multi-replica
+  // locking is intentionally out of scope; release ownership remains local to
+  // the provider instance that acquired the session.
+  static #activeSessionId: string | undefined;
 
   constructor(options: DockerCdpBrowserProviderOptions = {}) {
     const env = options.env ?? process.env;
@@ -87,9 +94,34 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async acquire(_input: BrowserAcquireInput): Promise<BrowserSession> {
-    const connection = await this.#connect();
+    if (DockerCdpBrowserProvider.#activeSessionId !== undefined) {
+      throw new Error(
+        "Browser session already active or being acquired. Wait for it to be released before acquiring a new session.",
+      );
+    }
+
+    // Reserve the single MVP slot before the first async boundary so two
+    // concurrent acquire() calls cannot both attach to the persistent browser.
+    const id = randomUUID();
+    DockerCdpBrowserProvider.#activeSessionId = id;
+
+    let connection: ConnectedBrowser | undefined;
 
     try {
+      connection = await this.#connect();
+
+      // A runtime restart or transport loss invalidates the app-side session.
+      // Chromium itself is owned by browser-runtime and must not be closed here.
+      connection.browser.once("disconnected", () => {
+        // release() owns cleanup while an intentional transport teardown is
+        // in progress; otherwise this is an unexpected session loss.
+        if (this.#releasingSessionIds.has(id)) {
+          return;
+        }
+
+        this.#clearSession(id);
+      });
+
       const context = connection.browser.contexts()[0];
       if (!context) {
         throw new Error(
@@ -101,7 +133,10 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         context.pages().find((candidate) => !candidate.isClosed()) ??
         (await context.newPage());
 
-      const id = randomUUID();
+      if (DockerCdpBrowserProvider.#activeSessionId !== id) {
+        throw new Error("Browser session disconnected during acquisition");
+      }
+
       this.#connections.set(id, connection.transport);
 
       return {
@@ -110,27 +145,65 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         profileRef: this.#profileRef,
       };
     } catch (error) {
-      try {
-        await connection.transport.disconnect();
-      } catch (disconnectError) {
-        throw new AggregateError(
-          [error, disconnectError],
-          "Browser session acquisition failed and the app-side CDP connection could not be released",
-        );
+      if (connection) {
+        try {
+          await connection.transport.disconnect();
+        } catch (disconnectError) {
+          throw new AggregateError(
+            [error, disconnectError],
+            "Browser session acquisition failed and the app-side CDP connection could not be released",
+          );
+        }
       }
 
       throw error;
+    } finally {
+      if (
+        !this.#connections.has(id) &&
+        DockerCdpBrowserProvider.#activeSessionId === id
+      ) {
+        DockerCdpBrowserProvider.#activeSessionId = undefined;
+      }
     }
   }
 
   async release(sessionId: string): Promise<void> {
-    const transport = this.#connections.get(sessionId);
-    if (!transport) {
+    const existingRelease =
+      this.#releasePromises.get(sessionId);
+    if (existingRelease) {
+      await existingRelease;
       return;
     }
 
-    await transport.disconnect();
+    const transport = this.#connections.get(sessionId);
+    if (!transport) {
+      if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
+        throw new Error(
+          "Browser session is owned by another provider instance and cannot be released here",
+        );
+      }
+      return;
+    }
+
+    this.#releasingSessionIds.add(sessionId);
+    const releasePromise = Promise.resolve()
+      .then(() => transport.disconnect())
+      .finally(() => {
+        this.#releasingSessionIds.delete(sessionId);
+        this.#clearSession(sessionId);
+        this.#releasePromises.delete(sessionId);
+      });
+
+    this.#releasePromises.set(sessionId, releasePromise);
+    await releasePromise;
+  }
+
+  #clearSession(sessionId: string): void {
     this.#connections.delete(sessionId);
+
+    if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
+      DockerCdpBrowserProvider.#activeSessionId = undefined;
+    }
   }
 
   async health(): Promise<BrowserProviderHealth> {
