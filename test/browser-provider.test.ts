@@ -453,8 +453,11 @@ test("single-session lease spans provider instances without transferring release
   expect(secondTransportRequests).toBe(0);
 
   // A different provider instance must not be able to release a session it
-  // did not acquire, even if it is handed the session id.
-  await secondProvider.release(first.id);
+  // did not acquire, even if it is handed the session id. Surface the ownership
+  // mismatch instead of silently pretending the release succeeded.
+  await expect(secondProvider.release(first.id)).rejects.toThrow(
+    /owned by another provider instance/,
+  );
   expect(firstTransport.disconnectCalls).toBe(0);
   await expect(secondProvider.acquire({})).rejects.toThrow(
     /Browser session already active/,
