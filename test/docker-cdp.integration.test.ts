@@ -290,9 +290,12 @@ function fileSignature(path: string): string | undefined {
 async function waitForCookieStoreWrite(
   profilePath: string,
   before: ReadonlyMap<string, string | undefined>,
-  timeoutMs = 5_000,
+  timeoutMs = 35_000,
 ): Promise<void> {
   const paths = cookieStorePaths(profilePath);
+  // Chromium batches persistent-cookie SQLite mutations and normally commits
+  // them on a 30-second timer. Poll for the actual backing-store write instead
+  // of assuming that an in-memory cookie is already durable.
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -411,5 +414,5 @@ test(
       });
     }
   },
-  45_000,
+  60_000,
 );
