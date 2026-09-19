@@ -77,8 +77,8 @@ function providerWithConnection(options: {
   let browserIndex = 0;
 
   return new DockerCdpBrowserProvider({
-    endpoint: options.endpoint,
-    env: options.env,
+    ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+    ...(options.env === undefined ? {} : { env: options.env }),
     resolveEndpoint:
       options.resolveEndpoint ??
       (async () => "ws://172.18.0.2:9222/devtools/browser/test"),
