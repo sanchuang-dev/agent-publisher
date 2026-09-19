@@ -21,6 +21,7 @@ xvfb_pid=""
 chromium_pid=""
 x11vnc_pid=""
 websockify_pid=""
+cdp_proxy_pid=""
 
 record_pid() {
   process_name="$1"
@@ -38,13 +39,13 @@ process_is_alive() {
 }
 
 cleanup() {
-  for process_pid in "${websockify_pid}" "${x11vnc_pid}" "${chromium_pid}" "${xvfb_pid}"; do
+  for process_pid in "${websockify_pid}" "${x11vnc_pid}" "${cdp_proxy_pid}" "${chromium_pid}" "${xvfb_pid}"; do
     if [ -n "${process_pid}" ]; then
       kill "${process_pid}" 2>/dev/null || true
     fi
   done
 
-  for process_pid in "${websockify_pid}" "${x11vnc_pid}" "${chromium_pid}" "${xvfb_pid}"; do
+  for process_pid in "${websockify_pid}" "${x11vnc_pid}" "${cdp_proxy_pid}" "${chromium_pid}" "${xvfb_pid}"; do
     if [ -n "${process_pid}" ]; then
       wait "${process_pid}" 2>/dev/null || true
     fi
@@ -86,8 +87,8 @@ while [ ! -S "${x_socket}" ]; do
 done
 
 gosu browser chromium \
-  --remote-debugging-address=0.0.0.0 \
-  --remote-debugging-port=9222 \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9223 \
   --user-data-dir="${profile_dir}" \
   --no-first-run \
   --no-default-browser-check \
@@ -95,6 +96,15 @@ gosu browser chromium \
   about:blank &
 chromium_pid=$!
 record_pid chromium "${chromium_pid}"
+
+# Modern Chromium binds DevTools to loopback even when a broader debugging
+# address is requested. Keep Chromium itself loopback-only and expose CDP only
+# inside the container/Compose network through a supervised TCP forwarder.
+gosu browser socat \
+  TCP-LISTEN:9222,bind=0.0.0.0,reuseaddr,fork \
+  TCP:127.0.0.1:9223 &
+cdp_proxy_pid=$!
+record_pid cdp-proxy "${cdp_proxy_pid}"
 
 gosu browser x11vnc \
   -display "${display}" \
@@ -121,6 +131,10 @@ while :; do
   fi
   if ! process_is_alive "${chromium_pid}"; then
     echo "Chromium exited unexpectedly" >&2
+    exit 1
+  fi
+  if ! process_is_alive "${cdp_proxy_pid}"; then
+    echo "CDP proxy exited unexpectedly" >&2
     exit 1
   fi
   if ! process_is_alive "${x11vnc_pid}"; then
