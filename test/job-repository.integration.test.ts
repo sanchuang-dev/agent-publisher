@@ -375,6 +375,50 @@ describe("JobRepository integration", () => {
     expect(repo.getStepsForJob("job-illegal-transition")).toHaveLength(1);
   });
 
+  test("an unbound open human action freezes direct checkpoint mutation fail-closed", () => {
+    repo.create({
+      id: "job-unbound-open-action",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-unbound-open-action", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "unbound-copy", stepKey: "generate_copy", status: "running" },
+    });
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, created_at
+      ) VALUES (?, ?, 'clarification_required', 'open', ?)`,
+    ).run(
+      "unbound-open-action",
+      "job-unbound-open-action",
+      "2026-09-18T01:59:00.000Z",
+    );
+
+    const before = repo.getById("job-unbound-open-action");
+    const stepCount = repo.getStepsForJob("job-unbound-open-action").length;
+
+    expect(() =>
+      repo.commitCheckpoint("job-unbound-open-action", {
+        status: "preparing_materials",
+        checkpoint: { phase: "copy", progress: 50 },
+        step: {
+          id: "unbound-copy-progress",
+          stepKey: "generate_copy",
+          status: "running",
+          attempt: 2,
+        },
+      }),
+    ).toThrow(/is not bound to the durable checkpoint/);
+
+    expect(repo.getById("job-unbound-open-action")).toEqual(before);
+    expect(repo.getStepsForJob("job-unbound-open-action")).toHaveLength(stepCount);
+  });
+
   test("direct publishing transition is rejected without affirmative persisted approval", () => {
     repo.create({
       id: "job-approval-gate",
