@@ -269,7 +269,7 @@ async function stopServer(server: Server): Promise<void> {
 }
 
 test(
-  "real Chromium preserves non-sensitive localStorage across process restart with the same profile",
+  "real Chromium preserves a non-sensitive persistent cookie across process restart with the same profile",
   async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-publisher-profile-"));
     const profilePath = join(root, "profile");
