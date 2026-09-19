@@ -180,7 +180,7 @@ jobs:
               echo "[compose-smoke] endpoint=$BROWSER_CDP_ENDPOINT"
               timeout 15s node -e '"'"'require("node:dns").lookup("browser-runtime", { family: 4 }, (error, address) => { if (error) { console.error("[compose-smoke] dns-failed", error); process.exit(1); } console.log("[compose-smoke] browser-runtime-ip=" + address); })'"'"'
               echo "[compose-smoke] browser-provider=start"
-              DEBUG=pw:protocol,pw:browser timeout --signal=TERM 45s npm run smoke:browser-provider
+              timeout --signal=TERM 45s npm run smoke:browser-provider
               echo "[compose-smoke] browser-provider=done"
               echo "[compose-smoke] session-constraint=start"
               timeout --signal=TERM 45s npm run smoke:session-constraint
