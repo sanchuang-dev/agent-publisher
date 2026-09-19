@@ -1,3 +1,6 @@
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
 export interface CdpTransport {
   open?(): void;
   send(message: object): void;
@@ -14,14 +17,27 @@ function isLoopbackHost(hostname: string): boolean {
   return (
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||
-    hostname === "::1"
+    hostname === "::1" ||
+    hostname === "[::1]"
   );
+}
+
+export type ResolveCdpHostname = (hostname: string) => Promise<string>;
+
+async function resolveDockerHostname(hostname: string): Promise<string> {
+  if (isLoopbackHost(hostname) || isIP(hostname) !== 0) {
+    return hostname;
+  }
+
+  const result = await lookup(hostname, { family: 4 });
+  return result.address;
 }
 
 export async function resolveCdpWebSocketEndpoint(
   endpoint: string,
   timeoutMs: number,
   fetchImpl: typeof fetch = fetch,
+  resolveHostname: ResolveCdpHostname = resolveDockerHostname,
 ): Promise<string> {
   let endpointUrl: URL;
 
@@ -39,7 +55,36 @@ export async function resolveCdpWebSocketEndpoint(
     throw new Error("Browser CDP endpoint must use http(s) or ws(s)");
   }
 
+  let connectionHostname = endpointUrl.hostname;
+
+  // Headful Chromium exposes DevTools on loopback and rejects non-IP Host
+  // headers. Keep the configured Compose service name as the stable contract,
+  // but resolve it on every connection so discovery and WebSocket handshakes
+  // use the browser-runtime container's current internal IP.
+  if (
+    endpointUrl.protocol === "http:" &&
+    !isLoopbackHost(endpointUrl.hostname) &&
+    isIP(endpointUrl.hostname) === 0
+  ) {
+    try {
+      connectionHostname = await resolveHostname(endpointUrl.hostname);
+    } catch (error) {
+      throw new Error(
+        `Browser CDP host resolution failed for ${endpointUrl.hostname}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (isIP(connectionHostname) === 0) {
+      throw new Error(
+        `Browser CDP host resolution returned a non-IP address for ${endpointUrl.hostname}`,
+      );
+    }
+  }
+
   const versionUrl = new URL(endpointUrl);
+  versionUrl.hostname = connectionHostname;
   const basePath = versionUrl.pathname.endsWith("/")
     ? versionUrl.pathname
     : `${versionUrl.pathname}/`;
@@ -95,7 +140,7 @@ export async function resolveCdpWebSocketEndpoint(
   ) {
     webSocketUrl.protocol =
       endpointUrl.protocol === "https:" ? "wss:" : "ws:";
-    webSocketUrl.hostname = endpointUrl.hostname;
+    webSocketUrl.hostname = connectionHostname;
     webSocketUrl.port = endpointUrl.port;
   }
 
