@@ -127,6 +127,32 @@ async function stopProcess(
   }
 }
 
+async function stopChromiumForRuntimeRestart(
+  child: ChildProcessWithoutNullStreams,
+): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        signalProcessTree(child, "SIGKILL");
+      }, 5_000);
+
+      child.once("exit", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+
+      // browser-runtime cleanup sends SIGTERM to Chromium itself. Let the
+      // browser process flush persistent profile state before the final
+      // process-group cleanup removes any lingering renderer/utility children.
+      child.kill("SIGTERM");
+    });
+  }
+
+  if (process.platform !== "win32") {
+    signalProcessTree(child, "SIGKILL");
+  }
+}
+
 test(
   "real Chromium survives provider release and accepts a fresh CDP session",
   async () => {
@@ -280,17 +306,27 @@ test(
 
       const first = await firstProvider.acquire({});
       await first.page.goto(origin);
-      await first.page.evaluate(() => {
-        localStorage.setItem("m1_04_profile_smoke", "persisted");
-      });
+      await first.page.context().addCookies([
+        {
+          name: "m1_04_profile_smoke",
+          value: "persisted",
+          url: origin,
+          expires: Math.floor(Date.now() / 1000) + 60 * 60,
+        },
+      ]);
       await expect(
-        first.page.evaluate(() =>
-          localStorage.getItem("m1_04_profile_smoke"),
-        ),
-      ).resolves.toBe("persisted");
+        first.page.context().cookies(origin),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "m1_04_profile_smoke",
+            value: "persisted",
+          }),
+        ]),
+      );
       await firstProvider.release(first.id);
 
-      await stopProcess(chromiumProcess);
+      await stopChromiumForRuntimeRestart(chromiumProcess);
       chromiumProcess = spawnChromium();
 
       const secondWebsocketEndpoint =
@@ -304,10 +340,15 @@ test(
       const second = await secondProvider.acquire({});
       await second.page.goto(origin);
       await expect(
-        second.page.evaluate(() =>
-          localStorage.getItem("m1_04_profile_smoke"),
-        ),
-      ).resolves.toBe("persisted");
+        second.page.context().cookies(origin),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "m1_04_profile_smoke",
+            value: "persisted",
+          }),
+        ]),
+      );
 
       await secondProvider.release(second.id);
     } finally {
