@@ -117,7 +117,8 @@ test("browser startup script supervises all critical processes", () => {
 
   for (const processName of criticalProcesses) {
     expect(script).toMatch(new RegExp(`record_pid ${processName} `));
-    expect(script).toMatch(new RegExp(`${processName}_pid`));
+    const processVariable = processName.replaceAll("-", "_");
+    expect(script).toMatch(new RegExp(`${processVariable}_pid`));
   }
 });
 
