@@ -174,7 +174,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run --rm app-smoke \
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run --no-deps --rm app-smoke \
             sh -lc '
               set -eu
               echo "[compose-smoke] endpoint=$BROWSER_CDP_ENDPOINT"
