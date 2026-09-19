@@ -49,6 +49,8 @@ describe("job state machine", () => {
 
   test("explicit safety boundaries reject cross-level and terminal reactivation", () => {
     expect(canTransitionJobStatus("created", "publishing")).toBe(false);
+    expect(canTransitionJobStatus("created", "succeeded")).toBe(false);
+    expect(canTransitionJobStatus("preparing_publish", "publishing")).toBe(false);
     expect(canTransitionJobStatus("waiting_for_approval", "succeeded")).toBe(false);
     expect(canTransitionJobStatus("waiting_for_approval", "preparing_publish")).toBe(true);
     expect(canTransitionJobStatus("succeeded", "publishing")).toBe(false);
