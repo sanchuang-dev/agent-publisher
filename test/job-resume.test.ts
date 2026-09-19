@@ -434,6 +434,42 @@ describe("ResumeService restart recovery", () => {
     db.close();
   });
 
+  test("terminal job with an open ActionRequest fails closed as an invariant violation", () => {
+    const { root, databasePath } = makeTempDb();
+    cleanupRoots.push(root);
+
+    const db = openDatabase({ databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+
+    createJob(jobs, "job-terminal-open-action");
+    jobs.commitCheckpoint("job-terminal-open-action", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "terminal-open-copy", stepKey: "generate_copy", status: "failed" },
+    });
+    jobs.commitCheckpoint("job-terminal-open-action", {
+      status: "failed",
+      checkpoint: { phase: "failed" },
+      step: {
+        id: "terminal-open-failed",
+        stepKey: "generate_copy",
+        status: "failed",
+        attempt: 2,
+      },
+    });
+
+    actions.open({
+      id: "terminal-open-action",
+      jobId: "job-terminal-open-action",
+      type: "clarification_required",
+    });
+
+    const resume = new ResumeService({ jobs, actionRequests: actions });
+    expect(() => resume.resume("job-terminal-open-action")).toThrow(ResumeInvariantError);
+    db.close();
+  });
+
   test("a waiting half-state without a checkpoint-bound action is rejected instead of bypassed", () => {
     const { root, databasePath } = makeTempDb();
     cleanupRoots.push(root);
