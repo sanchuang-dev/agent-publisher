@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -268,6 +268,51 @@ async function stopServer(server: Server): Promise<void> {
   });
 }
 
+
+function cookieStorePaths(profilePath: string): string[] {
+  return [
+    join(profilePath, "Default", "Cookies"),
+    join(profilePath, "Default", "Cookies-wal"),
+    join(profilePath, "Default", "Network", "Cookies"),
+    join(profilePath, "Default", "Network", "Cookies-wal"),
+  ];
+}
+
+function fileSignature(path: string): string | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+
+  const stat = statSync(path);
+  return `${stat.size}:${stat.mtimeMs}`;
+}
+
+async function waitForCookieStoreWrite(
+  profilePath: string,
+  before: ReadonlyMap<string, string | undefined>,
+  timeoutMs = 5_000,
+): Promise<void> {
+  const paths = cookieStorePaths(profilePath);
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (
+      paths.some((path) => {
+        const current = fileSignature(path);
+        return current !== undefined && current !== before.get(path);
+      })
+    ) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error(
+    "Timed out waiting for Chromium to persist the non-sensitive test cookie",
+  );
+}
+
 test(
   "real Chromium preserves a non-sensitive persistent cookie across process restart with the same profile",
   async () => {
@@ -306,6 +351,9 @@ test(
 
       const first = await firstProvider.acquire({});
       await first.page.goto(origin);
+      const cookieStoreBefore = new Map(
+        cookieStorePaths(profilePath).map((path) => [path, fileSignature(path)]),
+      );
       await first.page.context().addCookies([
         {
           name: "m1_04_profile_smoke",
@@ -324,6 +372,7 @@ test(
           }),
         ]),
       );
+      await waitForCookieStoreWrite(profilePath, cookieStoreBefore);
       await firstProvider.release(first.id);
 
       await stopChromiumForRuntimeRestart(chromiumProcess);
