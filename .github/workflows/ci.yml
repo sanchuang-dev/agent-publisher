@@ -97,3 +97,75 @@ jobs:
       - name: Stop browser-runtime
         if: always()
         run: docker compose down
+
+
+  browser-provider-smokes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build and start browser-runtime
+        run: docker compose up -d --build browser-runtime
+
+      - name: Wait for healthy browser-runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+
+      - name: Verify CDP stays Compose-internal
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+          if docker port "$container_id" 9222/tcp 2>/dev/null | grep -q .; then
+            echo "::error::CDP 9222 must not be published to the host"
+            docker port "$container_id" 9222/tcp || true
+            exit 1
+          fi
+
+      - name: Run BrowserProvider and single-session smokes on Compose network
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+          network_name="$(
+            docker inspect               --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}'               "$container_id"               | head -n 1
+          )"
+          test -n "$network_name"
+
+          docker run --rm             --network "$network_name"             --volume "$PWD:/workspace"             --workdir /workspace             --env BROWSER_CDP_ENDPOINT=http://browser-runtime:9222             node:22-bookworm-slim             sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
+
+      - name: Browser-runtime logs on failure
+        if: failure()
+        run: docker compose logs browser-runtime
+
+      - name: Stop browser-runtime
+        if: always()
+        run: docker compose down
