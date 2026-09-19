@@ -153,6 +153,20 @@ describe("JobControlService waiting atomicity", () => {
       id: "action-approval-replay",
       payload: { summaryVersion: 1 },
     });
+
+    expect(() =>
+      jobs.commitCheckpoint("job-control", {
+        status: "waiting_for_approval",
+        checkpoint: { reason: "approval_required", summaryVersion: 99 },
+        step: {
+          id: "direct-repository-replay-must-not-mutate",
+          stepKey: "verify_prepared",
+          status: "succeeded",
+          attempt: 2,
+        },
+      }),
+    ).toThrow(/still open/);
+
     expect(replay.action).toEqual(first.action);
     expect(replay.job).toEqual(first.job);
     expect(replay.job).toMatchObject({
