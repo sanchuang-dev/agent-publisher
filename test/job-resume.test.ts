@@ -181,6 +181,79 @@ describe("ResumeService restart recovery", () => {
     }
   });
 
+  test("approval replay after restart preserves the original checkpoint, payload, and step attempt", () => {
+    const { root, databasePath } = makeTempDb();
+    cleanupRoots.push(root);
+
+    const db = openDatabase({ databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    const control = createControl(db, jobs, actions);
+
+    createJob(jobs, "job-approval-restart-freeze");
+    advanceToPreparingPublish(jobs, "job-approval-restart-freeze");
+    control.enterWaiting({
+      jobId: "job-approval-restart-freeze",
+      status: "waiting_for_approval",
+      checkpoint: { reason: "approval_required", summaryVersion: 1 },
+      step: {
+        id: "approval-restart-step",
+        stepKey: "verify_prepared",
+        status: "succeeded",
+        attempt: 1,
+      },
+      action: {
+        id: "approval-restart-action",
+        payload: { summaryVersion: 1 },
+      },
+    });
+    db.close();
+
+    const reopenedDb = openDatabase({ databasePath });
+    const reopenedJobs = new JobRepository(reopenedDb);
+    const reopenedActions = new ActionRequestRepository(reopenedDb);
+    const reopenedControl = createControl(reopenedDb, reopenedJobs, reopenedActions);
+
+    try {
+      const replay = reopenedControl.enterWaiting({
+        jobId: "job-approval-restart-freeze",
+        status: "waiting_for_approval",
+        checkpoint: { reason: "approval_required", summaryVersion: 2 },
+        step: {
+          id: "approval-restart-step-replay",
+          stepKey: "verify_prepared",
+          status: "succeeded",
+          attempt: 2,
+        },
+        action: {
+          id: "approval-restart-action-replay",
+          payload: { summaryVersion: 2 },
+        },
+      });
+
+      expect(replay.job).toMatchObject({
+        status: "waiting_for_approval",
+        checkpoint: {
+          reason: "approval_required",
+          summaryVersion: 1,
+          actionRequestId: "approval-restart-action",
+        },
+      });
+      expect(replay.action).toMatchObject({
+        id: "approval-restart-action",
+        status: "open",
+        payload: { summaryVersion: 1 },
+      });
+      expect(
+        reopenedJobs
+          .getStepsForJob("job-approval-restart-freeze")
+          .filter((step) => step.stepKey === "verify_prepared"),
+      ).toHaveLength(1);
+    } finally {
+      reopenedDb.close();
+    }
+  });
+
   test("affirmative approval is the only path through the control service into publishing", () => {
     const { root, databasePath } = makeTempDb();
     cleanupRoots.push(root);
@@ -358,7 +431,7 @@ describe("ResumeService restart recovery", () => {
     db.close();
   });
 
-  test("clarification_required pauses the current state and resolves without inventing a new Job status", () => {
+  test("clarification_required survives restart, pauses the current state, and resumes after resolution", () => {
     const { root, databasePath } = makeTempDb();
     cleanupRoots.push(root);
 
@@ -383,27 +456,38 @@ describe("ResumeService restart recovery", () => {
         payload: { field: "audience" },
       },
     });
-
-    const resume = new ResumeService({ jobs, actionRequests: actions });
-    expect(resume.resume("job-clarification")).toMatchObject({
-      kind: "waiting_for_action",
-      job: { status: "preparing_materials" },
-      checkpoint: {
-        checkpoint: {
-          reason: "clarification_required",
-          actionRequestId: "clarification-action",
-        },
-      },
-      action: { id: "clarification-action", type: "clarification_required", status: "open" },
-    });
-
-    actions.resolve("clarification-action", { answer: "engineering managers" });
-    expect(resume.resume("job-clarification")).toMatchObject({
-      kind: "ready_to_continue",
-      job: { status: "preparing_materials" },
-      resolvedAction: { id: "clarification-action", status: "resolved" },
-    });
     db.close();
+
+    const reopenedDb = openDatabase({ databasePath });
+    const reopenedJobs = new JobRepository(reopenedDb);
+    const reopenedActions = new ActionRequestRepository(reopenedDb);
+    const resume = new ResumeService({
+      jobs: reopenedJobs,
+      actionRequests: reopenedActions,
+    });
+
+    try {
+      expect(resume.resume("job-clarification")).toMatchObject({
+        kind: "waiting_for_action",
+        job: { status: "preparing_materials" },
+        checkpoint: {
+          checkpoint: {
+            reason: "clarification_required",
+            actionRequestId: "clarification-action",
+          },
+        },
+        action: { id: "clarification-action", type: "clarification_required", status: "open" },
+      });
+
+      reopenedActions.resolve("clarification-action", { answer: "engineering managers" });
+      expect(resume.resume("job-clarification")).toMatchObject({
+        kind: "ready_to_continue",
+        job: { status: "preparing_materials" },
+        resolvedAction: { id: "clarification-action", status: "resolved" },
+      });
+    } finally {
+      reopenedDb.close();
+    }
   });
 
   test("terminal jobs never resume into deterministic execution", () => {
