@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import test from "node:test";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright";
+import { build, preview } from "vite";
 
 const baseUrl = "http://127.0.0.1:4173";
 const states = [
@@ -304,4 +306,89 @@ test("runtime config supports interactive takeover then revokes input on agent r
   assert.equal(await agentFrame.getAttribute("tabindex"), "-1");
   await page.getByText("执行秘书控制").waitFor({ state: "visible" });
   await assertThreeColumnLayout(page);
+});
+
+
+test("production build preserves injected Live View runtime config", async (t) => {
+  const outDir = mkdtempSync(
+    join(tmpdir(), "agent-publisher-live-view-build-"),
+  );
+  const productionBaseUrl = "http://127.0.0.1:4176";
+  const fakeLiveViewUrl = "/fake-novnc/vnc.html";
+  const previousLiveViewUrl = process.env.VITE_LIVE_VIEW_URL;
+
+  process.env.VITE_LIVE_VIEW_URL = fakeLiveViewUrl;
+  try {
+    await build({
+      root: resolve("web"),
+      configFile: resolve("web/vite.config.ts"),
+      logLevel: "silent",
+      build: {
+        outDir,
+        emptyOutDir: true,
+      },
+    });
+  } finally {
+    if (previousLiveViewUrl === undefined) {
+      delete process.env.VITE_LIVE_VIEW_URL;
+    } else {
+      process.env.VITE_LIVE_VIEW_URL = previousLiveViewUrl;
+    }
+  }
+
+  const previewServer = await preview({
+    root: resolve("web"),
+    configFile: resolve("web/vite.config.ts"),
+    logLevel: "silent",
+    build: {
+      outDir,
+    },
+    preview: {
+      host: "127.0.0.1",
+      port: 4176,
+      strictPort: true,
+    },
+  });
+
+  let browser: Browser | undefined;
+
+  t.after(async () => {
+    await browser?.close();
+    await new Promise<void>((resolveClose, rejectClose) => {
+      previewServer.httpServer.close((error) => {
+        if (error) rejectClose(error);
+        else resolveClose();
+      });
+    });
+    rmSync(outDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 50,
+    });
+  });
+
+  browser = await chromium.launch({
+    executablePath: findChrome(),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+
+  const page = await browser.newPage({
+    viewport: { width: 1440, height: 900 },
+  });
+
+  await page.goto(`${productionBaseUrl}/#/task/waiting_for_login`, {
+    waitUntil: "domcontentloaded",
+  });
+
+  const frame = page.locator('iframe[title="Browser Live View"]');
+  await frame.waitFor({ state: "visible" });
+  assert.equal(await frame.getAttribute("src"), fakeLiveViewUrl);
+  assert.equal(
+    await frame.evaluate((element) => getComputedStyle(element).pointerEvents),
+    "auto",
+  );
+  assert.equal(await frame.getAttribute("tabindex"), "0");
+  await page.getByText("控制权已让给你").waitFor({ state: "visible" });
 });
