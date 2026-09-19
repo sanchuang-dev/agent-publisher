@@ -115,46 +115,10 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Build and start browser-runtime
-        run: docker compose up -d --build browser-runtime
-
-      - name: Wait for healthy browser-runtime
+      - name: Prepare Compose smoke overlay
         shell: bash
         run: |
           set -euo pipefail
-          container_id="$(docker compose ps -q browser-runtime)"
-          test -n "$container_id"
-
-          for attempt in $(seq 1 60); do
-            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
-            if [ "$status" = "healthy" ]; then
-              break
-            fi
-            if [ "$status" = "unhealthy" ]; then
-              docker compose logs browser-runtime
-              exit 1
-            fi
-            sleep 2
-          done
-
-          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
-
-      - name: Verify CDP stays Compose-internal
-        shell: bash
-        run: |
-          set -euo pipefail
-          container_id="$(docker compose ps -q browser-runtime)"
-          if docker port "$container_id" 9222/tcp 2>/dev/null | grep -q .; then
-            echo "::error::CDP 9222 must not be published to the host"
-            docker port "$container_id" 9222/tcp || true
-            exit 1
-          fi
-
-      - name: Run BrowserProvider and single-session smokes on Compose network
-        shell: bash
-        run: |
-          set -euo pipefail
-
           overlay="$RUNNER_TEMP/compose.browser-provider-smoke.yaml"
           cat > "$overlay" <<'YAML'
           services:
@@ -169,13 +133,54 @@ jobs:
                 browser-runtime:
                   condition: service_healthy
           YAML
+          echo "SMOKE_COMPOSE_OVERLAY=$overlay" >> "$GITHUB_ENV"
 
-          docker compose -f compose.yaml -f "$overlay" run --rm app-smoke             sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
+      - name: Build and start browser-runtime
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" up -d --build browser-runtime
+
+      - name: Wait for healthy browser-runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+
+      - name: Verify CDP stays Compose-internal
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" ps -q browser-runtime)"
+          if docker port "$container_id" 9222/tcp 2>/dev/null | grep -q .; then
+            echo "::error::CDP 9222 must not be published to the host"
+            docker port "$container_id" 9222/tcp || true
+            exit 1
+          fi
+
+      - name: Run BrowserProvider and single-session smokes on Compose network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run --rm app-smoke \
+            sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
 
       - name: Browser-runtime logs on failure
         if: failure()
-        run: docker compose logs browser-runtime
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime
 
       - name: Stop browser-runtime
         if: always()
-        run: docker compose down
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" down
