@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import { JobNotFoundError, type JobRepository as JobRepositoryContract } from "../src/contracts/job.js";
+import { IllegalJobStatusTransitionError } from "../src/jobs/state-machine.js";
 import { openDatabase } from "../src/storage/db.js";
 import { JobRepository } from "../src/storage/job-repository.js";
 
@@ -179,13 +180,23 @@ describe("JobRepository integration", () => {
       briefJson: "{}",
     });
 
+    repo.commitCheckpoint("job-terminal", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: {
+        id: "step-prepare-terminal",
+        stepKey: "generate_copy",
+        status: "succeeded",
+      },
+    });
+
     const completed = repo.commitCheckpoint("job-terminal", {
-      status: "succeeded",
+      status: "failed",
       checkpoint: { phase: "done" },
       step: {
         id: "step-terminal",
         stepKey: "verify_result",
-        status: "succeeded",
+        status: "failed",
       },
     });
 
@@ -233,6 +244,25 @@ describe("JobRepository integration", () => {
       briefJson: "{}",
     });
 
+    repo.commitCheckpoint("job-outer-transaction", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: {
+        id: "step-outer-prepare",
+        stepKey: "generate_copy",
+        status: "succeeded",
+      },
+    });
+    repo.commitCheckpoint("job-outer-transaction", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: {
+        id: "step-outer-browser",
+        stepKey: "open_platform",
+        status: "succeeded",
+      },
+    });
+
     const outerTransaction = db!.transaction(() => {
       repo.commitCheckpoint("job-outer-transaction", {
         status: "waiting_for_login",
@@ -251,12 +281,16 @@ describe("JobRepository integration", () => {
     expect(outerTransaction).toThrow("action request insert failed");
 
     expect(repo.getById("job-outer-transaction")).toMatchObject({
-      status: "created",
-      currentStep: null,
-      checkpoint: null,
+      status: "preparing_publish",
+      currentStep: "open_platform",
+      checkpoint: { phase: "browser" },
     });
-    expect(repo.loadLastCheckpoint("job-outer-transaction")).toBeNull();
-    expect(repo.getStepsForJob("job-outer-transaction")).toHaveLength(0);
+    expect(repo.loadLastCheckpoint("job-outer-transaction")).toMatchObject({
+      status: "preparing_publish",
+      currentStep: "open_platform",
+      checkpoint: { phase: "browser" },
+    });
+    expect(repo.getStepsForJob("job-outer-transaction")).toHaveLength(2);
   });
 
   test("step insert failure rolls back status, current_step and checkpoint together", () => {
@@ -306,12 +340,308 @@ describe("JobRepository integration", () => {
     expect(repo.getStepsForJob("job-004")).toHaveLength(1);
   });
 
+  test("illegal status transitions fail without mutating the persisted checkpoint", () => {
+    repo.create({
+      id: "job-illegal-transition",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-illegal-transition", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "step-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+
+    expect(() =>
+      repo.commitCheckpoint("job-illegal-transition", {
+        status: "publishing",
+        checkpoint: { phase: "publish" },
+        step: { id: "step-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toThrow(IllegalJobStatusTransitionError);
+
+    expect(repo.getById("job-illegal-transition")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: "copy" },
+    });
+    expect(repo.loadLastCheckpoint("job-illegal-transition")).toMatchObject({
+      status: "preparing_materials",
+      currentStep: "generate_copy",
+      checkpoint: { phase: "copy" },
+    });
+    expect(repo.getStepsForJob("job-illegal-transition")).toHaveLength(1);
+  });
+
+  test("an unbound open human action freezes direct checkpoint mutation fail-closed", () => {
+    repo.create({
+      id: "job-unbound-open-action",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-unbound-open-action", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "unbound-copy", stepKey: "generate_copy", status: "running" },
+    });
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, created_at
+      ) VALUES (?, ?, 'clarification_required', 'open', ?)`,
+    ).run(
+      "unbound-open-action",
+      "job-unbound-open-action",
+      "2026-09-18T01:59:00.000Z",
+    );
+
+    const before = repo.getById("job-unbound-open-action");
+    const stepCount = repo.getStepsForJob("job-unbound-open-action").length;
+
+    expect(() =>
+      repo.commitCheckpoint("job-unbound-open-action", {
+        status: "preparing_materials",
+        checkpoint: { phase: "copy", progress: 50 },
+        step: {
+          id: "unbound-copy-progress",
+          stepKey: "generate_copy",
+          status: "running",
+          attempt: 2,
+        },
+      }),
+    ).toThrow(/is not bound to the durable checkpoint/);
+
+    expect(repo.getById("job-unbound-open-action")).toEqual(before);
+    expect(repo.getStepsForJob("job-unbound-open-action")).toHaveLength(stepCount);
+  });
+
+  test("direct publishing transition is rejected without affirmative persisted approval", () => {
+    repo.create({
+      id: "job-approval-gate",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "gate-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: { id: "gate-browser", stepKey: "open_platform", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate", {
+      status: "waiting_for_approval",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-action",
+      },
+      step: { id: "gate-approval", stepKey: "verify_prepared", status: "succeeded" },
+    });
+
+    expect(() =>
+      repo.commitCheckpoint("job-approval-gate", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toThrow(/missing or belongs to another job/);
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-gate-action",
+      "job-approval-gate",
+      JSON.stringify({ approved: false }),
+      "2026-09-18T02:00:00.000Z",
+      "2026-09-18T02:00:01.000Z",
+    );
+
+    expect(() =>
+      repo.commitCheckpoint("job-approval-gate", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-publish-2", stepKey: "publish_once", status: "running", attempt: 2 },
+      }),
+    ).toThrow(/affirmative approval is not persisted/);
+
+    expect(repo.getById("job-approval-gate")).toMatchObject({
+      status: "waiting_for_approval",
+      currentStep: "verify_prepared",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-action",
+      },
+    });
+  });
+
+  test("direct publishing gate rejects unresolved, wrong-type, and wrong-job approvals without mutation", () => {
+    const createWaitingApprovalJob = (jobId: string, actionRequestId: string) => {
+      repo.create({
+        id: jobId,
+        platform: "xiaohongshu",
+        publishMode: "image_text",
+        briefJson: "{}",
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "preparing_materials",
+        checkpoint: { phase: "copy" },
+        step: { id: `${jobId}-copy`, stepKey: "generate_copy", status: "succeeded" },
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: { phase: "browser" },
+        step: { id: `${jobId}-browser`, stepKey: "open_platform", status: "succeeded" },
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "waiting_for_approval",
+        checkpoint: { reason: "approval_required", actionRequestId },
+        step: { id: `${jobId}-approval`, stepKey: "verify_prepared", status: "succeeded" },
+      });
+    };
+
+    const expectPublishingRejectedWithoutMutation = (jobId: string, attempt: number) => {
+      const before = repo.getById(jobId);
+      const stepCount = repo.getStepsForJob(jobId).length;
+
+      expect(() =>
+        repo.commitCheckpoint(jobId, {
+          status: "publishing",
+          checkpoint: { phase: "publishing" },
+          step: {
+            id: `${jobId}-publish-${attempt}`,
+            stepKey: "publish_once",
+            status: "running",
+            attempt,
+          },
+        }),
+      ).toThrow();
+
+      expect(repo.getById(jobId)).toEqual(before);
+      expect(repo.getStepsForJob(jobId)).toHaveLength(stepCount);
+    };
+
+    createWaitingApprovalJob("job-approval-unresolved", "approval-unresolved");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at
+      ) VALUES (?, ?, 'approval_required', 'open', ?, ?)`,
+    ).run(
+      "approval-unresolved",
+      "job-approval-unresolved",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:20:00.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-unresolved", 1);
+
+    createWaitingApprovalJob("job-approval-wrong-type", "approval-wrong-type");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'login_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-wrong-type",
+      "job-approval-wrong-type",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:21:00.000Z",
+      "2026-09-18T02:21:01.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-wrong-type", 1);
+
+    repo.create({
+      id: "job-approval-other-owner",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+    createWaitingApprovalJob("job-approval-wrong-job", "approval-wrong-job");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-wrong-job",
+      "job-approval-other-owner",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:22:00.000Z",
+      "2026-09-18T02:22:01.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-wrong-job", 1);
+  });
+
+  test("direct publishing transition succeeds only with the checkpoint-bound affirmative approval", () => {
+    repo.create({
+      id: "job-approval-gate-ok",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "gate-ok-copy", stepKey: "generate_copy", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: { id: "gate-ok-browser", stepKey: "open_platform", status: "succeeded" },
+    });
+    repo.commitCheckpoint("job-approval-gate-ok", {
+      status: "waiting_for_approval",
+      checkpoint: {
+        reason: "approval_required",
+        actionRequestId: "approval-gate-ok-action",
+      },
+      step: { id: "gate-ok-approval", stepKey: "verify_prepared", status: "succeeded" },
+    });
+
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-gate-ok-action",
+      "job-approval-gate-ok",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:10:00.000Z",
+      "2026-09-18T02:10:01.000Z",
+    );
+
+    expect(
+      repo.commitCheckpoint("job-approval-gate-ok", {
+        status: "publishing",
+        checkpoint: { phase: "publishing" },
+        step: { id: "gate-ok-publish", stepKey: "publish_once", status: "running" },
+      }),
+    ).toMatchObject({
+      status: "publishing",
+      currentStep: "publish_once",
+      checkpoint: { phase: "publishing" },
+    });
+  });
+
   test("reopen recovery loads the last committed checkpoint and step history", () => {
     repo.create({
       id: "job-005",
       platform: "xiaohongshu",
       publishMode: "image_text",
       briefJson: "{}",
+    });
+
+    repo.commitCheckpoint("job-005", {
+      status: "preparing_materials",
+      checkpoint: { phase: "copy" },
+      step: { id: "step-copy", stepKey: "generate_copy", status: "succeeded" },
     });
 
     repo.commitCheckpoint("job-005", {
@@ -334,8 +664,11 @@ describe("JobRepository integration", () => {
         checkpoint: { uploadedBytes: 4096 },
       });
 
-      expect(reopenedRepo.getStepsForJob("job-005")).toHaveLength(1);
-      expect(reopenedRepo.getStepsForJob("job-005")[0]?.stepKey).toBe("upload_assets");
+      expect(reopenedRepo.getStepsForJob("job-005")).toHaveLength(2);
+      expect(reopenedRepo.getStepsForJob("job-005").map((step) => step.stepKey)).toEqual([
+        "generate_copy",
+        "upload_assets",
+      ]);
     } finally {
       reopenedDb.close();
     }

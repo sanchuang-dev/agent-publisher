@@ -102,10 +102,104 @@ export interface CheckpointInput {
   };
 }
 
+export const actionRequestTypes = [
+  "login_required",
+  "approval_required",
+  "clarification_required",
+] as const;
+
+export type ActionRequestType = (typeof actionRequestTypes)[number];
+
+export const actionRequestStatuses = ["open", "resolved", "cancelled"] as const;
+
+export type ActionRequestStatus = (typeof actionRequestStatuses)[number];
+
+export interface ActionRequest {
+  readonly id: string;
+  readonly jobId: string;
+  readonly type: ActionRequestType;
+  readonly status: ActionRequestStatus;
+  readonly payload: JsonValue | null;
+  readonly resolution: JsonValue | null;
+  readonly createdAt: string;
+  readonly resolvedAt: string | null;
+}
+
+export interface OpenActionRequestInput {
+  readonly id: string;
+  readonly jobId: string;
+  readonly type: ActionRequestType;
+  readonly payload?: JsonValue | null;
+}
+
+export type ApprovalResolution = Readonly<Record<string, JsonValue>> & {
+  readonly approved: boolean;
+};
+
+export const humanActionCheckpointKey = "actionRequestId" as const;
+
+export function isApprovalResolution(value: JsonValue | null): value is ApprovalResolution {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  return typeof (value as { readonly approved?: unknown }).approved === "boolean";
+}
+
+export function getCheckpointActionRequestId(checkpoint: CheckpointData): string | null {
+  const value = checkpoint[humanActionCheckpointKey];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export class JobNotFoundError extends Error {
   constructor(readonly jobId: string) {
     super(`Job not found: ${jobId}`);
     this.name = "JobNotFoundError";
+  }
+}
+
+export class ActionRequestNotFoundError extends Error {
+  constructor(readonly actionRequestId: string) {
+    super(`ActionRequest not found: ${actionRequestId}`);
+    this.name = "ActionRequestNotFoundError";
+  }
+}
+
+export class OpenActionRequestConflictError extends Error {
+  constructor(
+    readonly jobId: string,
+    readonly existingType: ActionRequestType,
+    readonly requestedType: ActionRequestType,
+  ) {
+    super(
+      `Job ${jobId} already has open ActionRequest ${existingType}; cannot open ${requestedType}`,
+    );
+    this.name = "OpenActionRequestConflictError";
+  }
+}
+
+export class ActionRequestStateError extends Error {
+  constructor(
+    readonly actionRequestId: string,
+    readonly currentStatus: ActionRequestStatus,
+    readonly requestedStatus: "resolved" | "cancelled",
+  ) {
+    super(
+      `Cannot mark ActionRequest ${actionRequestId} as ${requestedStatus} from ${currentStatus}`,
+    );
+    this.name = "ActionRequestStateError";
+  }
+}
+
+export class InvalidActionRequestResolutionError extends Error {
+  constructor(
+    readonly actionRequestId: string,
+    readonly actionRequestType: ActionRequestType,
+  ) {
+    super(
+      `ActionRequest ${actionRequestId} (${actionRequestType}) has an invalid resolution payload`,
+    );
+    this.name = "InvalidActionRequestResolutionError";
   }
 }
 
@@ -122,4 +216,12 @@ export interface JobRepository {
   commitCheckpoint(jobId: string, input: CheckpointInput): Job;
   loadLastCheckpoint(jobId: string): JobCheckpoint | null;
   getStepsForJob(jobId: string): readonly JobStep[];
+}
+
+export interface ActionRequestRepository {
+  open(input: OpenActionRequestInput): ActionRequest;
+  getById(id: string): ActionRequest | null;
+  getCurrentOpenForJob(jobId: string): ActionRequest | null;
+  resolve(id: string, resolution?: JsonValue | null): ActionRequest;
+  cancel(id: string, resolution?: JsonValue | null): ActionRequest;
 }
