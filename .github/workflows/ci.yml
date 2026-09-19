@@ -175,7 +175,17 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run --rm app-smoke \
-            sh -lc 'npm run smoke:browser-provider && npm run smoke:session-constraint'
+            sh -lc '
+              set -eu
+              echo "[compose-smoke] endpoint=$BROWSER_CDP_ENDPOINT"
+              timeout 15s node -e '"'"'fetch(process.env.BROWSER_CDP_ENDPOINT + "/json/version").then(async r => { console.log("[compose-smoke] discovery-status=" + r.status); if (!r.ok) process.exit(1); const j = await r.json(); console.log("[compose-smoke] websocket=" + (typeof j.webSocketDebuggerUrl === "string" ? "present" : "missing")); }).catch(e => { console.error("[compose-smoke] discovery-failed", e, e.cause); process.exit(1); })'"'"'
+              echo "[compose-smoke] browser-provider=start"
+              timeout --signal=TERM 45s npm run smoke:browser-provider
+              echo "[compose-smoke] browser-provider=done"
+              echo "[compose-smoke] session-constraint=start"
+              timeout --signal=TERM 45s npm run smoke:session-constraint
+              echo "[compose-smoke] session-constraint=done"
+            '
 
       - name: Browser-runtime logs on failure
         if: failure()
