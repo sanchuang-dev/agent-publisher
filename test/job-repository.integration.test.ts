@@ -440,6 +440,100 @@ describe("JobRepository integration", () => {
     });
   });
 
+  test("direct publishing gate rejects unresolved, wrong-type, and wrong-job approvals without mutation", () => {
+    const createWaitingApprovalJob = (jobId: string, actionRequestId: string) => {
+      repo.create({
+        id: jobId,
+        platform: "xiaohongshu",
+        publishMode: "image_text",
+        briefJson: "{}",
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "preparing_materials",
+        checkpoint: { phase: "copy" },
+        step: { id: `${jobId}-copy`, stepKey: "generate_copy", status: "succeeded" },
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: { phase: "browser" },
+        step: { id: `${jobId}-browser`, stepKey: "open_platform", status: "succeeded" },
+      });
+      repo.commitCheckpoint(jobId, {
+        status: "waiting_for_approval",
+        checkpoint: { reason: "approval_required", actionRequestId },
+        step: { id: `${jobId}-approval`, stepKey: "verify_prepared", status: "succeeded" },
+      });
+    };
+
+    const expectPublishingRejectedWithoutMutation = (jobId: string, attempt: number) => {
+      const before = repo.getById(jobId);
+      const stepCount = repo.getStepsForJob(jobId).length;
+
+      expect(() =>
+        repo.commitCheckpoint(jobId, {
+          status: "publishing",
+          checkpoint: { phase: "publishing" },
+          step: {
+            id: `${jobId}-publish-${attempt}`,
+            stepKey: "publish_once",
+            status: "running",
+            attempt,
+          },
+        }),
+      ).toThrow();
+
+      expect(repo.getById(jobId)).toEqual(before);
+      expect(repo.getStepsForJob(jobId)).toHaveLength(stepCount);
+    };
+
+    createWaitingApprovalJob("job-approval-unresolved", "approval-unresolved");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at
+      ) VALUES (?, ?, 'approval_required', 'open', ?, ?)`,
+    ).run(
+      "approval-unresolved",
+      "job-approval-unresolved",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:20:00.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-unresolved", 1);
+
+    createWaitingApprovalJob("job-approval-wrong-type", "approval-wrong-type");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'login_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-wrong-type",
+      "job-approval-wrong-type",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:21:00.000Z",
+      "2026-09-18T02:21:01.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-wrong-type", 1);
+
+    repo.create({
+      id: "job-approval-other-owner",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+    createWaitingApprovalJob("job-approval-wrong-job", "approval-wrong-job");
+    db!.prepare(
+      `INSERT INTO action_requests (
+        id, job_id, type, status, resolution_json, created_at, resolved_at
+      ) VALUES (?, ?, 'approval_required', 'resolved', ?, ?, ?)`,
+    ).run(
+      "approval-wrong-job",
+      "job-approval-other-owner",
+      JSON.stringify({ approved: true }),
+      "2026-09-18T02:22:00.000Z",
+      "2026-09-18T02:22:01.000Z",
+    );
+    expectPublishingRejectedWithoutMutation("job-approval-wrong-job", 1);
+  });
+
   test("direct publishing transition succeeds only with the checkpoint-bound affirmative approval", () => {
     repo.create({
       id: "job-approval-gate-ok",
