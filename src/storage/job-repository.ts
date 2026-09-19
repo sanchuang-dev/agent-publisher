@@ -145,6 +145,7 @@ export class JobRepository implements JobRepositoryContract {
     const commit = this.#db.transaction(() => {
       const currentJob = this.#requireJob(jobId);
       assertJobStatusTransitionAllowed(currentJob.status, input.status);
+      this.#assertNoOpenHumanAction(jobId, currentJob);
 
       if (currentJob.status === "waiting_for_approval" && input.status === "publishing") {
         this.#assertAffirmativeApproval(jobId, currentJob);
@@ -247,6 +248,37 @@ export class JobRepository implements JobRepositoryContract {
         )
         .all(jobId) as JobStepRow[]
     ).map(mapJobStep);
+  }
+
+  #assertNoOpenHumanAction(jobId: string, job: Job): void {
+    if (!job.checkpoint) {
+      return;
+    }
+
+    const actionRequestId = getCheckpointActionRequestId(job.checkpoint);
+    if (!actionRequestId) {
+      return;
+    }
+
+    const row = this.#db
+      .prepare(
+        `SELECT id, job_id, type, status, resolution_json
+         FROM action_requests
+         WHERE id = ?`,
+      )
+      .get(actionRequestId) as ActionRequestApprovalRow | undefined;
+
+    if (!row || row.job_id !== jobId) {
+      throw new Error(
+        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is missing or belongs to another job`,
+      );
+    }
+
+    if (row.status === "open") {
+      throw new Error(
+        `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is still open`,
+      );
+    }
   }
 
   #assertAffirmativeApproval(jobId: string, job: Job): void {
