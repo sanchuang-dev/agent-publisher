@@ -4,8 +4,10 @@
 
 import {
   getCheckpointActionRequestId,
+  humanActionCheckpointKey,
   isApprovalResolution,
   JobNotFoundError,
+  type CheckpointData,
   type CheckpointInput,
   type CreateJobInput,
   type Job,
@@ -138,7 +140,6 @@ export class JobRepository implements JobRepositoryContract {
 
   commitCheckpoint(jobId: string, input: CheckpointInput): Job {
     const now = new Date().toISOString();
-    const checkpointJson = JSON.stringify(input.checkpoint);
     const step = input.step;
     const attempt = step.attempt ?? 1;
 
@@ -150,6 +151,12 @@ export class JobRepository implements JobRepositoryContract {
       if (currentJob.status === "waiting_for_approval" && input.status === "publishing") {
         this.#assertAffirmativeApproval(jobId, currentJob);
       }
+
+      const checkpoint = this.#clearClosedHumanActionBinding(
+        currentJob,
+        input.checkpoint,
+      );
+      const checkpointJson = JSON.stringify(checkpoint);
 
       const result = this.#db
         .prepare(
@@ -292,6 +299,32 @@ export class JobRepository implements JobRepositoryContract {
         `Cannot mutate job ${jobId}: checkpoint ActionRequest ${actionRequestId} is missing or belongs to another job`,
       );
     }
+  }
+
+  #clearClosedHumanActionBinding(
+    currentJob: Job,
+    checkpoint: CheckpointData,
+  ): CheckpointData {
+    if (!currentJob.checkpoint) {
+      return checkpoint;
+    }
+
+    const currentActionRequestId = getCheckpointActionRequestId(currentJob.checkpoint);
+    if (!currentActionRequestId) {
+      return checkpoint;
+    }
+
+    const nextActionRequestId = getCheckpointActionRequestId(checkpoint);
+    if (nextActionRequestId !== currentActionRequestId) {
+      return checkpoint;
+    }
+
+    const {
+      [humanActionCheckpointKey]: _closedHumanActionRequestId,
+      ...checkpointWithoutClosedHumanAction
+    } = checkpoint;
+
+    return checkpointWithoutClosedHumanAction;
   }
 
   #assertAffirmativeApproval(jobId: string, job: Job): void {
