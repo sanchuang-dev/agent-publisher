@@ -34,3 +34,66 @@ jobs:
 
       - name: Check
         run: npm run check
+
+
+  browser-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start browser-runtime
+        run: docker compose up -d --build browser-runtime
+
+      - name: Wait for healthy Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+          docker compose exec -T browser-runtime curl -fsS http://127.0.0.1:9222/json/version >/dev/null
+          docker compose exec -T browser-runtime curl -fsS -X PUT \
+            'http://127.0.0.1:9222/json/new?data:text/html,%3Ctitle%3Ebrowser-runtime-ci%3C/title%3E' >/dev/null
+
+      - name: Verify sandbox boundary and live-view endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+
+          docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -q 'seccomp'
+          ! docker compose exec -T browser-runtime sh -lc "ps -ef | grep '[c]hromium' | grep -q -- '--no-sandbox'"
+          curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null
+
+          # Chromium requires unprivileged user namespaces, but unrelated mount
+          # namespace creation must remain denied by the scoped seccomp rule.
+          if docker compose exec -T browser-runtime sh -lc 'command -v unshare >/dev/null 2>&1'; then
+            if docker compose exec -T browser-runtime gosu browser unshare --mount true; then
+              echo "::error::mount namespace creation unexpectedly succeeded"
+              exit 1
+            fi
+          fi
+
+      - name: Browser-runtime logs on failure
+        if: failure()
+        run: docker compose logs browser-runtime
+
+      - name: Stop browser-runtime
+        if: always()
+        run: docker compose down

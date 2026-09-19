@@ -3,6 +3,18 @@ services:
     build:
       context: ./docker/browser-runtime
     shm_size: "1gb"
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 1024
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 16384
+    # Scoped seccomp profile: pinned Docker default policy plus argument-filtered
+    # Chromium user/PID/network namespace calls. No seccomp=unconfined, SYS_ADMIN,
+    # privileged mode, or --no-sandbox.
+    security_opt:
+      - seccomp=./docker/browser-runtime/seccomp-chromium.json
     expose:
       - "6080"
       - "9222"
