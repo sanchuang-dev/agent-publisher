@@ -408,7 +408,7 @@ describe("JobRepository integration", () => {
         checkpoint: { phase: "publishing" },
         step: { id: "gate-publish", stepKey: "publish_once", status: "running" },
       }),
-    ).toThrow(/affirmative approval is not persisted/);
+    ).toThrow(/missing or belongs to another job/);
 
     db!.prepare(
       `INSERT INTO action_requests (
