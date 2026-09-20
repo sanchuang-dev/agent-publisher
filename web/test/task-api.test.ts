@@ -5,6 +5,7 @@ import type { TaskFixture } from "../src/model.js";
 import {
   ApiTaskError,
   ApiTaskRepository,
+  shouldAutoContinueTask,
   type ApiJobProjection,
 } from "../src/task-api.js";
 
@@ -242,4 +243,94 @@ test("committed Job creation survives unavailable browser storage", async () => 
   });
 
   expect(fetchImpl).toHaveBeenCalledOnce();
+});
+
+
+
+test("auto-continue stops on durable failures and clarification boundaries", async () => {
+  const failureRepository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "preparing_publish",
+          currentWorker: "publishing_secretary",
+          currentStep: "acquire_browser",
+          phase: "browser_session_unavailable",
+          failure: {
+            step: "acquire_browser",
+            code: "BROWSER_UNAVAILABLE",
+            message: "browser unavailable",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const failedTask = await failureRepository.get("job-real-1");
+  expect(failedTask.failure).toBeDefined();
+  expect(shouldAutoContinueTask(failedTask)).toBe(false);
+
+  const clarificationRepository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "preparing_publish",
+          currentWorker: "publishing_secretary",
+          phase: "xhs_prepare_recovery_required",
+          needsHuman: true,
+          humanAction: {
+            id: "action-clarification",
+            type: "clarification_required",
+            reason: "prepare_recovery_required",
+            instruction: "请先确认当前编辑器状态",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const clarificationTask = await clarificationRepository.get("job-real-1");
+  expect(clarificationTask.needsHuman).toBe(true);
+  expect(shouldAutoContinueTask(clarificationTask)).toBe(false);
+});
+
+test("waiting_for_login remains the one human-action state that is polled for resume", async () => {
+  const repository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "waiting_for_login",
+          currentWorker: "publishing_secretary",
+          phase: "human_takeover",
+          needsHuman: true,
+          humanAction: {
+            id: "action-login",
+            type: "login_required",
+            reason: "login_required",
+            instruction: "请完成登录",
+          },
+          liveView: {
+            mode: "runtime",
+            url: "http://127.0.0.1:6080/vnc.html",
+            controlOwner: "human",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+  expect(shouldAutoContinueTask(task)).toBe(true);
 });
