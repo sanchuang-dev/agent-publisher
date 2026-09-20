@@ -165,7 +165,7 @@ test("Content Secretary runs through Job-scoped Pi session and commits a Materia
     expect(observedSystemPrompt).toContain('"jobId":"job-content-plan"');
     expect(observedSystemPrompt).toContain('"publishMode":"image_text"');
     expect(observedSystemPrompt).toContain("Agent Publisher launch");
-    expect(observedSystemPrompt).toContain("<name>publisher-safety</name>");
+    expect(observedSystemPrompt).toContain("# Publisher safety");
     expect(observedSystemPrompt).toContain(
       "External irreversible publication",
     );
