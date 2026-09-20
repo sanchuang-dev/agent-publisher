@@ -1,7 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { describe, expect, test } from "vitest";
 
-import { createApplication } from "../src/app/bootstrap.js";
+import { createSseFixtureRoutes } from "../src/api/routes/events-fixture.js";
+import { SseConnectionRegistry } from "../src/api/sse.js";
+import {
+  createApplication,
+  type AgentPublisherApplication,
+} from "../src/app/bootstrap.js";
 
 async function waitFor(
   predicate: () => boolean,
@@ -16,6 +21,17 @@ async function waitFor(
 
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function createSseTestApplication(): AgentPublisherApplication {
+  const sseConnections = new SseConnectionRegistry();
+
+  return createApplication({
+    dependencies: { sseConnections },
+    routeModules: {
+      events: createSseFixtureRoutes(sseConnections),
+    },
+  });
 }
 
 describe("Fastify application bootstrap", () => {
@@ -36,6 +52,12 @@ describe("Fastify application bootstrap", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ status: "ready" });
+
+      const fixtureResponse = await first.server.inject({
+        method: "GET",
+        url: "/api/_fixtures/events",
+      });
+      expect(fixtureResponse.statusCode).toBe(404);
 
       await second.server.ready();
     } finally {
@@ -66,11 +88,14 @@ describe("Fastify application bootstrap", () => {
   });
 
   test("streams one controlled SSE event and releases a disconnected client", async () => {
-    const application = createApplication();
+    const application = createSseTestApplication();
     const origin = await application.start({ host: "127.0.0.1", port: 0 });
+    const abort = new AbortController();
 
     try {
-      const response = await fetch(`${origin}/api/_fixtures/events`);
+      const response = await fetch(`${origin}/api/_fixtures/events`, {
+        signal: abort.signal,
+      });
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain(
         "text/event-stream",
@@ -86,17 +111,20 @@ describe("Fastify application bootstrap", () => {
       expect(payload).toContain('data: {"status":"connected"}');
       expect(application.dependencies.sseConnections.activeCount).toBe(1);
 
-      await reader!.cancel();
+      const readerClosed = reader!.closed.catch(() => undefined);
+      abort.abort();
+      await readerClosed;
       await waitFor(
         () => application.dependencies.sseConnections.activeCount === 0,
       );
     } finally {
+      abort.abort();
       await application.stop();
     }
   });
 
   test("graceful shutdown closes active SSE listeners deterministically", async () => {
-    const application = createApplication();
+    const application = createSseTestApplication();
     const origin = await application.start({ host: "127.0.0.1", port: 0 });
 
     const response = await fetch(`${origin}/api/_fixtures/events`);
