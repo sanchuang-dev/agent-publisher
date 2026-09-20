@@ -47,7 +47,7 @@ function resolveProcessEnv(name: string, label: string): string {
 
 function compileHttpAuth(
   auth: AgentMcpHttpAuth | undefined,
-): Pick<ServerEntry, "auth" | "oauth" | "bearerTokenEnv"> {
+): Partial<Pick<ServerEntry, "auth" | "oauth" | "bearerTokenEnv">> {
   if (!auth || auth.kind === "none") {
     return { auth: false, oauth: false };
   }

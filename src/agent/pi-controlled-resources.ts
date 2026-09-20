@@ -42,6 +42,7 @@ export interface CreateControlledPiResourceLoaderInput {
   readonly agentDir?: string;
   readonly systemPrompt: string;
   readonly allowedTools: readonly string[];
+  readonly extensionFactories?: readonly InlineExtension[];
   readonly policy: ControlledPiResourcePolicy;
 }
 
@@ -195,6 +196,7 @@ export async function createControlledPiResourceLoader(
     settingsManager: SettingsManager.inMemory(),
     additionalSkillPaths: skillResources.map((resource) => resource.path),
     extensionFactories: [
+      ...(input.extensionFactories ?? []),
       createExecutionGuardExtension(
         input.cwd,
         readRoots,

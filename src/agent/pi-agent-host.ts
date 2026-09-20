@@ -5,6 +5,7 @@ import {
   SettingsManager,
   createAgentSession,
   type CreateAgentSessionOptions,
+  type InlineExtension,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 
@@ -21,7 +22,8 @@ import {
   type AgentHost,
   type PublisherAgentSession,
 } from "./host.js";
-import { compilePublisherMcpProfile } from "./pi-mcp.js";\nimport { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
+import { compilePublisherMcpProfile } from "./pi-mcp.js";
+import { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
 
 type PiAgentSession = Awaited<
   ReturnType<typeof createAgentSession>
@@ -44,6 +46,7 @@ export interface PiResourceLoaderFactoryInput {
   readonly systemPrompt: string;
   readonly cwd: string;
   readonly allowedTools: readonly string[];
+  readonly extensionFactories: readonly InlineExtension[];
 }
 
 export interface PiAgentHostOptions {
@@ -58,10 +61,12 @@ export interface PiAgentHostOptions {
   readonly initializationTimeoutMs?: number;
   readonly defaultRunTimeoutMs: number;
   readonly defaultAbortTimeoutMs?: number;
+  readonly defaultDisposeTimeoutMs?: number;
 }
 
 const DEFAULT_INITIALIZATION_TIMEOUT_MS = 10_000;
-const DEFAULT_ABORT_TIMEOUT_MS = 1_000;\nconst DEFAULT_DISPOSE_TIMEOUT_MS = 2_000;
+const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
+const DEFAULT_DISPOSE_TIMEOUT_MS = 2_000;
 
 class DeadlineExceededError extends Error {}
 
@@ -213,6 +218,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     scope: AgentSessionScope,
     private readonly defaultRunTimeoutMs: number,
     private readonly defaultAbortTimeoutMs: number,
+    private readonly defaultDisposeTimeoutMs: number,
   ) {
     this.ref = asAgentSessionRef(`agent-session:${randomUUID()}`);
     this.definition = definition;
