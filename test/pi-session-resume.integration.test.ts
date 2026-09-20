@@ -28,6 +28,7 @@ import { JobAgentSessionService } from "../src/agent/job-session-service.js";
 import {
   AgentSessionBindingConflictError,
   AgentSessionBindingMismatchError,
+  AgentSessionPersistenceRequiredError,
 } from "../src/agent/job-session-binding.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
 import { parsePiAgentSessionRef } from "../src/agent/session-ref.js";
@@ -208,6 +209,48 @@ describe("Publisher Job context and Pi session resume boundary", () => {
     expect(systemPrompts.at(-1)).toContain('"jobId":"job-resume-a"');
 
     await resumedSession.dispose();
+    db.close();
+  });
+
+  test("refuses to create a durable Job binding for an in-memory-only host", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-publisher-pi-memory-only-"));
+    cleanupRoots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const faux = fauxProvider({ provider: "publisher-pi-memory-only" });
+    const modelRuntime = await createFauxRuntime(faux);
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      cwd: root,
+      defaultRunTimeoutMs: 2_000,
+      tools: [],
+      sessionOptions: { thinkingLevel: "off" },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+    const service = new JobAgentSessionService({ jobs, bindings, host });
+
+    jobs.create({
+      id: "job-memory-only",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+
+    expect(host.supportsDurableResume).toBe(false);
+    await expect(
+      service.create({
+        jobId: "job-memory-only",
+        role: "content",
+        definition,
+      }),
+    ).rejects.toBeInstanceOf(AgentSessionPersistenceRequiredError);
+    expect(
+      bindings.getForScope({ jobId: "job-memory-only", role: "content" }),
+    ).toBeNull();
+
     db.close();
   });
 
@@ -440,6 +483,43 @@ describe("Publisher Job context and Pi session resume boundary", () => {
       }),
     ).rejects.toMatchObject({ code: "AGENT_SESSION_NOT_FOUND" });
     expect(jobs.getById("job-missing-session")).toEqual(missing.before);
+
+    const replacement = await service.replaceSession({
+      jobId: "job-missing-session",
+      role: "content",
+      definition,
+    });
+    expect(replacement.ref).not.toBe(missing.ref);
+    expect(
+      bindings.getForScope({
+        jobId: "job-missing-session",
+        role: "content",
+      }),
+    ).toMatchObject({ sessionRef: replacement.ref });
+    expect(jobs.getById("job-missing-session")).toEqual(missing.before);
+
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("REPLACEMENT_SESSION_PERSISTED")),
+    ]);
+    await expect(
+      replacement.run({ prompt: "Persist the replacement transcript." }),
+    ).resolves.toMatchObject({ finalText: "REPLACEMENT_SESSION_PERSISTED" });
+    await replacement.dispose();
+
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("REPLACEMENT_SESSION_RESUMED")),
+    ]);
+    const resumedReplacement = await service.resume({
+      jobId: "job-missing-session",
+      role: "content",
+      definition,
+    });
+    expect(resumedReplacement.ref).toBe(replacement.ref);
+    await expect(
+      resumedReplacement.run({ prompt: "Confirm replacement resume." }),
+    ).resolves.toMatchObject({ finalText: "REPLACEMENT_SESSION_RESUMED" });
+    expect(jobs.getById("job-missing-session")).toEqual(missing.before);
+    await resumedReplacement.dispose();
 
     const corrupt = await createPersisted("job-corrupt-session");
     writeFileSync(corrupt.path, "this is not a Pi session\n");
