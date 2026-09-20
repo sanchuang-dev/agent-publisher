@@ -8,15 +8,26 @@ import {
 export type PiSdkSessionErrorCode =
   | "PI_SESSION_INITIALIZATION_FAILED"
   | "PI_SESSION_RUN_FAILED"
-  | "PI_SESSION_TIMEOUT";
+  | "PI_SESSION_TIMEOUT"
+  | "PI_SESSION_ABORT_UNCONFIRMED";
+
+interface PiSdkSessionErrorOptions extends ErrorOptions {
+  runStopped?: boolean | null;
+}
 
 export class PiSdkSessionError extends Error {
   readonly code: PiSdkSessionErrorCode;
+  readonly runStopped: boolean | null;
 
-  constructor(code: PiSdkSessionErrorCode, message: string, options?: ErrorOptions) {
+  constructor(
+    code: PiSdkSessionErrorCode,
+    message: string,
+    options: PiSdkSessionErrorOptions = {},
+  ) {
     super(message, options);
     this.name = "PiSdkSessionError";
     this.code = code;
+    this.runStopped = options.runStopped ?? null;
   }
 }
 
@@ -37,15 +48,34 @@ export interface PiSdkRunResult {
 export interface RunInMemoryPiSessionInput {
   prompt: string;
   timeoutMs?: number;
+  abortTimeoutMs?: number;
   sessionOptions: Omit<CreateAgentSessionOptions, "sessionManager" | "settingsManager">;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
 
 class DeadlineExceededError extends Error {}
 
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function safeDispose(session: { dispose(): void }): void {
+  try {
+    session.dispose();
+  } catch {
+    // Cleanup is best-effort after the run has either settled or been abandoned.
+  }
+}
+
+function assertPositiveDeadline(value: number, label: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new PiSdkSessionError(
+      "PI_SESSION_INITIALIZATION_FAILED",
+      `${label} must be a positive finite number`,
+    );
+  }
 }
 
 async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -66,6 +96,27 @@ async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<
   }
 }
 
+async function stopTimedOutRun(
+  promptTask: Promise<void>,
+  session: { abort(): Promise<void> },
+  abortTimeoutMs: number,
+): Promise<boolean> {
+  const promptSettled = promptTask.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  try {
+    await withDeadline(
+      Promise.all([session.abort(), promptSettled]).then(() => undefined),
+      abortTimeoutMs,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Minimal programmatic Pi SDK boundary for AGT-01.
  *
@@ -76,12 +127,9 @@ export async function runInMemoryPiSession(
   input: RunInMemoryPiSessionInput,
 ): Promise<PiSdkRunResult> {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new PiSdkSessionError(
-      "PI_SESSION_INITIALIZATION_FAILED",
-      "Pi session timeout must be a positive finite number",
-    );
-  }
+  const abortTimeoutMs = input.abortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+  assertPositiveDeadline(timeoutMs, "Pi session timeout");
+  assertPositiveDeadline(abortTimeoutMs, "Pi session abort timeout");
 
   const cwd = input.sessionOptions.cwd ?? process.cwd();
   const creation = createAgentSession({
@@ -97,13 +145,13 @@ export async function runInMemoryPiSession(
   } catch (error) {
     if (error instanceof DeadlineExceededError) {
       void creation.then(
-        ({ session }) => session.dispose(),
+        ({ session }) => safeDispose(session),
         () => undefined,
       );
       throw new PiSdkSessionError(
         "PI_SESSION_TIMEOUT",
         `Pi session initialization exceeded ${timeoutMs}ms`,
-        { cause: error },
+        { cause: error, runStopped: null },
       );
     }
 
@@ -122,11 +170,11 @@ export async function runInMemoryPiSession(
   const unsubscribe = session.subscribe((event) => {
     eventTypes.push(event.type);
 
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    ) {
-      finalText += event.assistantMessageEvent.delta;
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      finalText = event.message.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
       return;
     }
 
@@ -153,35 +201,43 @@ export async function runInMemoryPiSession(
     }
   });
 
-  let result: PiSdkRunResult | undefined;
   try {
+    const promptTask = session.prompt(input.prompt);
+
     try {
-      await withDeadline(session.prompt(input.prompt), timeoutMs);
+      await withDeadline(promptTask, timeoutMs);
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
+        const runStopped = await stopTimedOutRun(promptTask, session, abortTimeoutMs);
+        if (!runStopped) {
+          throw new PiSdkSessionError(
+            "PI_SESSION_ABORT_UNCONFIRMED",
+            `Pi session exceeded ${timeoutMs}ms and did not confirm stop within ${abortTimeoutMs}ms`,
+            { cause: error, runStopped: false },
+          );
+        }
+
         throw new PiSdkSessionError(
           "PI_SESSION_TIMEOUT",
-          `Pi session run exceeded ${timeoutMs}ms`,
-          { cause: error },
+          `Pi session run exceeded ${timeoutMs}ms and was stopped`,
+          { cause: error, runStopped: true },
         );
       }
 
       throw new PiSdkSessionError(
         "PI_SESSION_RUN_FAILED",
         `Pi session run failed: ${toMessage(error)}`,
-        { cause: error },
+        { cause: error, runStopped: true },
       );
     }
 
-    result = {
+    return {
       finalText,
       eventTypes: [...eventTypes],
       toolExecutions: [...toolExecutions.values()],
     };
   } finally {
     unsubscribe();
-    session.dispose();
+    safeDispose(session);
   }
-
-  return result;
 }
