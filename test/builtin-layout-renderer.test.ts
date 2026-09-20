@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   BuiltinLayoutRenderer,
+  SafeLayoutOverflowError,
   SafeLayoutResourceError,
   SafeRichLayoutValidationError,
   loadBuiltinCjkFonts,
@@ -225,11 +226,8 @@ describe("BuiltinLayoutRenderer", () => {
 
     expect(fonts.length).toBeGreaterThan(0);
     for (const font of fonts) {
-      expect("data" in Object(font)).toBe(true);
-      if ("data" in Object(font)) {
-        const data = (font as { data: Uint8Array }).data;
-        expect(data.byteLength).toBeGreaterThan(1000);
-      }
+      expect(font.name).toBe("Noto Sans SC");
+      expect(font.data.byteLength).toBeGreaterThan(1000);
     }
   });
 
@@ -254,6 +252,37 @@ describe("BuiltinLayoutRenderer", () => {
     expect(first.svg).toContain('height="1440"');
     expect(second.png.equals(first.png)).toBe(true);
     expect(second.svg).toBe(first.svg);
+  }, 20_000);
+
+  test("fails closed when content measures beyond the fixed page canvas", async () => {
+    const renderer = new BuiltinLayoutRenderer();
+    const oversized = {
+      type: "page",
+      width: 1080,
+      height: 1440,
+      children: [
+        {
+          type: "stack",
+          direction: "column",
+          children: [
+            {
+              type: "card",
+              style: { height: 1000 },
+              children: [{ type: "text", text: "第一块" }],
+            },
+            {
+              type: "card",
+              style: { height: 1000 },
+              children: [{ type: "text", text: "第二块" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    await expect(
+      renderer.render({ layout: oversized }),
+    ).rejects.toBeInstanceOf(SafeLayoutOverflowError);
   }, 20_000);
 
   test("fails closed when a referenced image resource is not supplied", async () => {
