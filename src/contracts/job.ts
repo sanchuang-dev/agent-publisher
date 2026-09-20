@@ -43,6 +43,7 @@ export interface Job {
   readonly status: JobStatus;
   readonly currentStep: string | null;
   readonly briefJson: string;
+  readonly materialSummaryJson: string | null;
   readonly checkpoint: CheckpointData | null;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -78,6 +79,7 @@ export interface CreateJobInput {
   readonly platform: PublishPlatform;
   readonly publishMode: PublishMode;
   readonly briefJson: string;
+  readonly materialSummaryJson?: string | null;
 }
 
 export interface CheckpointInput {

@@ -4,6 +4,7 @@ import type {
   AgentTaskInput,
   AgentTaskResult,
   CreatePublisherAgentSessionInput,
+  ResumePublisherAgentSessionInput,
 } from "./definition.js";
 import type { AgentSessionRef } from "./session-ref.js";
 
@@ -13,7 +14,10 @@ export type AgentSessionErrorCode =
   | "AGENT_SESSION_TIMEOUT"
   | "AGENT_SESSION_ABORT_UNCONFIRMED"
   | "AGENT_SESSION_BUSY"
-  | "AGENT_SESSION_DISPOSED";
+  | "AGENT_SESSION_DISPOSED"
+  | "AGENT_SESSION_NOT_FOUND"
+  | "AGENT_SESSION_INCOMPATIBLE"
+  | "AGENT_SESSION_RESUME_FAILED";
 
 interface AgentSessionErrorOptions extends ErrorOptions {
   /**
@@ -52,7 +56,17 @@ export interface PublisherAgentSession {
 }
 
 export interface AgentHost {
+  /**
+   * True only when sessions created by this host can be recovered after a
+   * process restart using their opaque AgentSessionRef.
+   */
+  readonly supportsDurableResume: boolean;
+
   createSession(
     input: CreatePublisherAgentSessionInput,
+  ): Promise<PublisherAgentSession>;
+
+  resumeSession(
+    input: ResumePublisherAgentSessionInput,
   ): Promise<PublisherAgentSession>;
 }

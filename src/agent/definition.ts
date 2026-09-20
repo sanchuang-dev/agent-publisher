@@ -11,6 +11,18 @@ export interface AgentSessionScope {
 export interface CreatePublisherAgentSessionInput {
   readonly definition: AgentDefinition;
   readonly scope: AgentSessionScope;
+  /**
+   * Publisher-owned dynamic context for this Job/role.
+   *
+   * It is model-facing context only. It must never be treated as durable
+   * workflow state or approval/evidence.
+   */
+  readonly context?: string;
+}
+
+export interface ResumePublisherAgentSessionInput
+  extends CreatePublisherAgentSessionInput {
+  readonly ref: import("./session-ref.js").AgentSessionRef;
 }
 
 export interface AgentTaskInput {
