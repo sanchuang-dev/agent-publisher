@@ -58,6 +58,7 @@ export function createContentSecretaryResourceLoader(
     cwd: input.cwd,
     systemPrompt: input.systemPrompt,
     allowedTools: CONTENT_SECRETARY_ALLOWED_TOOLS,
+    extensionFactories: input.extensionFactories,
     policy: {
       skillPaths: [publisherSafetySkillPath],
       mandatorySkillPaths: [publisherSafetySkillPath],
