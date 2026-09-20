@@ -144,6 +144,14 @@ export class XiaohongshuLoginService {
       );
     }
 
+    const openAction = this.#actionRequests.getCurrentOpenForJob(input.jobId);
+    if (openAction) {
+      throw new XiaohongshuLoginFlowInvariantError(
+        input.jobId,
+        `browser mutation is blocked while human action ${openAction.type} is open`,
+      );
+    }
+
     let state: XiaohongshuEntryState;
     try {
       state = await this.#openEntry(input.session.page);
