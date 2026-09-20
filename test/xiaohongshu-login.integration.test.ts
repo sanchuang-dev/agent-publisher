@@ -325,6 +325,71 @@ describe("XiaohongshuLoginService", () => {
     }
   });
 
+  test("an existing human action blocks navigation before any browser mutation", async () => {
+    const temp = makeTempDb();
+    cleanupRoots.push(temp.root);
+    const db = openDatabase({ databasePath: temp.databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    createPreparingPublishJob(jobs, "job-human-action-block");
+
+    const control = new JobControlService({
+      jobs,
+      actionRequests: actions,
+      runInTransaction: (work) => db.transaction(work)(),
+    });
+    control.requestClarification({
+      jobId: "job-human-action-block",
+      checkpoint: {
+        phase: "pre-login-clarification",
+      },
+      step: {
+        id: "clarification-step",
+        stepKey: "open_platform",
+        status: "running",
+        attempt: 2,
+      },
+      action: {
+        id: "clarification-action",
+        payload: { field: "account" },
+      },
+    });
+
+    let openCalls = 0;
+    const service = makeService(db, jobs, actions, {
+      openEntry: async () => {
+        openCalls += 1;
+        return { kind: "authenticated" };
+      },
+      inspectEntry: async () => ({ kind: "unexpected" }),
+    });
+
+    try {
+      await expect(
+        service.ensureLogin({
+          jobId: "job-human-action-block",
+          session: fakeSession(),
+        }),
+      ).rejects.toBeInstanceOf(XiaohongshuLoginFlowInvariantError);
+
+      expect(openCalls).toBe(0);
+      expect(actions.getCurrentOpenForJob("job-human-action-block")).toMatchObject({
+        id: "clarification-action",
+        type: "clarification_required",
+        status: "open",
+      });
+      expect(jobs.getById("job-human-action-block")).toMatchObject({
+        status: "preparing_publish",
+        checkpoint: {
+          phase: "pre-login-clarification",
+          actionRequestId: "clarification-action",
+        },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("human takeover refuses to resume on a different persistent browser profile", async () => {
     const temp = makeTempDb();
     cleanupRoots.push(temp.root);
