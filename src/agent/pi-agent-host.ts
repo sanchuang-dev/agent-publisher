@@ -50,7 +50,7 @@ export interface PiResourceLoaderFactoryInput {
   readonly systemPrompt: string;
   readonly cwd: string;
   readonly allowedTools: readonly string[];
-  readonly extensionFactories?: readonly InlineExtension[];
+  readonly extensionFactories: readonly InlineExtension[];
 }
 
 export interface PiAgentHostOptions {
