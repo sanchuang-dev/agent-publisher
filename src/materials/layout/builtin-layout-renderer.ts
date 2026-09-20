@@ -24,6 +24,20 @@ export interface BuiltinLayoutRenderResult {
   readonly layout: SafeRichLayout;
 }
 
+export class SafeLayoutOverflowError extends Error {
+  constructor(
+    readonly measuredWidth: number,
+    readonly measuredHeight: number,
+    readonly maxWidth: number,
+    readonly maxHeight: number,
+  ) {
+    super(
+      `SafeRichLayout content exceeds canvas: measured ${measuredWidth}x${measuredHeight}, canvas ${maxWidth}x${maxHeight}`,
+    );
+    this.name = "SafeLayoutOverflowError";
+  }
+}
+
 /**
  * Production Builtin renderer for the MVP image-text baseline.
  *
@@ -33,9 +47,15 @@ export interface BuiltinLayoutRenderResult {
  */
 export class BuiltinLayoutRenderer {
   readonly #renderer: Renderer;
+  readonly #fontsReady: Promise<void>;
 
   constructor(renderer: Renderer = new Renderer()) {
     this.#renderer = renderer;
+    this.#fontsReady = loadBuiltinCjkFonts().then(async (fonts) => {
+      for (const font of fonts) {
+        await this.#renderer.registerFont(font);
+      }
+    });
   }
 
   async render(
@@ -46,11 +66,40 @@ export class BuiltinLayoutRenderer {
       layout,
       input.resources ?? {},
     );
-    const fonts = [...(await loadBuiltinCjkFonts())];
+
+    await this.#fontsReady;
+
+    const {
+      height: _fixedHeight,
+      overflow: _fixedOverflow,
+      ...measureStyle
+    } = node.style ?? {};
+
+    const measured = await this.#renderer.measure(
+      {
+        ...node,
+        style: measureStyle,
+      },
+      {
+        width: layout.width,
+      },
+    );
+
+    if (
+      measured.width > layout.width + 0.5 ||
+      measured.height > layout.height + 0.5
+    ) {
+      throw new SafeLayoutOverflowError(
+        measured.width,
+        measured.height,
+        layout.width,
+        layout.height,
+      );
+    }
+
     const options = {
       width: layout.width,
       height: layout.height,
-      fonts,
     } as const;
 
     const [png, svg] = await Promise.all([
