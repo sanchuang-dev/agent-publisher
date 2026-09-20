@@ -373,7 +373,7 @@ function mapAsset(row: AssetRow): AssetRecord {
   }
   if (!assetStatuses.includes(row.status as AssetStatus)) {
     throw new InvalidAssetRecordError(
-      "metadata",
+      "status",
       "persisted asset status is unsupported",
     );
   }
