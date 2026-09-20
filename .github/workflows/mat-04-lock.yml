@@ -23,14 +23,12 @@ jobs:
           node - <<'NODE' > mat-04-package-info.txt
           const fs = require("node:fs");
           const path = require("node:path");
-          const req = require("node:module").createRequire(process.cwd() + "/probe.cjs");
           for (const name of ["@takumi-rs/core", "@fontsource-variable/noto-sans-sc"]) {
-            const pkgPath = req.resolve(name + "/package.json");
+            const pkgPath = path.join(process.cwd(), "node_modules", ...name.split("/"), "package.json");
             console.log("PACKAGE " + name + " " + pkgPath);
             console.log(fs.readFileSync(pkgPath, "utf8"));
           }
-          const fontPkg = req.resolve("@fontsource-variable/noto-sans-sc/package.json");
-          const fontRoot = path.dirname(fontPkg);
+          const fontRoot = path.join(process.cwd(), "node_modules", "@fontsource-variable", "noto-sans-sc");
           for (const file of fs.readdirSync(path.join(fontRoot, "files"))) {
             if (file.endsWith(".woff2") && file.includes("chinese-simplified")) {
               console.log("FONT " + file);
