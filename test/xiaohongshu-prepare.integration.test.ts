@@ -70,6 +70,7 @@ describe("XiaohongshuPrepareService", () => {
   function createPreparingPublishJob(
     id: string,
     mode: "image_text" | "video" = "image_text",
+    profileRef = "profile-ref",
   ) {
     jobs.create({
       id,
@@ -88,7 +89,14 @@ describe("XiaohongshuPrepareService", () => {
     });
     jobs.commitCheckpoint(id, {
       status: "preparing_publish",
-      checkpoint: { phase: "browser", authenticated: true },
+      checkpoint: {
+        platform: "xiaohongshu",
+        phase: "ensure_login",
+        entryState: "authenticated",
+        browserProfileFingerprint: createHash("sha256")
+          .update(profileRef)
+          .digest("hex"),
+      },
       step: {
         id: id + "-browser",
         stepKey: "ensure_login",
@@ -116,6 +124,67 @@ describe("XiaohongshuPrepareService", () => {
     };
     return { pack, prepared };
   }
+
+  test("first prepare requires the authenticated XHS-01 checkpoint on the same profile", async () => {
+    const jobId = "job-xhs-login-boundary";
+    jobs.create({
+      id: jobId,
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: "{}",
+    });
+    jobs.commitCheckpoint(jobId, {
+      status: "preparing_materials",
+      checkpoint: { phase: "materials" },
+      step: {
+        id: jobId + "-materials",
+        stepKey: "generate_plan",
+        status: "succeeded",
+      },
+    });
+    jobs.commitCheckpoint(jobId, {
+      status: "preparing_publish",
+      checkpoint: { phase: "browser" },
+      step: {
+        id: jobId + "-browser",
+        stepKey: "ensure_login",
+        status: "failed",
+        errorCode: "LOGIN_REQUIRED",
+      },
+    });
+
+    const pack = createImageTextMaterialPackFixture();
+    let prepareCalls = 0;
+    const service = new XiaohongshuPrepareService({
+      jobs,
+      actionRequests: actions,
+      jobControl: control,
+      resolveAssetPath: (asset) => "/fixtures/" + asset.assetId + ".png",
+      preparePage: async () => {
+        prepareCalls += 1;
+        throw new Error("prepare page must not run before XHS-01 succeeds");
+      },
+    });
+
+    await expect(
+      service.prepareForApproval({
+        jobId,
+        session: fakeSession(),
+        materialPack: pack,
+      }),
+    ).rejects.toBeInstanceOf(XiaohongshuPrepareStateError);
+    expect(prepareCalls).toBe(0);
+
+    createPreparingPublishJob("job-xhs-profile-boundary", "image_text", "profile-a");
+    await expect(
+      service.prepareForApproval({
+        jobId: "job-xhs-profile-boundary",
+        session: fakeSession("profile-b"),
+        materialPack: pack,
+      }),
+    ).rejects.toBeInstanceOf(XiaohongshuPrepareStateError);
+    expect(prepareCalls).toBe(0);
+  });
 
   test("successful prepare durably pauses once for approval with a safe summary", async () => {
     const jobId = "job-xhs-prepare";
