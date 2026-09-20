@@ -31,9 +31,22 @@ git checkout dev
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:6080` on the Docker host, or `http://<HOST-LAN-IP>:6080` from another device on the same trusted local network.
+By default, noVNC is bound only to the Docker host at `http://127.0.0.1:6080`.
 
-The noVNC surface currently has no password. Keep port `6080` on a trusted LAN only and never expose it directly to the public Internet.
+For explicit access from another device on a trusted LAN, bind port 6080 to the host's actual LAN address and configure a VNC password. Store these values in a local `.env` file (already ignored by Git), for example:
+
+```dotenv
+NOVNC_BIND_ADDRESS=192.168.1.42
+NOVNC_PASSWORD=replace-with-a-strong-local-password
+```
+
+Then restart the runtime:
+
+```bash
+docker compose up -d --build
+```
+
+Open `http://192.168.1.42:6080` from the other device and enter the configured password when noVNC connects. Prefer binding the concrete trusted-LAN address rather than `0.0.0.0`, and never expose port `6080` directly to the public Internet.
 
 The current Compose setup containerizes the browser runtime only. Run the Web UI on the host when needed:
 
