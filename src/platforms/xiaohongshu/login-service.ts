@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { BrowserSession } from "../../browser/provider.js";
 import {
@@ -20,6 +20,10 @@ type HumanTakeoverState = Extract<
   XiaohongshuEntryState,
   { readonly kind: "login_required" | "challenge" }
 >;
+
+function browserProfileFingerprint(session: BrowserSession): string {
+  return createHash("sha256").update(session.profileRef).digest("hex");
+}
 
 export type XiaohongshuEnsureLoginResult =
   | {
@@ -151,13 +155,17 @@ export class XiaohongshuLoginService {
     if (state.kind === "authenticated") {
       return {
         kind: "ready",
-        job: this.#recordAuthenticated(input.jobId, this.#nextEnsureLoginAttempt(input.jobId)),
+        job: this.#recordAuthenticated(
+          input.jobId,
+          input.session,
+          this.#nextEnsureLoginAttempt(input.jobId),
+        ),
         state,
       };
     }
 
     if (state.kind === "login_required" || state.kind === "challenge") {
-      return this.#enterHumanTakeover(input.jobId, state);
+      return this.#enterHumanTakeover(input.jobId, input.session, state);
     }
 
     this.#recordFailedInspection(input.jobId, "PLATFORM_UI_CHANGED");
@@ -195,6 +203,21 @@ export class XiaohongshuLoginService {
       );
     }
 
+    const boundProfileFingerprint =
+      typeof decision.checkpoint?.checkpoint.browserProfileFingerprint === "string"
+        ? decision.checkpoint.checkpoint.browserProfileFingerprint
+        : null;
+    const currentProfileFingerprint = browserProfileFingerprint(input.session);
+    if (
+      !boundProfileFingerprint ||
+      boundProfileFingerprint !== currentProfileFingerprint
+    ) {
+      throw new XiaohongshuLoginFlowInvariantError(
+        input.jobId,
+        "login takeover must resume on the same persistent browser profile",
+      );
+    }
+
     let state: XiaohongshuEntryState;
     try {
       // Important: while human control is active this is inspection only.
@@ -216,6 +239,7 @@ export class XiaohongshuLoginService {
         kind: "ready",
         job: this.#recordAuthenticated(
           input.jobId,
+          input.session,
           this.#currentEnsureLoginAttempt(input.jobId),
         ),
         state,
@@ -243,6 +267,7 @@ export class XiaohongshuLoginService {
 
   #enterHumanTakeover(
     jobId: string,
+    session: BrowserSession,
     state: HumanTakeoverState,
   ): XiaohongshuEnsureLoginResult {
     const attempt = this.#nextEnsureLoginAttempt(jobId);
@@ -254,6 +279,7 @@ export class XiaohongshuLoginService {
         platform: "xiaohongshu",
         phase: "ensure_login",
         entryState: state.kind,
+        browserProfileFingerprint: browserProfileFingerprint(session),
       },
       step: {
         id: this.#createId(),
@@ -281,7 +307,11 @@ export class XiaohongshuLoginService {
     };
   }
 
-  #recordAuthenticated(jobId: string, attempt: number): Job {
+  #recordAuthenticated(
+    jobId: string,
+    session: BrowserSession,
+    attempt: number,
+  ): Job {
     const now = this.#now().toISOString();
     return this.#jobs.commitCheckpoint(jobId, {
       status: "preparing_publish",
@@ -289,6 +319,7 @@ export class XiaohongshuLoginService {
         platform: "xiaohongshu",
         phase: "ensure_login",
         entryState: "authenticated",
+        browserProfileFingerprint: browserProfileFingerprint(session),
       },
       step: {
         id: this.#createId(),
