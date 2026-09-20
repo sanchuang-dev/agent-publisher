@@ -306,6 +306,84 @@ describe("XiaohongshuPrepareService", () => {
     ).toEqual({ count: 1 });
   });
 
+  test("approval drift cancels the stale approval before opening recovery clarification", async () => {
+    const jobId = "job-xhs-approval-drift";
+    createPreparingPublishJob(jobId);
+    const { pack, prepared } = preparedFixture();
+    let verifyCalls = 0;
+    let idCounter = 0;
+
+    const service = new XiaohongshuPrepareService({
+      jobs,
+      actionRequests: actions,
+      jobControl: control,
+      resolveAssetPath: (asset) => "/fixtures/" + asset.assetId + ".png",
+      preparePage: async (input) => {
+        await input.onMutationStarted?.();
+        return prepared;
+      },
+      verifyPreparedPage: async () => {
+        verifyCalls += 1;
+        if (verifyCalls === 1) {
+          throw new XiaohongshuPreparedValidationError(["body"]);
+        }
+        return {
+          title: prepared.title,
+          bodyLength: prepared.bodyLength,
+          tags: prepared.tags,
+          imageCount: prepared.imageCount,
+        };
+      },
+      createId: (kind) => "drift-" + kind + "-" + ++idCounter,
+    });
+
+    const first = await service.prepareForApproval({
+      jobId,
+      session: fakeSession(),
+      materialPack: pack,
+    });
+    expect(first.approval.status).toBe("open");
+
+    await expect(
+      service.prepareForApproval({
+        jobId,
+        session: fakeSession(),
+        materialPack: pack,
+      }),
+    ).rejects.toMatchObject({
+      name: "XiaohongshuPrepareRecoveryRequiredError",
+      code: "PREPARE_RECOVERY_REQUIRED",
+      failureCode: "PREPARED_VALIDATION_FAILED",
+    });
+
+    expect(actions.getById(first.approval.id)).toMatchObject({
+      type: "approval_required",
+      status: "cancelled",
+      resolution: {
+        reason: "prepared_state_changed",
+        failureCode: "PREPARED_VALIDATION_FAILED",
+      },
+    });
+
+    const recovery = actions.getCurrentOpenForJob(jobId);
+    expect(recovery).toMatchObject({
+      type: "clarification_required",
+      status: "open",
+      payload: {
+        reason: "prepared_state_changed",
+        failureCode: "PREPARED_VALIDATION_FAILED",
+      },
+    });
+    expect(jobs.getById(jobId)).toMatchObject({
+      status: "preparing_publish",
+      currentStep: "verify_prepared",
+      checkpoint: {
+        phase: "xhs_prepare_recovery_required",
+        actionRequestId: recovery!.id,
+      },
+    });
+  });
+
   test("post-mutation validation failure is durable and pauses for recovery, not approval", async () => {
     const jobId = "job-xhs-validation-failure";
     createPreparingPublishJob(jobId);
