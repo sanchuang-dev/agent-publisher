@@ -120,7 +120,6 @@ describe("Pi SDK in-memory session baseline", () => {
   });
 
   test("turns a stalled model run into a bounded application timeout", async () => {
-    vi.useRealTimers();
 
     const faux = fauxProvider({ provider: "publisher-pi-sdk-stalled-test" });
     const modelRuntime = await ModelRuntime.create({
