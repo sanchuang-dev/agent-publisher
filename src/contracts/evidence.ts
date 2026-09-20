@@ -1,4 +1,4 @@
-import type { JsonValue } from "./job.js";
+import type { PublishPlatform } from "./publish-job.js";
 
 export const publicationEvidenceKinds = [
   "result_url",
@@ -9,7 +9,14 @@ export const publicationEvidenceKinds = [
 
 export type PublicationEvidenceKind = (typeof publicationEvidenceKinds)[number];
 
-export type PublicationEvidenceMetadata = Readonly<Record<string, JsonValue>>;
+export interface PublicationEvidenceMetadata {
+  readonly platform?: PublishPlatform;
+  readonly verifiedBy?: string;
+  readonly mimeType?: string;
+  readonly purpose?: string;
+  readonly capturedAt?: string;
+  readonly sha256?: string;
+}
 
 export interface PublicationEvidence {
   readonly id: string;
@@ -55,9 +62,11 @@ export class PublicationEvidenceAlreadyExistsError extends Error {
 }
 
 /**
- * Driver-agnostic append-only persistence boundary for verified publication
- * results. The contract intentionally has no update/delete API so evidence is
- * immutable after creation.
+ * Driver-agnostic append-only persistence boundary for publication-result
+ * evidence. Metadata is intentionally narrow and must be extended explicitly;
+ * arbitrary browser/session/transcript payloads are not part of this contract.
+ * The contract intentionally has no update/delete API so evidence is immutable
+ * after creation.
  */
 export interface EvidenceRepository {
   append(input: AppendPublicationEvidenceInput): PublicationEvidence;
