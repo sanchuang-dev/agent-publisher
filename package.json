@@ -16,7 +16,8 @@
     "check": "npm run typecheck && npm run test && npm run build",
     "dev:web": "vite web",
     "build": "vite build web",
-    "smoke:session-constraint": "tsx scripts/session-constraint-smoke.ts"
+    "smoke:session-constraint": "tsx scripts/session-constraint-smoke.ts",
+    "smoke:xhs-login": "tsx scripts/xiaohongshu-login-smoke.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
