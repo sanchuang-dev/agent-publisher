@@ -4,7 +4,6 @@ import Fastify, {
   type FastifyServerOptions,
 } from "fastify";
 
-import { createSseFixtureRoutes } from "./routes/events-fixture.js";
 import { healthRoutes } from "./routes/health.js";
 import type { SseConnectionRegistry } from "./sse.js";
 
@@ -47,9 +46,6 @@ export function createApiServer(options: CreateApiServerOptions): FastifyInstanc
   });
 
   server.register(healthRoutes);
-  server.register(createSseFixtureRoutes(options.sseConnections), {
-    prefix: "/api",
-  });
   registerOptionalApiModules(server, options.routeModules ?? {});
 
   return server;
