@@ -8,7 +8,10 @@ import {
   fauxProvider,
   fauxText,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  ModelRuntime,
+  type InlineExtension,
+} from "@earendil-works/pi-coding-agent";
 import { expect, test } from "vitest";
 
 import {
@@ -39,6 +42,7 @@ async function createHarness(
   options: {
     readonly runTimeoutMs?: number;
     readonly abortTimeoutMs?: number;
+    readonly failSessionShutdown?: boolean;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "agent-publisher-content-secretary-"));
@@ -47,6 +51,15 @@ async function createHarness(
   const bindings = new AgentSessionBindingRepository(db);
   const faux = fauxProvider({ provider: providerName });
   const modelRuntime = await createFauxRuntime(faux);
+  const failingShutdownExtension: InlineExtension = {
+    name: "test-session-shutdown-failure",
+    hidden: true,
+    factory(pi) {
+      pi.on("session_shutdown", () => {
+        throw new Error("intentional session shutdown failure");
+      });
+    },
+  };
   const host = new PiAgentHost({
     model: faux.getModel(),
     modelRuntime,
@@ -56,7 +69,14 @@ async function createHarness(
     defaultAbortTimeoutMs: options.abortTimeoutMs ?? 200,
     tools: CONTENT_SECRETARY_ALLOWED_TOOLS,
     sessionOptions: { thinkingLevel: "off" },
-    createResourceLoader: createContentSecretaryResourceLoader,
+    createResourceLoader(input) {
+      return createContentSecretaryResourceLoader({
+        ...input,
+        extensionFactories: options.failSessionShutdown
+          ? [...input.extensionFactories, failingShutdownExtension]
+          : input.extensionFactories,
+      });
+    },
   });
   const sessions = new JobAgentSessionService({ jobs, bindings, host });
   const secretary = new ContentSecretaryService({
@@ -407,6 +427,43 @@ test("same Job resumes its Content Secretary session and preserves MaterialPlan 
       phase: "material_plan_ready",
       materialPlanId: "plan-replan-2",
     });
+  } finally {
+    disposeHarness(harness);
+  }
+});
+
+test("Content Secretary does not commit a checkpoint when session cleanup fails", async () => {
+  const harness = await createHarness(
+    "publisher-content-secretary-cleanup-failure",
+    { failSessionShutdown: true },
+  );
+
+  try {
+    harness.jobs.create({
+      id: "job-cleanup-failure",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ topic: "cleanup ordering" }),
+    });
+    const before = harness.jobs.getById("job-cleanup-failure");
+    const beforeSteps = harness.jobs.getStepsForJob("job-cleanup-failure");
+    const plan = imageTextPlan("plan-cleanup-failure", "Cleanup ordering");
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxText(JSON.stringify(plan))),
+    ]);
+
+    await expect(
+      harness.secretary.createMaterialPlan("job-cleanup-failure"),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_SHUTDOWN_FAILED",
+      runStopped: true,
+    });
+
+    expect(harness.jobs.getById("job-cleanup-failure")).toEqual(before);
+    expect(harness.jobs.getStepsForJob("job-cleanup-failure")).toEqual(
+      beforeSteps,
+    );
   } finally {
     disposeHarness(harness);
   }
