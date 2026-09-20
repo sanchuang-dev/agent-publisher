@@ -4,7 +4,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     BROWSER_PROFILE_DIR=/data/profile
 
-RUN apt-get update \
+RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         chromium \
