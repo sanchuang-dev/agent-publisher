@@ -9,6 +9,7 @@ import {
   PublicationEvidenceAlreadyExistsError,
   SensitivePublicationEvidenceError,
   type EvidenceRepository as EvidenceRepositoryContract,
+  type PublicationEvidenceMetadata,
 } from "../src/contracts/evidence.js";
 import { JobNotFoundError } from "../src/contracts/job.js";
 import { openDatabase } from "../src/storage/db.js";
@@ -18,6 +19,10 @@ import { JobRepository } from "../src/storage/job-repository.js";
 function makeTempDb() {
   const root = mkdtempSync(join(tmpdir(), "agent-publisher-evidence-"));
   return { root, databasePath: join(root, "app.db") };
+}
+
+function unsafeMetadata(value: unknown): PublicationEvidenceMetadata {
+  return value as PublicationEvidenceMetadata;
 }
 
 describe("EvidenceRepository integration", () => {
@@ -76,6 +81,8 @@ describe("EvidenceRepository integration", () => {
       metadata: {
         mimeType: "image/png",
         purpose: "final_confirmation",
+        capturedAt: "2026-09-20T05:00:00.000Z",
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       },
     });
 
@@ -91,9 +98,15 @@ describe("EvidenceRepository integration", () => {
       },
     });
     expect(contentId.value).toBe("post-123");
-    expect(artifact.uri).toBe(
-      "file:///tmp/agent-publisher/evidence/post-123.png",
-    );
+    expect(artifact).toMatchObject({
+      uri: "file:///tmp/agent-publisher/evidence/post-123.png",
+      metadata: {
+        mimeType: "image/png",
+        purpose: "final_confirmation",
+        capturedAt: "2026-09-20T05:00:00.000Z",
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+    });
 
     db!.close();
     db = openDatabase({ databasePath });
@@ -157,25 +170,43 @@ describe("EvidenceRepository integration", () => {
     });
   });
 
-  test("forbidden secret/session payload classes are rejected before persistence", () => {
+  test("secret/session payload classes are rejected before persistence", () => {
     const forbiddenInputs = [
       {
-        id: "evidence-cookie",
+        id: "evidence-cookie-key",
         kind: "confirmation_ref" as const,
         value: "confirmed",
-        metadata: { cookies: [{ name: "session", value: "redacted" }] },
+        metadata: unsafeMetadata({ cookies: "redacted" }),
       },
       {
-        id: "evidence-token",
-        kind: "content_id" as const,
-        value: "post-123",
-        metadata: { nested: { accessToken: "redacted" } },
-      },
-      {
-        id: "evidence-authorization",
+        id: "evidence-access-token-key",
         kind: "confirmation_ref" as const,
         value: "confirmed",
-        metadata: { note: "Authorization: Bearer redacted" },
+        metadata: unsafeMetadata({ accessToken: "redacted" }),
+      },
+      {
+        id: "evidence-session-id-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: unsafeMetadata({ sessionId: "redacted" }),
+      },
+      {
+        id: "evidence-auth-token-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: unsafeMetadata({ authToken: "redacted" }),
+      },
+      {
+        id: "evidence-session-token-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: unsafeMetadata({ sessionToken: "redacted" }),
+      },
+      {
+        id: "evidence-secret-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: unsafeMetadata({ secretKey: "redacted" }),
       },
       {
         id: "evidence-uri-token",
@@ -188,14 +219,9 @@ describe("EvidenceRepository integration", () => {
         uri: "https://example.test/result?accessToken=redacted",
       },
       {
-        id: "evidence-uri-token-kebab",
+        id: "evidence-query-value-token",
         kind: "result_url" as const,
-        uri: "https://example.test/result?access-token=redacted",
-      },
-      {
-        id: "evidence-value-token",
-        kind: "confirmation_ref" as const,
-        value: "access_token=redacted",
+        uri: "https://example.test/result?state=access_token%3Dredacted",
       },
       {
         id: "evidence-fragment-token",
@@ -203,27 +229,29 @@ describe("EvidenceRepository integration", () => {
         uri: "https://example.test/result#refreshToken=redacted",
       },
       {
-        id: "evidence-auth-token-key",
+        id: "evidence-value-token",
         kind: "confirmation_ref" as const,
-        value: "confirmed",
-        metadata: { authToken: "redacted" },
+        value: "access_token=redacted",
       },
       {
-        id: "evidence-session-token-key",
+        id: "evidence-value-authorization",
         kind: "confirmation_ref" as const,
-        value: "confirmed",
-        metadata: { sessionToken: "redacted" },
+        value: "Authorization: Bearer redacted",
       },
       {
-        id: "evidence-secret-key",
+        id: "evidence-value-bearer",
         kind: "confirmation_ref" as const,
-        value: "confirmed",
-        metadata: { secretKey: "redacted" },
+        value: "Bearer redacted",
       },
       {
-        id: "evidence-query-value-token",
-        kind: "result_url" as const,
-        uri: "https://example.test/result?state=access_token%3Dredacted",
+        id: "evidence-value-jsessionid",
+        kind: "confirmation_ref" as const,
+        value: "JSESSIONID=redacted",
+      },
+      {
+        id: "evidence-value-jwt",
+        kind: "confirmation_ref" as const,
+        value: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature123",
       },
     ];
 
@@ -235,6 +263,41 @@ describe("EvidenceRepository integration", () => {
         }),
       ).toThrow(SensitivePublicationEvidenceError);
     }
+
+    expect(evidence.getByJob("job-evidence")).toEqual([]);
+  });
+
+  test("metadata and reference fields are allowlisted and bounded", () => {
+    expect(() =>
+      evidence.append({
+        id: "unsupported-metadata",
+        jobId: "job-evidence",
+        kind: "confirmation_ref",
+        value: "confirmed",
+        metadata: unsafeMetadata({ note: "arbitrary payload" }),
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "nested-metadata",
+        jobId: "job-evidence",
+        kind: "confirmation_ref",
+        value: "confirmed",
+        metadata: unsafeMetadata({
+          verifiedBy: { method: "deterministic_result_page" },
+        }),
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "free-form-reference",
+        jobId: "job-evidence",
+        kind: "confirmation_ref",
+        value: "published successfully with arbitrary prose",
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
 
     expect(evidence.getByJob("job-evidence")).toEqual([]);
   });
@@ -264,6 +327,15 @@ describe("EvidenceRepository integration", () => {
         jobId: "job-evidence",
         kind: "result_url",
         uri: "file:///tmp/result.html",
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "bad-artifact-scheme",
+        jobId: "job-evidence",
+        kind: "artifact_uri",
+        uri: "ftp://example.test/evidence.png",
       }),
     ).toThrow(InvalidPublicationEvidenceError);
 
