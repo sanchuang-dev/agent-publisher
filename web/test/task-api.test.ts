@@ -298,7 +298,16 @@ test("auto-continue stops on durable failures and clarification boundaries", asy
   });
 
   const clarificationTask = await clarificationRepository.get("job-real-1");
-  expect(clarificationTask.needsHuman).toBe(true);
+  expect(clarificationTask).toMatchObject({
+    state: "failed",
+    statusLabel: "需要处理",
+    needsHuman: true,
+    currentStep: "等待你确认当前状态",
+    failure: {
+      reason: "当前编辑器状态需要人工确认后才能继续。",
+      recovery: "请先确认当前编辑器状态",
+    },
+  });
   expect(shouldAutoContinueTask(clarificationTask)).toBe(false);
 });
 
