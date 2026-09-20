@@ -460,6 +460,36 @@ describe("Publisher Pi MCP adapter", () => {
     await session.dispose();
   });
 
+  test("allows authenticated plaintext HTTP on IPv6 loopback", async () => {
+    const workspace = await createTempDir("publisher-mcp-auth-ipv6-");
+    await mkdir(workspace, { recursive: true });
+    const faux = fauxProvider({ provider: "publisher-mcp-auth-ipv6" });
+    const host = await createHost(workspace, faux);
+    const definition: AgentDefinition = {
+      id: "mcp-auth-ipv6-agent",
+      systemPrompt: "Use only the Publisher-provisioned MCP gateway.",
+      mcp: {
+        servers: [
+          {
+            name: "loopback-auth",
+            transport: {
+              kind: "http",
+              url: "http://[::1]:65535/mcp",
+              auth: { kind: "bearer-env", env: "PUBLISHER_TEST_TOKEN" },
+            },
+            includeTools: ["allowed_echo"],
+          },
+        ],
+      },
+    };
+
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-mcp-auth-ipv6", role: "content" },
+    });
+    await session.dispose();
+  });
+
   test("rejects authenticated remote MCP over plaintext HTTP", async () => {
     const workspace = await createTempDir("publisher-mcp-auth-http-");
     await mkdir(workspace, { recursive: true });
