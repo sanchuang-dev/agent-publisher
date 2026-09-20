@@ -112,14 +112,17 @@ test("browser startup script uses the stable internal Live View transport contra
   expect(script).toMatch(/"127\.0\.0\.1:\$\{vnc_port\}"/);
 });
 
-test("non-loopback noVNC binding requires an explicit VNC password", () => {
+test("passwordless noVNC is explicit and LAN authentication reads only a mounted file", () => {
   const script = read("docker/browser-runtime/start-browser.sh");
 
-  expect(script).toMatch(/novnc_bind_address="\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}"/);
-  expect(script).toMatch(/novnc_password="\$\{NOVNC_PASSWORD:-\}"/);
-  expect(script).toMatch(/NOVNC_PASSWORD is required when NOVNC_BIND_ADDRESS is not loopback/);
-  expect(script).toMatch(/x11vnc -storepasswd "\$\{novnc_password\}" "\$\{vnc_password_file\}"/);
-  expect(script).toMatch(/-rfbauth "\$\{vnc_password_file\}"/);
+  expect(script).toMatch(/novnc_password_file="\$\{NOVNC_PASSWORD_FILE:-\}"/);
+  expect(script).toMatch(/novnc_allow_no_password="\$\{NOVNC_ALLOW_NO_PASSWORD:-0\}"/);
+  expect(script).toMatch(/NOVNC_PASSWORD_FILE is not readable/);
+  expect(script).toMatch(/cp "\$\{novnc_password_file\}" "\$\{vnc_runtime_password_file\}"/);
+  expect(script).toMatch(/-passwdfile "\$\{vnc_runtime_password_file\}"/);
+  expect(script).toMatch(/NOVNC_PASSWORD_FILE is required unless NOVNC_ALLOW_NO_PASSWORD=1/);
+  expect(script).not.toContain("NOVNC_PASSWORD=");
+  expect(script).not.toContain("-storepasswd");
 });
 
 test("browser startup script supervises all critical processes", () => {
@@ -195,13 +198,20 @@ test("healthcheck fails when an endpoint probe fails", () => {
 
 test("compose defaults Live View to localhost and keeps LAN access explicit", () => {
   const composeFile = read("compose.yaml");
+  const lanComposeFile = read("compose.lan.yaml");
 
-  expect(composeFile).toMatch(/NOVNC_BIND_ADDRESS: "\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}"/);
-  expect(composeFile).toMatch(/NOVNC_PASSWORD: "\$\{NOVNC_PASSWORD:-\}"/);
-  expect(composeFile).toMatch(
-    /ports:\n(?:\s+#.*\n)*\s+- "\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}:6080:6080"/,
-  );
+  expect(composeFile).toMatch(/NOVNC_ALLOW_NO_PASSWORD: "1"/);
+  expect(composeFile).toMatch(/ports:\n\s+- "127\.0\.0\.1:6080:6080"/);
+  expect(composeFile).not.toContain("NOVNC_PASSWORD");
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"0\.0\.0\.0:6080:6080"/m);
+
+  expect(lanComposeFile).toMatch(/NOVNC_ALLOW_NO_PASSWORD: "0"/);
+  expect(lanComposeFile).toMatch(/NOVNC_PASSWORD_FILE: \/run\/secrets\/novnc_password/);
+  expect(lanComposeFile).toContain("NOVNC_BIND_ADDRESS");
+  expect(lanComposeFile).toContain("NOVNC_PASSWORD_FILE");
+  expect(lanComposeFile).not.toContain("NOVNC_PASSWORD:");
+  expect(lanComposeFile).toContain(":/run/secrets/novnc_password:ro");
+
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?9222:9222"/m);
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?5900:5900"/m);
 });
