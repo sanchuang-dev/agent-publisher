@@ -42,6 +42,7 @@ async function createHarness(
   options: {
     readonly runTimeoutMs?: number;
     readonly abortTimeoutMs?: number;
+    readonly disposeTimeoutMs?: number;
     readonly failSessionShutdown?: boolean;
   } = {},
 ) {
@@ -55,8 +56,8 @@ async function createHarness(
     name: "test-session-shutdown-failure",
     hidden: true,
     factory(pi) {
-      pi.on("session_shutdown", () => {
-        throw new Error("intentional session shutdown failure");
+      pi.on("session_shutdown", async () => {
+        await new Promise<never>(() => undefined);
       });
     },
   };
@@ -67,6 +68,7 @@ async function createHarness(
     sessionDirectory: join(root, "pi-sessions"),
     defaultRunTimeoutMs: options.runTimeoutMs ?? 2_000,
     defaultAbortTimeoutMs: options.abortTimeoutMs ?? 200,
+    defaultDisposeTimeoutMs: options.disposeTimeoutMs ?? 2_000,
     tools: CONTENT_SECRETARY_ALLOWED_TOOLS,
     sessionOptions: { thinkingLevel: "off" },
     createResourceLoader(input) {
@@ -435,7 +437,7 @@ test("same Job resumes its Content Secretary session and preserves MaterialPlan 
 test("Content Secretary does not commit a checkpoint when session cleanup fails", async () => {
   const harness = await createHarness(
     "publisher-content-secretary-cleanup-failure",
-    { failSessionShutdown: true },
+    { failSessionShutdown: true, disposeTimeoutMs: 30 },
   );
 
   try {
