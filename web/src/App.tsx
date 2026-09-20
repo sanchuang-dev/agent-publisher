@@ -1,21 +1,34 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import {
+  fixtureTaskRepository,
   getWorkSurfaceKind,
   isFixtureState,
-  taskRepository,
   type FixtureState,
   type PublishMode,
   type TaskFixture,
   type TimelineStep,
   type Worker,
 } from "./model";
+import { taskRepository } from "./task-api";
 
-function readRoute(): { page: "home" } | { page: "task"; state: FixtureState } {
-  const state = window.location.hash.match(/^#\/task\/([^/?#]+)/)?.[1];
-  return state && isFixtureState(state)
-    ? { page: "task", state }
-    : { page: "home" };
+type Route =
+  | { page: "home" }
+  | { page: "task"; jobId: string }
+  | { page: "fixture"; state: FixtureState };
+
+function readRoute(): Route {
+  const fixtureState = window.location.hash.match(/^#\/fixture\/([^/?#]+)/)?.[1];
+  if (fixtureState && isFixtureState(fixtureState)) {
+    return { page: "fixture", state: fixtureState };
+  }
+
+  const jobId = window.location.hash.match(/^#\/task\/([^/?#]+)/)?.[1];
+  if (jobId) {
+    return { page: "task", jobId: decodeURIComponent(jobId) };
+  }
+
+  return { page: "home" };
 }
 
 export function App() {
@@ -47,8 +60,10 @@ export function App() {
       </header>
       {route.page === "home" ? (
         <TaskHome />
+      ) : route.page === "fixture" ? (
+        <TaskDetail taskId={route.state} fixtureState={route.state} />
       ) : (
-        <TaskDetail state={route.state} />
+        <TaskDetail taskId={route.jobId} />
       )}
     </div>
   );
@@ -60,9 +75,14 @@ function TaskHome() {
   const [brief, setBrief] = useState(
     "给公司 Agent Publisher 做一篇小红书介绍",
   );
+  const [assigning, setAssigning] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   useEffect(() => {
-    void taskRepository.list().then(setTasks);
+    void taskRepository
+      .list()
+      .then(setTasks)
+      .catch(() => setTasks([]));
   }, []);
 
   const groups = [
@@ -108,7 +128,8 @@ function TaskHome() {
               </button>
               <button
                 className={publishMode === "video" ? "selected" : ""}
-                onClick={() => setPublishMode("video")}
+                disabled
+                title="当前 MVP 真实链路仅支持小红书图文"
               >
                 视频
               </button>
@@ -117,18 +138,36 @@ function TaskHome() {
           <span className="assign-spacer" />
           <button
             className="primary-button"
-            disabled={!brief.trim()}
+            disabled={!brief.trim() || assigning || publishMode !== "image_text"}
             onClick={() => {
-              taskRepository.assign({
-                brief: brief.trim(),
-                publishMode,
-              });
-              window.location.hash = "#/task/preparing_materials";
+              setAssigning(true);
+              setAssignError(null);
+              void taskRepository
+                .assign({
+                  brief: brief.trim(),
+                  publishMode,
+                })
+                .then((task) => {
+                  window.location.hash = "#/task/" + encodeURIComponent(task.id);
+                })
+                .catch((error: unknown) => {
+                  setAssignError(
+                    error instanceof Error
+                      ? error.message
+                      : "创建真实发布任务失败，请检查 APP-02 API runtime。",
+                  );
+                })
+                .finally(() => setAssigning(false));
             }}
           >
-            交给内容秘书
+            {assigning ? "正在创建任务…" : "交给内容秘书"}
           </button>
         </div>
+        {assignError && (
+          <p className="assignment-error" role="alert">
+            {assignError}
+          </p>
+        )}
       </section>
 
       <section className="task-groups" aria-label="任务列表">
@@ -147,7 +186,7 @@ function TaskHome() {
                 {items.map((task) => (
                   <a
                     className="task-card surface-card"
-                    href={`#/task/${task.state}`}
+                    href={`#/task/${encodeURIComponent(task.id)}`}
                     key={task.id}
                   >
                     <div className="task-card-topline">
@@ -177,15 +216,97 @@ function TaskHome() {
   );
 }
 
-function TaskDetail({ state }: { state: FixtureState }) {
+function TaskDetail({
+  taskId,
+  fixtureState,
+}: {
+  taskId: string;
+  fixtureState?: FixtureState;
+}) {
   const [task, setTask] = useState<TaskFixture | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    void taskRepository.get(state).then(setTask);
-  }, [state]);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: () => void = () => undefined;
+    const repository = fixtureState ? fixtureTaskRepository : taskRepository;
+    const key = fixtureState ?? taskId;
+
+    const scheduleContinue = (current: TaskFixture) => {
+      if (fixtureState || cancelled) return;
+
+      const status = current.backendStatus;
+      if (
+        status !== "created" &&
+        status !== "preparing_materials" &&
+        status !== "preparing_publish" &&
+        status !== "waiting_for_login"
+      ) {
+        return;
+      }
+
+      const delay = status === "waiting_for_login" ? 2500 : 120;
+      timer = setTimeout(() => {
+        void taskRepository
+          .continue(taskId)
+          .then((next) => {
+            if (cancelled) return;
+            setTask(next);
+            setLoadError(null);
+            scheduleContinue(next);
+          })
+          .catch((error: unknown) => {
+            if (cancelled) return;
+            setLoadError(
+              error instanceof Error
+                ? error.message
+                : "继续任务失败，请检查 APP-02 runtime。",
+            );
+          });
+      }, delay);
+    };
+
+    void repository
+      .get(key)
+      .then((loaded) => {
+        if (cancelled) return;
+        setTask(loaded);
+        setLoadError(null);
+
+        if (!fixtureState) {
+          unsubscribe = taskRepository.subscribe(taskId, (next) => {
+            if (!cancelled) {
+              setTask(next);
+              setLoadError(null);
+            }
+          });
+          scheduleContinue(loaded);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "加载真实发布任务失败。",
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [fixtureState, taskId]);
 
   if (!task) {
-    return <main className="loading-shell">正在加载任务…</main>;
+    return (
+      <main className="loading-shell">
+        {loadError ?? "正在加载任务…"}
+      </main>
+    );
   }
 
   return (
@@ -204,11 +325,19 @@ function TaskDetail({ state }: { state: FixtureState }) {
         </span>
       </div>
 
+      {loadError && (
+        <p className="runtime-notice" role="status">
+          {loadError}
+        </p>
+      )}
+
       <div className="detail-shell">
         <aside className="context-panel surface-card">
           <Context label="你交代的任务">
             <blockquote className="context-quote">{task.brief}</blockquote>
-            <span className="context-time">刚刚 · 来自工作台</span>
+            <span className="context-time">
+              {task.runtimeSource === "api" ? "真实 Job · APP-02" : "组件 fixture"}
+            </span>
           </Context>
 
           <Context label="目标平台">
@@ -221,7 +350,13 @@ function TaskDetail({ state }: { state: FixtureState }) {
           </Context>
 
           <Context label="原始素材">
-            <p className="context-copy">还没有原始素材，内容秘书会按你的描述先做一版。</p>
+            <p className="context-copy">
+              {task.materialProvenance?.source === "controlled_smoke"
+                ? "当前使用受控测试物料。界面会展示实际将被 prepare 的内容，不会把它说成根据本次 brief 自动生成。"
+                : task.materialProvenance?.generatedFromBrief
+                  ? "当前物料来自真实 Provider pipeline。"
+                  : "物料尚未准备完成。"}
+            </p>
           </Context>
 
           <Context label="发布要求">
@@ -234,20 +369,23 @@ function TaskDetail({ state }: { state: FixtureState }) {
 
           <Context label="当前账号">
             <div className="account-row">
-              <span className="account-avatar">沐</span>
+              <span className="account-avatar">小</span>
               <span>
-                <strong>沐野洗护 官方号</strong>
-                <small>小红书 · 企业号</small>
+                <strong>当前小红书会话</strong>
+                <small>受控浏览器 · 不在 Web 暴露凭据</small>
               </span>
-              <span className="account-ok">已登录</span>
+              <span className="account-ok">
+                {task.state === "waiting_for_login" ? "待验证" : "运行中"}
+              </span>
             </div>
           </Context>
 
           <Context label="补充说明">
             <textarea
               className="note-input"
-              placeholder="有新的要求？写在这里，秘书会据此调整"
+              placeholder="补充任务要求将在后续迭代开放"
               rows={3}
+              disabled
             />
             <div className="note-actions">
               <button className="secondary-button" type="button" disabled>
@@ -302,7 +440,14 @@ function Timeline({ task }: { task: TaskFixture }) {
           <span className="eyebrow">执行过程</span>
           <h2>{task.currentStep}</h2>
         </div>
-        <span className="updated-at">今天 18:17</span>
+        <span className="updated-at">
+          {task.updatedAt
+            ? new Date(task.updatedAt).toLocaleTimeString("zh-CN", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : "刚刚"}
+        </span>
       </div>
 
       <div className="worker-stack">
@@ -384,6 +529,11 @@ function WorkSurface({ task }: { task: TaskFixture }) {
           description="内容秘书正在把任务整理成可发布的素材包。"
         >
           <div className="material-preview">
+            {task.materialProvenance?.source === "controlled_smoke" && (
+              <div className="material-provenance">
+                受控测试物料 · generatedFromBrief=false
+              </div>
+            )}
             <div className="material-cover">
               {task.material.mode === "video" ? "视频封面预览" : "封面预览"}
             </div>
@@ -542,9 +692,14 @@ function Approval({ task }: { task: TaskFixture }) {
       <Card
         eyebrow="发布审批"
         title="执行秘书已准备好发布"
-        description="不可逆操作前的最终签署面。当前 fixture 不会触发真实发布。"
+        description="真实审批摘要已准备完成；F3-01 只停在这里，不提供最终发布动作。"
       >
         <div className="approval-summary">
+          {task.materialProvenance?.source === "controlled_smoke" && (
+            <div className="material-provenance">
+              受控测试物料 · generatedFromBrief=false
+            </div>
+          )}
           <dl>
             <div>
               <dt>平台 / 账号</dt>
@@ -570,7 +725,7 @@ function Approval({ task }: { task: TaskFixture }) {
             ))}
           </div>
           <div className="approval-actions">
-            <button className="secondary-button">返回修改</button>
+            <button className="secondary-button" disabled>返回修改</button>
             <button className="primary-button" disabled>
               批准发布
             </button>

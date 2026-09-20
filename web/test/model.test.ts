@@ -3,7 +3,7 @@ import {
   fixtureStates,
   getTaskFixture,
   getWorkSurfaceKind,
-  taskRepository,
+  fixtureTaskRepository,
 } from "../src/model.js";
 
 test("all six MVP fixture states are independently addressable", () => {
@@ -93,12 +93,12 @@ test("blocked runtime config remains distinguishable from fixture fallback", () 
 });
 
 test("assigned brief and publish mode survive the handoff into task detail", async () => {
-  taskRepository.assign({
+  await fixtureTaskRepository.assign({
     brief: "用自定义 brief 发布一条视频任务",
     publishMode: "video",
   });
 
-  const assigned = await taskRepository.get("preparing_materials");
+  const assigned = await fixtureTaskRepository.get("preparing_materials");
 
   expect(assigned.brief).toBe("用自定义 brief 发布一条视频任务");
   expect(assigned.publishMode).toBe("video");
