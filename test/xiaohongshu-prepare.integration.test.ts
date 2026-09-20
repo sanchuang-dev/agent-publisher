@@ -693,10 +693,7 @@ describe("XiaohongshuPrepareService", () => {
     expect(secondRecovery?.actionRequestId).not.toBe(
       firstRecovery?.actionRequestId,
     );
-    expect(prepareCalls).toBe(
-      1,
-      "unconfirmed recovery must not call the mutating prepare path again",
-    );
+    expect(prepareCalls).toBe(1);
 
     actions.resolve(secondRecovery!.actionRequestId, {
       composerReset: true,

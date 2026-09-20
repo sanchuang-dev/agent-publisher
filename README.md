@@ -73,6 +73,52 @@ docker compose down
 
 The Chromium profile is stored in the `browser-profile` Docker volume, so normal restarts keep the browser session.
 
+### Run the APP-02 API runtime
+
+The real pre-publish API is an opt-in Compose profile so the Node application
+shares the private Compose network with `browser-runtime`; raw CDP `9222`
+remains unexposed to the host.
+
+APP-02 intentionally does not ship a test MaterialPack inside production code.
+Provide an explicit controlled material directory:
+
+```text
+data/controlled-material/
+├── material.json
+└── assets/
+    ├── cover-1.png
+    ├── image-1.png
+    └── image-2.png
+```
+
+`material.json` is the persisted image-text material envelope used by APP-02.
+It must declare `"source": "controlled_smoke"` and
+`"generatedFromBrief": false`. Image files are resolved from `assetId` plus
+their MIME extension inside `assets/`; local paths are not taken from the
+JSON payload.
+
+Start the application and browser together in one Compose operation:
+
+```bash
+docker compose --profile app up -d --build browser-runtime app-runtime
+```
+
+If `browser-runtime` is already healthy and you only need to start/restart the
+application container, do not recycle the persistent browser profile:
+
+```bash
+docker compose --profile app up -d --build --no-deps app-runtime
+```
+
+The API is available on `http://127.0.0.1:3000`; Live View remains on
+`http://127.0.0.1:6080/vnc.html`. The API surface stops at
+`waiting_for_approval` and exposes no final-publish route.
+
+For a non-Compose development environment, `npm run start:api` uses the same
+runtime contract. Configure `APP_CONTROLLED_MATERIAL_PATH`,
+`APP_CONTROLLED_ASSET_ROOT`, and a reachable `BROWSER_CDP_ENDPOINT`
+explicitly.
+
 ## Live Content Secretary model smoke
 
 The default automated suite uses controlled Pi providers and does not require external model credentials. A real OpenAI-compatible Content Secretary smoke is an explicit manual check.
