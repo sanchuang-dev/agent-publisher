@@ -20,6 +20,34 @@ Given a content intent or source material, the system should be able to:
 
 Initial platform targets are Xiaohongshu, Douyin, and WeChat Official Accounts. Xiaohongshu is the first MVP path.
 
+## Run locally with Docker
+
+Prerequisites: Git, Docker Desktop / Docker Engine, and Node.js >= 22.19 if you also want to run the current Web UI.
+
+```bash
+git clone https://github.com/sanchuang-dev/agent-publisher.git
+cd agent-publisher
+git checkout dev
+docker compose up -d --build
+```
+
+Open `http://127.0.0.1:6080` to access the noVNC view of the persistent Chromium runtime.
+
+The current Compose setup containerizes the browser runtime only. Run the Web UI on the host when needed:
+
+```bash
+npm install
+npm run dev:web
+```
+
+Stop the browser runtime with:
+
+```bash
+docker compose down
+```
+
+The Chromium profile is stored in the `browser-profile` Docker volume, so normal restarts keep the browser session.
+
 ## POC boundaries
 
 - This is not a general-purpose browser agent.
