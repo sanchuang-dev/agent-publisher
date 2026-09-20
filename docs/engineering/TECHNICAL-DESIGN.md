@@ -427,6 +427,10 @@ The first implementation is `XiaohongshuPublisher`.
 
 ### 6.4 Material providers
 
+The MVP material domain keeps replaceable provider boundaries, but the image-text baseline must not depend on an external design service.
+
+Conceptual target contract:
+
 ```ts
 interface TextProvider {
   generate(plan: TextPlan): Promise<TextMaterial>;
@@ -436,8 +440,20 @@ interface ImageProvider {
   generate(plan: ImagePlan): Promise<ImageAsset[]>;
 }
 
+interface DesignRenderInput {
+  plan: ImageTextMaterialPlan;
+  copy: TextMaterial;
+  sourceImages: readonly ImageAssetReference[];
+}
+
+interface DesignRenderResult {
+  source: DesignAssetReference | null;
+  cover: ImageAssetReference;
+  images: readonly ImageAssetReference[];
+}
+
 interface DesignProvider {
-  render(plan: DesignPlan): Promise<Asset[]>;
+  render(input: DesignRenderInput): Promise<ProviderResult<DesignRenderResult>>;
 }
 
 interface VideoProvider {
@@ -445,7 +461,43 @@ interface VideoProvider {
 }
 ```
 
-Concrete vendors are intentionally deferred. Provider unavailability must be explicit.
+The exact TypeScript names may evolve in the owning implementation slice; the invariant is that a design provider receives resolved material content and returns **publishable image assets**, while an editable/source design reference remains optional provenance.
+
+#### Builtin DesignProvider baseline
+
+The MVP requires one Publisher-owned Builtin design path that works without Canva or video.
+
+Use a bounded Publisher-owned static layout contract:
+
+```text
+MaterialPlan + copy + controlled source images
+        ↓
+SafeRichLayout
+        ↓
+schema / policy validation
+        ↓
+BuiltinLayoutRenderer
+        ↓
+PNG (SVG optional)
+```
+
+`SafeRichLayout` is the domain/security boundary. It must not expose arbitrary renderer JSX/HTML/CSS as the material contract.
+
+Renderer selection is implementation evidence, not architecture identity:
+
+- **Takumi** is the current primary candidate because it accepts structured node trees/markup and renders raster/SVG without headless Chromium.
+- **Satori + resvg** is the mature reference candidate.
+- MAT-04 performs a small representative bake-off and selects one production baseline; do not maintain two permanent render stacks merely for redundancy.
+
+The Builtin renderer must:
+
+- avoid the authenticated publishing browser;
+- reject executable/network-capable layout input;
+- use controlled font/image resources;
+- prove deterministic CJK rendering in target environments;
+- return deterministic image bytes that later enter AssetStore.
+
+External design providers such as Canva implement the same material outcome but remain optional enhancements.
 
 A provider implementation must not create its own long-lived model/session harness when the same work belongs in an AgentDefinition / Pi AgentSession. Plain deterministic provider APIs may still call external media services directly when no agent reasoning is required.
 
