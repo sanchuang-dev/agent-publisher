@@ -158,6 +158,15 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     this.scope = scope;
   }
 
+  #invalidate(): void {
+    if (this.#disposed) {
+      return;
+    }
+
+    this.#disposed = true;
+    safeDispose(this.session);
+  }
+
   async run(input: AgentTaskInput): Promise<AgentTaskResult> {
     if (this.#disposed) {
       throw new AgentSessionError(
@@ -249,6 +258,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
           );
 
           if (!runStopped) {
+            this.#invalidate();
             throw new AgentSessionError(
               "AGENT_SESSION_ABORT_UNCONFIRMED",
               `Agent session exceeded the ${timeoutMs}ms run deadline and did not confirm stop within ${abortTimeoutMs}ms`,
@@ -270,7 +280,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         throw new AgentSessionError(
           "AGENT_SESSION_RUN_FAILED",
           `Agent session run failed: ${toMessage(error)}`,
-          { cause: error, runStopped: true },
+          { cause: error, runStopped: null },
         );
       }
 
@@ -285,12 +295,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
   }
 
   async dispose(): Promise<void> {
-    if (this.#disposed) {
-      return;
-    }
-
-    this.#disposed = true;
-    safeDispose(this.session);
+    this.#invalidate();
   }
 }
 

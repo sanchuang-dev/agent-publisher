@@ -202,6 +202,52 @@ describe("PiAgentHost", () => {
     await sessionB.dispose();
   });
 
+  test("invalidates a session when a timed-out run cannot confirm abort", async () => {
+    const faux = fauxProvider({
+      provider: "publisher-agent-host-unconfirmed-abort",
+    });
+    const modelRuntime = await createFauxRuntime(faux);
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      tools: [],
+      sessionOptions: {
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-timeout", role: "content" },
+    });
+
+    faux.setResponses([
+      async () => await new Promise<never>(() => undefined),
+    ]);
+
+    await expect(
+      session.run({
+        prompt: "Never completes.",
+        timeoutMs: 30,
+        abortTimeoutMs: 30,
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_ABORT_UNCONFIRMED",
+      runStopped: false,
+    });
+
+    await expect(
+      session.run({ prompt: "Must require a fresh session." }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_DISPOSED",
+      runStopped: true,
+    });
+  });
+
   test("keeps Pi framework types out of Publisher-facing contract modules", async () => {
     const contractFiles = [
       "src/agent/definition.ts",
