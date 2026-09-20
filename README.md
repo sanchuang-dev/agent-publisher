@@ -33,15 +33,24 @@ docker compose up -d --build
 
 Open `http://127.0.0.1:6080` on the Docker host.
 
-To access Live View securely from another machine, create an SSH tunnel to the Docker host:
+### Open Live View from another computer
+
+On the Docker host, get the SSH username and LAN IP. On macOS:
 
 ```bash
-ssh -N -L 6080:127.0.0.1:6080 <user>@<HOST-LAN-IP>
+whoami
+ipconfig getifaddr en0
 ```
 
-Then open `http://127.0.0.1:6080` on the client machine.
+Then, on the other computer, run:
 
-The noVNC surface currently has no application-level password, so the default Compose mapping keeps port `6080` bound to loopback. Do not change it to a wildcard/public bind unless an authenticated proxy or equivalent access control is added.
+```bash
+ssh -N -L 6080:127.0.0.1:6080 <SSH_USERNAME>@<HOST_LAN_IP>
+```
+
+Keep that terminal open and visit `http://127.0.0.1:6080` on the other computer.
+
+The noVNC surface currently has no application-level password, so Compose keeps port `6080` on localhost by default. Use the SSH tunnel above instead of changing the mapping to `0.0.0.0`.
 
 The current Compose setup containerizes the browser runtime only. Run the Web UI on the host when needed:
 
