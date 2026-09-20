@@ -112,6 +112,16 @@ test("browser startup script uses the stable internal Live View transport contra
   expect(script).toMatch(/"127\.0\.0\.1:\$\{vnc_port\}"/);
 });
 
+test("non-loopback noVNC binding requires an explicit VNC password", () => {
+  const script = read("docker/browser-runtime/start-browser.sh");
+
+  expect(script).toMatch(/novnc_bind_address="\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}"/);
+  expect(script).toMatch(/novnc_password="\$\{NOVNC_PASSWORD:-\}"/);
+  expect(script).toMatch(/NOVNC_PASSWORD is required when NOVNC_BIND_ADDRESS is not loopback/);
+  expect(script).toMatch(/x11vnc -storepasswd "\$\{novnc_password\}" "\$\{vnc_password_file\}"/);
+  expect(script).toMatch(/-rfbauth "\$\{vnc_password_file\}"/);
+});
+
 test("browser startup script supervises all critical processes", () => {
   const script = read("docker/browser-runtime/start-browser.sh");
 
@@ -183,11 +193,15 @@ test("healthcheck fails when an endpoint probe fails", () => {
   }
 });
 
-test("compose exposes Live View only on localhost while keeping raw VNC and CDP internal", () => {
+test("compose defaults Live View to localhost and keeps LAN access explicit", () => {
   const composeFile = read("compose.yaml");
 
-  expect(composeFile).toMatch(/expose:\n(?:\s+- ".+"\n)*\s+- "9222"/);
-  expect(composeFile).toMatch(/ports:\n\s+- "127\.0\.0\.1:6080:6080"/);
+  expect(composeFile).toMatch(/NOVNC_BIND_ADDRESS: "\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}"/);
+  expect(composeFile).toMatch(/NOVNC_PASSWORD: "\$\{NOVNC_PASSWORD:-\}"/);
+  expect(composeFile).toMatch(
+    /ports:\n(?:\s+#.*\n)*\s+- "\$\{NOVNC_BIND_ADDRESS:-127\.0\.0\.1\}:6080:6080"/,
+  );
+  expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"0\.0\.0\.0:6080:6080"/m);
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?9222:9222"/m);
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?5900:5900"/m);
 });
@@ -224,7 +238,6 @@ test("browser profile uses the named persistent volume and Chromium user-data-di
   );
   expect(startScript).toMatch(/--user-data-dir="\$\{profile_dir\}"/);
 });
-
 
 test("seccomp permits Chromium zygote CLONE_NEWPID without broad clone access", () => {
   const profile = JSON.parse(
