@@ -41,7 +41,8 @@ export class InvalidAssetRecordError extends Error {
       | "uri"
       | "mimeType"
       | "checksum"
-      | "metadata",
+      | "metadata"
+      | "status",
     message: string,
   ) {
     super(`Invalid asset ${field}: ${message}`);
