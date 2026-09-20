@@ -64,10 +64,25 @@ export interface BeginPublishingInput {
   readonly step: CheckpointStep;
 }
 
+export interface CompleteLoginInput {
+  readonly jobId: string;
+  readonly actionRequestId: string;
+  readonly resolution?: JsonValue | null;
+  readonly checkpoint: CheckpointData;
+  readonly step: CheckpointStep;
+}
+
 export class ApprovalNotGrantedError extends Error {
   constructor(readonly jobId: string, reason: string) {
     super(`Cannot enter publishing for job ${jobId}: ${reason}`);
     this.name = "ApprovalNotGrantedError";
+  }
+}
+
+export class LoginContinuationNotAllowedError extends Error {
+  constructor(readonly jobId: string, reason: string) {
+    super(`Cannot complete login for job ${jobId}: ${reason}`);
+    this.name = "LoginContinuationNotAllowedError";
   }
 }
 
@@ -127,6 +142,71 @@ export class JobControlService {
         input.action,
         "clarification_required",
       );
+    });
+  }
+
+  completeLogin(input: CompleteLoginInput): Job {
+    return this.#runInTransaction(() => {
+      const currentJob = this.#jobs.getById(input.jobId);
+      if (!currentJob) {
+        throw new JobNotFoundError(input.jobId);
+      }
+      if (currentJob.status !== "waiting_for_login") {
+        throw new LoginContinuationNotAllowedError(
+          input.jobId,
+          `job is ${currentJob.status}, not waiting_for_login`,
+        );
+      }
+
+      const checkpoint = this.#jobs.loadLastCheckpoint(input.jobId);
+      const boundActionId = checkpoint
+        ? getCheckpointActionRequestId(checkpoint.checkpoint)
+        : null;
+      if (!checkpoint || boundActionId !== input.actionRequestId) {
+        throw new LoginContinuationNotAllowedError(
+          input.jobId,
+          "durable checkpoint is not bound to the requested login action",
+        );
+      }
+
+      const action = this.#actionRequests.getById(input.actionRequestId);
+      if (
+        !action ||
+        action.jobId !== input.jobId ||
+        action.type !== "login_required"
+      ) {
+        throw new LoginContinuationNotAllowedError(
+          input.jobId,
+          "checkpoint action is not a login_required action for this job",
+        );
+      }
+      if (action.status === "cancelled") {
+        throw new LoginContinuationNotAllowedError(
+          input.jobId,
+          "login action was cancelled",
+        );
+      }
+
+      if (action.status === "open") {
+        this.#actionRequests.resolve(
+          action.id,
+          input.resolution ?? { loginDetected: true },
+        );
+      }
+
+      const openAction = this.#actionRequests.getCurrentOpenForJob(input.jobId);
+      if (openAction) {
+        throw new LoginContinuationNotAllowedError(
+          input.jobId,
+          `human action remains open: ${openAction.type}`,
+        );
+      }
+
+      return this.#jobs.commitCheckpoint(input.jobId, {
+        status: "preparing_publish",
+        checkpoint: input.checkpoint,
+        step: input.step,
+      });
     });
   }
 
