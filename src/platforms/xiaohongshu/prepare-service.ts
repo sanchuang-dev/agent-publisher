@@ -268,6 +268,18 @@ function hasRecoveryPhase(job: Job): boolean {
   );
 }
 
+function isAuthenticatedLoginCheckpoint(
+  job: Job,
+  profileFingerprint: string,
+): boolean {
+  return (
+    job.checkpoint?.platform === "xiaohongshu" &&
+    job.checkpoint.phase === "ensure_login" &&
+    job.checkpoint.entryState === "authenticated" &&
+    job.checkpoint.browserProfileFingerprint === profileFingerprint
+  );
+}
+
 function persistedRunningAttempt(job: Job): number | null {
   if (job.checkpoint?.phase !== "xhs_prepare_attempt") return null;
   const value = job.checkpoint.attempt;
@@ -401,6 +413,15 @@ export class XiaohongshuPrepareService {
       const contentFingerprint =
         fingerprintXiaohongshuImageTextMaterialPack(input.materialPack);
       const profileFingerprint = browserProfileFingerprint(input.session);
+
+      if (
+        !hasRecoveryPhase(guardedJob) &&
+        !isAuthenticatedLoginCheckpoint(guardedJob, profileFingerprint)
+      ) {
+        throw new XiaohongshuPrepareStateError(
+          "Xiaohongshu prepare requires the authenticated XHS-01 checkpoint on the same browser profile.",
+        );
+      }
 
       if (
         hasRecoveryPhase(guardedJob) &&
