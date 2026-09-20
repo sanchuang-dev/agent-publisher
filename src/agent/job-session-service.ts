@@ -13,6 +13,7 @@ import {
   AgentSessionBindingConflictError,
   AgentSessionBindingMismatchError,
   AgentSessionBindingNotFoundError,
+  AgentSessionPersistenceRequiredError,
   type AgentSessionBinding,
   type AgentSessionBindingRepository,
 } from "./job-session-binding.js";
@@ -39,6 +40,7 @@ export class JobAgentSessionService {
   }
 
   async create(input: JobAgentSessionInput): Promise<PublisherAgentSession> {
+    this.#assertDurableHost();
     const job = this.#requireJob(input.jobId);
     const scope = this.#scope(input);
 
@@ -49,11 +51,7 @@ export class JobAgentSessionService {
       );
     }
 
-    const session = await this.#host.createSession({
-      definition: input.definition,
-      scope,
-      context: buildPublisherJobContext(job, scope.role),
-    });
+    const session = await this.#createHostSession(job, scope, input.definition);
 
     try {
       this.#bindings.bind({
@@ -70,6 +68,7 @@ export class JobAgentSessionService {
   }
 
   async resume(input: JobAgentSessionInput): Promise<PublisherAgentSession> {
+    this.#assertDurableHost();
     const job = this.#requireJob(input.jobId);
     const scope = this.#scope(input);
     const binding = this.#bindings.getForScope(scope);
@@ -86,6 +85,62 @@ export class JobAgentSessionService {
       ref: binding.sessionRef,
       context: buildPublisherJobContext(job, scope.role),
     });
+  }
+
+  /**
+   * Explicit recovery path after a persisted Pi session is known to be missing,
+   * corrupt, or otherwise unusable. This intentionally starts a fresh
+   * transcript while preserving Publisher Job/checkpoint/approval truth.
+   *
+   * Replacement is compare-and-swap against the currently bound ref so a stale
+   * recovery attempt cannot overwrite a newer session binding.
+   */
+  async replaceSession(
+    input: JobAgentSessionInput,
+  ): Promise<PublisherAgentSession> {
+    this.#assertDurableHost();
+    const job = this.#requireJob(input.jobId);
+    const scope = this.#scope(input);
+    const binding = this.#bindings.getForScope(scope);
+
+    if (!binding) {
+      throw new AgentSessionBindingNotFoundError(scope);
+    }
+
+    this.#assertBinding(binding, scope, input.definition);
+    const session = await this.#createHostSession(job, scope, input.definition);
+
+    try {
+      this.#bindings.replace({
+        scope,
+        definitionId: input.definition.id,
+        sessionRef: session.ref,
+        expectedSessionRef: binding.sessionRef,
+      });
+    } catch (error) {
+      await session.dispose();
+      throw error;
+    }
+
+    return session;
+  }
+
+  #createHostSession(
+    job: Job,
+    scope: AgentSessionScope,
+    definition: AgentDefinition,
+  ): Promise<PublisherAgentSession> {
+    return this.#host.createSession({
+      definition,
+      scope,
+      context: buildPublisherJobContext(job, scope.role),
+    });
+  }
+
+  #assertDurableHost(): void {
+    if (!this.#host.supportsDurableResume) {
+      throw new AgentSessionPersistenceRequiredError();
+    }
   }
 
   #scope(input: JobAgentSessionInput): AgentSessionScope {
