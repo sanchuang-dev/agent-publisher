@@ -350,11 +350,18 @@ describe("controlled Pi resources", () => {
         );
       },
       (context) => {
-        const blocked = JSON.stringify(context.messages).includes(
-          'Publisher execution guard blocked tool "unsafe_probe" before execution',
+        const blockedResult = context.messages.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === "unsafe_probe" &&
+            message.isError === true,
         );
         return fauxAssistantMessage(
-          fauxText(blocked ? "GUARD_BLOCKED" : "GUARD_MISSED"),
+          fauxText(
+            blockedResult && executions === 0
+              ? "GUARD_BLOCKED"
+              : "GUARD_MISSED",
+          ),
         );
       },
     ]);
