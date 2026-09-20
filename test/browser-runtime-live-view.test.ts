@@ -187,7 +187,7 @@ test("compose exposes Live View on the host while keeping raw VNC and CDP intern
   const composeFile = read("compose.yaml");
 
   expect(composeFile).toMatch(/expose:\n(?:\s+- ".+"\n)*\s+- "9222"/);
-  expect(composeFile).toMatch(/ports:\n\s+- "127\.0\.0\.1:6080:6080"/);
+  expect(composeFile).toMatch(/ports:\n(?:\s+#.*\n)*\s+- "0\.0\.0\.0:6080:6080"/);
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?9222:9222"/m);
   expect(composeFile).not.toMatch(/(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?5900:5900"/m);
 });
