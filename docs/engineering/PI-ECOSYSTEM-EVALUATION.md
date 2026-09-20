@@ -228,6 +228,35 @@ For large MCP catalogs, proxy/search activation is preferable to placing every M
 
 The implementation work must measure per-session server lifecycle. If the adapter starts independent stdio servers per AgentSession, that is acceptable for the MVP only if bounded and explicit.
 
+### Publisher integration baseline (AGT-04)
+
+Publisher pins `pi-mcp-adapter@2.34.0` and creates it only through
+`createMcpAdapter({ config })`. The config is compiled from the
+`AgentDefinition.mcp` profile for each AgentSession, so Publisher does not read
+developer-machine `.mcp.json`, `~/.pi`, host MCP imports, or adapter management
+state.
+
+The MVP surface is deliberately proxy-first:
+
+- only the adapter's `mcp` gateway tool is activated;
+- every server must declare a non-empty `includeTools` fail-closed allowlist;
+- `excludeTools` may narrow that allowlist further;
+- direct tools, namespace proxy tools, and MCP script mode are disabled;
+- stdio environment and HTTP credential headers can be sourced by environment
+  variable name rather than committed secret values.
+
+Lifecycle remains AgentSession-scoped. Two sessions that reference the same
+stdio profile are expected to own two independent child processes; Publisher
+does not add a shared MCP multiplexer. Because Pi's bare `AgentSession.dispose()`
+does not emit extension shutdown, `PiAgentHost` must emit
+`session_shutdown` before disposing the Pi session. Teardown is bounded and an
+explicit dispose failure is surfaced as an AgentSession error.
+
+The AGT-04 integration tests use controlled stdio and Streamable HTTP fixtures
+to cover discovery, invocation, negative allowlisting, per-session process
+isolation/disposal, unavailable-server containment, and invalid-profile
+fail-closed behavior.
+
 ## 9. Context model
 
 Do not introduce a generic ContextManager until a concrete gap exists.

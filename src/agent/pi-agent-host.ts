@@ -21,7 +21,7 @@ import {
   type AgentHost,
   type PublisherAgentSession,
 } from "./host.js";
-import { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
+import { compilePublisherMcpProfile } from "./pi-mcp.js";\nimport { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
 
 type PiAgentSession = Awaited<
   ReturnType<typeof createAgentSession>
@@ -61,7 +61,7 @@ export interface PiAgentHostOptions {
 }
 
 const DEFAULT_INITIALIZATION_TIMEOUT_MS = 10_000;
-const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
+const DEFAULT_ABORT_TIMEOUT_MS = 1_000;\nconst DEFAULT_DISPOSE_TIMEOUT_MS = 2_000;
 
 class DeadlineExceededError extends Error {}
 
@@ -69,11 +69,47 @@ function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function safeDispose(session: PiAgentSession): void {
+async function shutdownAndDispose(
+  session: PiAgentSession,
+  timeoutMs: number,
+): Promise<void> {
+  let shutdownError: unknown;
+  try {
+    await withDeadline(
+      session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      }),
+      timeoutMs,
+    );
+  } catch (error) {
+    shutdownError = error;
+  }
+
+  let disposeError: unknown;
   try {
     session.dispose();
+  } catch (error) {
+    disposeError = error;
+  }
+
+  if (shutdownError !== undefined) {
+    throw shutdownError;
+  }
+  if (disposeError !== undefined) {
+    throw disposeError;
+  }
+}
+
+async function safeDispose(
+  session: PiAgentSession,
+  timeoutMs: number,
+): Promise<void> {
+  try {
+    await shutdownAndDispose(session, timeoutMs);
   } catch {
-    // Cleanup after a settled or abandoned session is best-effort.
+    // Cleanup after an initialization/run failure remains best-effort. Explicit
+    // Publisher dispose() surfaces teardown failures instead.
   }
 }
 
@@ -183,13 +219,23 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     this.scope = scope;
   }
 
-  #invalidate(): void {
+  async #invalidate(reportFailure = false): Promise<void> {
     if (this.#disposed) {
       return;
     }
 
     this.#disposed = true;
-    safeDispose(this.session);
+    try {
+      await shutdownAndDispose(this.session, this.defaultDisposeTimeoutMs);
+    } catch (error) {
+      if (reportFailure) {
+        throw new AgentSessionError(
+          "AGENT_SESSION_DISPOSE_FAILED",
+          `Agent session disposal failed: ${toMessage(error)}`,
+          { cause: error },
+        );
+      }
+    }
   }
 
   async run(input: AgentTaskInput): Promise<AgentTaskResult> {
@@ -313,7 +359,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
             abortTimeoutMs,
           );
           const partialResult = snapshotResult();
-          this.#invalidate();
+          await this.#invalidate();
 
           if (!settlementAfterAbort) {
             throw new AgentSessionError(
@@ -342,7 +388,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         }
 
         const partialResult = snapshotResult();
-        this.#invalidate();
+        await this.#invalidate();
         throw new AgentSessionError(
           "AGENT_SESSION_RUN_FAILED",
           `Agent session run failed: ${toMessage(error)}`,
@@ -358,7 +404,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
   }
 
   async dispose(): Promise<void> {
-    this.#invalidate();
+    await this.#invalidate(true);
   }
 }
 
@@ -371,6 +417,8 @@ export class PiAgentHost implements AgentHost {
     const defaultRunTimeoutMs = options.defaultRunTimeoutMs;
     const defaultAbortTimeoutMs =
       options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+    const defaultDisposeTimeoutMs =
+      options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
 
     assertPositiveFinite(
       initializationTimeoutMs,
@@ -381,12 +429,17 @@ export class PiAgentHost implements AgentHost {
       defaultAbortTimeoutMs,
       "Agent session abort timeout",
     );
+    assertPositiveFinite(
+      defaultDisposeTimeoutMs,
+      "Agent session dispose timeout",
+    );
 
     this.#options = {
       ...options,
       initializationTimeoutMs,
       defaultRunTimeoutMs,
       defaultAbortTimeoutMs,
+      defaultDisposeTimeoutMs,
     };
   }
 
@@ -402,7 +455,23 @@ export class PiAgentHost implements AgentHost {
     assertSessionConfigNonEmpty(input.scope.role, "Agent session role");
 
     const cwd = this.#options.cwd ?? process.cwd();
-    const allowedTools = [...(this.#options.tools ?? [])];
+    let mcp;
+    try {
+      mcp = compilePublisherMcpProfile(input.definition.mcp);
+    } catch (error) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_INITIALIZATION_FAILED",
+        `Agent MCP profile is invalid: ${toMessage(error)}`,
+        { cause: error },
+      );
+    }
+
+    const allowedTools = [
+      ...new Set([
+        ...(this.#options.tools ?? []),
+        ...mcp.toolNames,
+      ]),
+    ];
     const creation = (async () => {
       const resourceLoader = await this.#options.createResourceLoader({
         definition: input.definition,
@@ -410,6 +479,7 @@ export class PiAgentHost implements AgentHost {
         systemPrompt: input.definition.systemPrompt.trim(),
         cwd,
         allowedTools,
+        extensionFactories: mcp.extensionFactories,
       });
 
       return createAgentSession({
@@ -434,7 +504,12 @@ export class PiAgentHost implements AgentHost {
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         void creation.then(
-          ({ session }) => safeDispose(session),
+          ({ session }) =>
+            safeDispose(
+              session,
+              this.#options.defaultDisposeTimeoutMs ??
+                DEFAULT_DISPOSE_TIMEOUT_MS,
+            ),
           () => undefined,
         );
       }
@@ -452,6 +527,7 @@ export class PiAgentHost implements AgentHost {
       input.scope,
       this.#options.defaultRunTimeoutMs,
       this.#options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS,
+      this.#options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS,
     );
   }
 }
