@@ -45,11 +45,26 @@ export interface PiSdkRunResult {
   toolExecutions: PiSdkToolExecution[];
 }
 
+type ExplicitPiSessionOptions = Omit<
+  CreateAgentSessionOptions,
+  | "sessionManager"
+  | "settingsManager"
+  | "model"
+  | "modelRuntime"
+  | "resourceLoader"
+  | "tools"
+> & {
+  model: NonNullable<CreateAgentSessionOptions["model"]>;
+  modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
+  resourceLoader: NonNullable<CreateAgentSessionOptions["resourceLoader"]>;
+  tools: string[];
+};
+
 export interface RunInMemoryPiSessionInput {
   prompt: string;
   timeoutMs?: number;
   abortTimeoutMs?: number;
-  sessionOptions: Omit<CreateAgentSessionOptions, "sessionManager" | "settingsManager">;
+  sessionOptions: ExplicitPiSessionOptions;
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -78,12 +93,48 @@ function assertPositiveDeadline(value: number, label: string): void {
   }
 }
 
-async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+function assertExplicitSessionOptions(
+  options: ExplicitPiSessionOptions,
+): void {
+  if (!options.model) {
+    throw new PiSdkSessionError(
+      "PI_SESSION_INITIALIZATION_FAILED",
+      "Pi session requires an explicit model",
+    );
+  }
+  if (!options.modelRuntime) {
+    throw new PiSdkSessionError(
+      "PI_SESSION_INITIALIZATION_FAILED",
+      "Pi session requires an explicit model runtime",
+    );
+  }
+  if (!options.resourceLoader) {
+    throw new PiSdkSessionError(
+      "PI_SESSION_INITIALIZATION_FAILED",
+      "Pi session requires an explicit resource loader",
+    );
+  }
+  if (options.tools === undefined) {
+    throw new PiSdkSessionError(
+      "PI_SESSION_INITIALIZATION_FAILED",
+      "Pi session requires an explicit tool allowlist",
+    );
+  }
+}
 
+function remainingMs(expiresAt: number): number {
+  return Math.max(0, expiresAt - Date.now());
+}
+
+async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0) {
+    throw new DeadlineExceededError("Pi session deadline exceeded");
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      reject(new DeadlineExceededError(`Pi session exceeded ${timeoutMs}ms deadline`));
+      reject(new DeadlineExceededError("Pi session deadline exceeded"));
     }, timeoutMs);
   });
 
@@ -120,8 +171,10 @@ async function stopTimedOutRun(
 /**
  * Minimal programmatic Pi SDK boundary for AGT-01.
  *
- * It deliberately owns only one in-memory AgentSession lifecycle. AgentDefinition,
- * PiAgentHost, Skills/MCP policy, and durable resume belong to later work items.
+ * The caller must provide the model/runtime, ResourceLoader, and Tool allowlist
+ * explicitly so this service path never falls back to ambient ~/.pi or project
+ * discovery. AgentDefinition, PiAgentHost, Skills/MCP policy, and durable resume
+ * belong to later work items.
  */
 export async function runInMemoryPiSession(
   input: RunInMemoryPiSessionInput,
@@ -130,8 +183,9 @@ export async function runInMemoryPiSession(
   const abortTimeoutMs = input.abortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
   assertPositiveDeadline(timeoutMs, "Pi session timeout");
   assertPositiveDeadline(abortTimeoutMs, "Pi session abort timeout");
+  assertExplicitSessionOptions(input.sessionOptions);
 
-  const deadline = createDeadline(timeoutMs);
+  const expiresAt = Date.now() + timeoutMs;
   const cwd = input.sessionOptions.cwd ?? process.cwd();
   const creation = createAgentSession({
     ...input.sessionOptions,
@@ -142,7 +196,7 @@ export async function runInMemoryPiSession(
 
   let created: Awaited<ReturnType<typeof createAgentSession>>;
   try {
-    created = await withDeadline(creation, deadline);
+    created = await withDeadline(creation, remainingMs(expiresAt));
   } catch (error) {
     if (error instanceof DeadlineExceededError) {
       void creation.then(
@@ -151,7 +205,7 @@ export async function runInMemoryPiSession(
       );
       throw new PiSdkSessionError(
         "PI_SESSION_TIMEOUT",
-        `Pi session initialization exceeded ${timeoutMs}ms`,
+        `Pi session initialization exceeded the ${timeoutMs}ms run deadline`,
         { cause: error, runStopped: null },
       );
     }
@@ -206,21 +260,21 @@ export async function runInMemoryPiSession(
     const promptTask = session.prompt(input.prompt);
 
     try {
-      await withDeadline(promptTask, timeoutMs);
+      await withDeadline(promptTask, remainingMs(expiresAt));
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         const runStopped = await stopTimedOutRun(promptTask, session, abortTimeoutMs);
         if (!runStopped) {
           throw new PiSdkSessionError(
             "PI_SESSION_ABORT_UNCONFIRMED",
-            `Pi session exceeded ${timeoutMs}ms and did not confirm stop within ${abortTimeoutMs}ms`,
+            `Pi session exceeded the ${timeoutMs}ms run deadline and did not confirm stop within ${abortTimeoutMs}ms`,
             { cause: error, runStopped: false },
           );
         }
 
         throw new PiSdkSessionError(
           "PI_SESSION_TIMEOUT",
-          `Pi session run exceeded ${timeoutMs}ms and was stopped`,
+          `Pi session exceeded the ${timeoutMs}ms run deadline and was stopped`,
           { cause: error, runStopped: true },
         );
       }
