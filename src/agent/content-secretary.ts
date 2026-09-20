@@ -58,6 +58,7 @@ export function createContentSecretaryResourceLoader(
     cwd: input.cwd,
     systemPrompt: input.systemPrompt,
     allowedTools: CONTENT_SECRETARY_ALLOWED_TOOLS,
+    extensionFactories: input.extensionFactories,
     policy: {
       skillPaths: [publisherSafetySkillPath],
       mandatorySkillPaths: [publisherSafetySkillPath],
@@ -163,6 +164,11 @@ export class ContentSecretaryService {
       });
       const finishedAt = new Date().toISOString();
 
+      // Tear down the AgentSession before mutating durable Job truth. A cleanup
+      // failure must stay visible, but it must not turn an already-committed
+      // checkpoint into an apparent application failure that a caller may retry.
+      await session.dispose();
+
       // Re-read Publisher truth after the model run. If another workflow step
       // advanced or rewrote the Job while the model was working, do not let a
       // stale MaterialPlan overwrite that newer checkpoint. commitCheckpoint
@@ -191,8 +197,14 @@ export class ContentSecretaryService {
       });
 
       return { plan, job: checkpointedJob };
-    } finally {
-      await session.dispose();
+    } catch (error) {
+      try {
+        await session.dispose();
+      } catch {
+        // Preserve the primary failure. Cleanup failures are surfaced directly
+        // when teardown itself is the primary operation above.
+      }
+      throw error;
     }
   }
 

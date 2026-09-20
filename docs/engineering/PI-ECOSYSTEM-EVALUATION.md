@@ -228,6 +228,38 @@ For large MCP catalogs, proxy/search activation is preferable to placing every M
 
 The implementation work must measure per-session server lifecycle. If the adapter starts independent stdio servers per AgentSession, that is acceptable for the MVP only if bounded and explicit.
 
+### Publisher integration baseline (AGT-04)
+
+Publisher pins `pi-mcp-adapter@2.34.0` and constructs it only through
+`createMcpAdapter({ config })`. `AgentDefinition.mcp` is compiled per
+AgentSession, while ambient `.mcp.json`, `~/.pi`, and host MCP imports stay
+disabled. Direct tools and script mode are disabled in adapter config; the
+Publisher Pi active-tool allowlist exposes only the `mcp` gateway. Adapter
+`namespaceProxyTools` is explicitly disabled alongside direct tools and script
+mode, so per-server `mcp__<server>` wrappers are not model-visible.
+
+Every server requires a non-empty `includeTools` allowlist and may narrow it
+with `excludeTools`. Stdio children use adapter platform defaults without
+inheriting the Publisher process environment. HTTP bearer auth stores only an
+environment-variable name (`bearerTokenEnv`), not the credential value;
+OAuth remains adapter-owned with automatic auth disabled.
+
+The pinned npm package exports its Pi extension entry as TypeScript source, so
+the repository's no-emit TypeScript check enables `allowImportingTsExtensions`.
+This is an adapter packaging compatibility requirement, not permission for
+Publisher source to import arbitrary machine-local TypeScript modules.
+
+Lifecycle is AgentSession-scoped: two sessions using one stdio profile own
+independent child processes. Publisher adds no shared MCP multiplexer. Since
+Pi's bare `AgentSession.dispose()` does not emit extension shutdown,
+`PiAgentHost` emits bounded `session_shutdown` first. The same wiring is used
+for both new and AGT-05 resumed sessions.
+
+AGT-04 integration tests use controlled stdio and Streamable HTTP fixtures for
+discovery/invocation, negative allowlisting, per-session process isolation and
+teardown, unavailable-server containment, and invalid-profile fail-closed
+behavior.
+
 ## 9. Context model
 
 Do not introduce a generic ContextManager until a concrete gap exists.

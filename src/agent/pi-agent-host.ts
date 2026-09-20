@@ -4,6 +4,7 @@ import {
   SettingsManager,
   createAgentSession,
   type CreateAgentSessionOptions,
+  type InlineExtension,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 
@@ -21,6 +22,7 @@ import {
   type AgentHost,
   type PublisherAgentSession,
 } from "./host.js";
+import { compilePublisherMcpProfile } from "./pi-mcp.js";
 import {
   createPiAgentSessionRef,
   parsePiAgentSessionRef,
@@ -48,6 +50,7 @@ export interface PiResourceLoaderFactoryInput {
   readonly systemPrompt: string;
   readonly cwd: string;
   readonly allowedTools: readonly string[];
+  readonly extensionFactories: readonly InlineExtension[];
 }
 
 export interface PiAgentHostOptions {
@@ -67,22 +70,86 @@ export interface PiAgentHostOptions {
   readonly initializationTimeoutMs?: number;
   readonly defaultRunTimeoutMs: number;
   readonly defaultAbortTimeoutMs?: number;
+  readonly defaultDisposeTimeoutMs?: number;
 }
 
 const DEFAULT_INITIALIZATION_TIMEOUT_MS = 10_000;
 const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
+const DEFAULT_DISPOSE_TIMEOUT_MS = 2_000;
 
 class DeadlineExceededError extends Error {}
+
+class AgentSessionCleanupError extends Error {
+  constructor(
+    readonly phase: "extension-shutdown" | "dispose",
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+    this.name = "AgentSessionCleanupError";
+  }
+}
 
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function safeDispose(session: PiAgentSession): void {
+async function shutdownAndDispose(
+  session: PiAgentSession,
+  timeoutMs: number,
+): Promise<void> {
+  let shutdownError: unknown;
+  try {
+    await withDeadline(
+      session.extensionRunner.emit({
+        type: "session_shutdown",
+        reason: "quit",
+      }),
+      timeoutMs,
+    );
+  } catch (error) {
+    shutdownError = error;
+  }
+
+  let disposeError: unknown;
   try {
     session.dispose();
+  } catch (error) {
+    disposeError = error;
+  }
+
+  if (disposeError !== undefined) {
+    const cause =
+      shutdownError === undefined
+        ? disposeError
+        : new AggregateError(
+            [shutdownError, disposeError],
+            "Extension shutdown and Pi session disposal both failed",
+          );
+    throw new AgentSessionCleanupError(
+      "dispose",
+      `Pi session disposal failed: ${toMessage(disposeError)}`,
+      { cause },
+    );
+  }
+
+  if (shutdownError !== undefined) {
+    throw new AgentSessionCleanupError(
+      "extension-shutdown",
+      `Extension shutdown failed: ${toMessage(shutdownError)}`,
+      { cause: shutdownError },
+    );
+  }
+}
+
+async function safeDispose(
+  session: PiAgentSession,
+  timeoutMs: number,
+): Promise<void> {
+  try {
+    await shutdownAndDispose(session, timeoutMs);
   } catch {
-    // Cleanup after a settled or abandoned session is best-effort.
+    // Initialization/run failure cleanup remains best-effort.
   }
 }
 
@@ -179,6 +246,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
   #disposed = false;
   #running = false;
+  #disposeTask: Promise<void> | null = null;
 
   constructor(
     private readonly session: PiAgentSession,
@@ -187,19 +255,40 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     scope: AgentSessionScope,
     private readonly defaultRunTimeoutMs: number,
     private readonly defaultAbortTimeoutMs: number,
+    private readonly defaultDisposeTimeoutMs: number,
   ) {
     this.ref = ref;
     this.definition = definition;
     this.scope = scope;
   }
 
-  #invalidate(): void {
-    if (this.#disposed) {
-      return;
+  async #invalidate(reportFailure = false): Promise<void> {
+    if (!this.#disposeTask) {
+      this.#disposed = true;
+      this.#disposeTask = shutdownAndDispose(
+        this.session,
+        this.defaultDisposeTimeoutMs,
+      );
     }
 
-    this.#disposed = true;
-    safeDispose(this.session);
+    try {
+      await this.#disposeTask;
+    } catch (error) {
+      if (reportFailure) {
+        const shutdownOnly =
+          error instanceof AgentSessionCleanupError &&
+          error.phase === "extension-shutdown";
+        throw new AgentSessionError(
+          shutdownOnly
+            ? "AGENT_SESSION_SHUTDOWN_FAILED"
+            : "AGENT_SESSION_DISPOSE_FAILED",
+          shutdownOnly
+            ? `Agent session extension shutdown failed after Pi session disposal: ${toMessage(error)}`
+            : `Agent session disposal failed: ${toMessage(error)}`,
+          { cause: error, runStopped: true },
+        );
+      }
+    }
   }
 
   async run(input: AgentTaskInput): Promise<AgentTaskResult> {
@@ -323,7 +412,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
             abortTimeoutMs,
           );
           const partialResult = snapshotResult();
-          this.#invalidate();
+          await this.#invalidate();
 
           if (!settlementAfterAbort) {
             throw new AgentSessionError(
@@ -352,7 +441,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         }
 
         const partialResult = snapshotResult();
-        this.#invalidate();
+        await this.#invalidate();
         throw new AgentSessionError(
           "AGENT_SESSION_RUN_FAILED",
           `Agent session run failed: ${toMessage(error)}`,
@@ -368,7 +457,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
   }
 
   async dispose(): Promise<void> {
-    this.#invalidate();
+    await this.#invalidate(true);
   }
 }
 
@@ -396,6 +485,8 @@ export class PiAgentHost implements AgentHost {
     const defaultRunTimeoutMs = options.defaultRunTimeoutMs;
     const defaultAbortTimeoutMs =
       options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+    const defaultDisposeTimeoutMs =
+      options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS;
 
     assertPositiveFinite(
       initializationTimeoutMs,
@@ -406,12 +497,17 @@ export class PiAgentHost implements AgentHost {
       defaultAbortTimeoutMs,
       "Agent session abort timeout",
     );
+    assertPositiveFinite(
+      defaultDisposeTimeoutMs,
+      "Agent session dispose timeout",
+    );
 
     this.#options = {
       ...options,
       initializationTimeoutMs,
       defaultRunTimeoutMs,
       defaultAbortTimeoutMs,
+      defaultDisposeTimeoutMs,
     };
   }
 
@@ -547,7 +643,23 @@ export class PiAgentHost implements AgentHost {
     operation: "initialization" | "resume",
   ): Promise<PublisherAgentSession> {
     const cwd = this.#options.cwd ?? process.cwd();
-    const allowedTools = [...(this.#options.tools ?? [])];
+    let mcp;
+    try {
+      mcp = compilePublisherMcpProfile(input.definition.mcp);
+    } catch (error) {
+      throw new AgentSessionError(
+        failureCode,
+        `Agent MCP profile is invalid during ${operation}: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
+
+    const allowedTools = [
+      ...new Set([
+        ...(this.#options.tools ?? []),
+        ...mcp.toolNames,
+      ]),
+    ];
     const systemPrompt = buildSessionSystemPrompt(input);
     const creation = (async () => {
       const resourceLoader = await this.#options.createResourceLoader({
@@ -556,6 +668,7 @@ export class PiAgentHost implements AgentHost {
         systemPrompt,
         cwd,
         allowedTools,
+        extensionFactories: mcp.extensionFactories,
       });
 
       return createAgentSession({
@@ -580,7 +693,12 @@ export class PiAgentHost implements AgentHost {
     } catch (error) {
       if (error instanceof DeadlineExceededError) {
         void creation.then(
-          ({ session }) => safeDispose(session),
+          ({ session }) =>
+            safeDispose(
+              session,
+              this.#options.defaultDisposeTimeoutMs ??
+                DEFAULT_DISPOSE_TIMEOUT_MS,
+            ),
           () => undefined,
         );
       }
@@ -593,7 +711,10 @@ export class PiAgentHost implements AgentHost {
     }
 
     if (created.session.sessionId !== sessionManager.getSessionId()) {
-      safeDispose(created.session);
+      await safeDispose(
+        created.session,
+        this.#options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS,
+      );
       throw new AgentSessionError(
         "AGENT_SESSION_INCOMPATIBLE",
         `Pi session identity changed while binding ${ref}`,
@@ -608,6 +729,7 @@ export class PiAgentHost implements AgentHost {
       input.scope,
       this.#options.defaultRunTimeoutMs,
       this.#options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS,
+      this.#options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS,
     );
   }
 }
