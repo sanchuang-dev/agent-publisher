@@ -1,0 +1,9 @@
+.git
+.github
+node_modules
+data
+docs
+test
+web
+docker/browser-runtime
+*.log

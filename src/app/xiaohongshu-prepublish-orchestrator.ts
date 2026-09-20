@@ -1,0 +1,588 @@
+import { randomUUID } from "node:crypto";
+
+import type {
+  BrowserProvider,
+  BrowserSession,
+} from "../browser/provider.js";
+import {
+  JobNotFoundError,
+  type ActionRequestRepository,
+  type Job,
+  type JobRepository,
+} from "../contracts/job.js";
+import type {
+  XiaohongshuEnsureLoginResult,
+  XiaohongshuLoginService,
+} from "../platforms/xiaohongshu/login-service.js";
+import type {
+  XiaohongshuPrepareForApprovalResult,
+  XiaohongshuPrepareService,
+} from "../platforms/xiaohongshu/prepare-service.js";
+import { JobProjectionEventBus } from "./job-events.js";
+import {
+  JobProjectionService,
+  type JobProjection,
+} from "./job-projection.js";
+import {
+  PREPUBLISH_MATERIAL_STEP_KEY,
+  findPersistedPrepublishMaterial,
+  parsePrepublishMaterial,
+  serializePrepublishMaterial,
+  type PersistedPrepublishMaterial,
+  type PrepublishMaterialSource,
+} from "./prepublish-material-source.js";
+
+type LoginServicePort = Pick<XiaohongshuLoginService, "ensureLogin">;
+type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
+
+const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
+
+export interface CreatePrepublishJobInput {
+  readonly brief: string;
+}
+
+export interface ContinuePrepublishResult {
+  readonly projection: JobProjection;
+  readonly blocked: boolean;
+  readonly error:
+    | {
+        readonly code: string;
+        readonly message: string;
+      }
+    | null;
+}
+
+export interface XiaohongshuPrepublishOrchestratorDependencies {
+  readonly jobs: JobRepository;
+  readonly actionRequests: ActionRequestRepository;
+  readonly browserProvider: BrowserProvider;
+  readonly login: LoginServicePort;
+  readonly prepare: PrepareServicePort;
+  readonly materialSource: PrepublishMaterialSource;
+  readonly projections: JobProjectionService;
+  readonly events: JobProjectionEventBus;
+  readonly createId?: () => string;
+  readonly now?: () => Date;
+}
+
+export class PrepublishMaterialSourceError extends Error {
+  readonly code = "MATERIAL_SOURCE_UNAVAILABLE" as const;
+
+  constructor(options?: ErrorOptions) {
+    super(
+      "The configured pre-publish material source could not prepare valid material.",
+      options,
+    );
+    this.name = "PrepublishMaterialSourceError";
+  }
+}
+
+export class PrepublishBrowserUnavailableError extends Error {
+  readonly code = "BROWSER_UNAVAILABLE" as const;
+
+  constructor(options?: ErrorOptions) {
+    super("The controlled browser runtime is currently unavailable.", options);
+    this.name = "PrepublishBrowserUnavailableError";
+  }
+}
+
+export class PrepublishJobBusyError extends Error {
+  readonly code = "JOB_ALREADY_RUNNING" as const;
+
+  constructor(readonly jobId: string) {
+    super(`A pre-publish run is already active for job ${jobId}.`);
+    this.name = "PrepublishJobBusyError";
+  }
+}
+
+export class UnsupportedPrepublishStateError extends Error {
+  readonly code = "PREPUBLISH_STATE_UNSUPPORTED" as const;
+
+  constructor(readonly jobId: string, readonly status: Job["status"]) {
+    super(
+      `APP-02 cannot continue job ${jobId} from status ${status}; final publication is outside this slice.`,
+    );
+    this.name = "UnsupportedPrepublishStateError";
+  }
+}
+
+function errorCode(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { readonly code?: unknown }).code === "string"
+  ) {
+    return (error as { readonly code: string }).code;
+  }
+
+  return "PREPUBLISH_BLOCKED";
+}
+
+function safeErrorMessage(error: unknown): string {
+  const code = errorCode(error);
+
+  const messages: Readonly<Record<string, string>> = {
+    MATERIAL_SOURCE_UNAVAILABLE:
+      "The configured pre-publish material source could not prepare valid material.",
+    BROWSER_UNAVAILABLE:
+      "The controlled browser runtime is currently unavailable.",
+    LOGIN_REQUIRED:
+      "The Xiaohongshu login or verification boundary still requires human attention.",
+    PLATFORM_UI_CHANGED:
+      "The Xiaohongshu page no longer matches the supported deterministic flow.",
+    BROWSER_INTERACTION_FAILED:
+      "The Xiaohongshu browser interaction stopped safely.",
+    PREPARE_RECOVERY_REQUIRED:
+      "The prepared Xiaohongshu composer requires human inspection before continuing.",
+    PREPARED_VALIDATION_FAILED:
+      "The prepared Xiaohongshu form did not match the intended material.",
+    COMPOSER_NOT_FRESH:
+      "The Xiaohongshu composer already contains content and was not overwritten.",
+    PLATFORM_UPLOAD_FAILED:
+      "Xiaohongshu reported an upload or processing failure.",
+    PLATFORM_UPLOAD_TIMEOUT:
+      "The Xiaohongshu upload did not reach a verified ready state in time.",
+    ASSET_RESOLUTION_FAILED:
+      "One or more controlled material assets could not be resolved.",
+    JOB_ALREADY_RUNNING:
+      "This job is already being continued by another request.",
+  };
+
+  return (
+    messages[code] ??
+    "The pre-publish flow stopped safely. Inspect the current task state before retrying."
+  );
+}
+
+function hasAuthenticatedOrPrepareCheckpoint(job: Job): boolean {
+  const phase = job.checkpoint?.phase;
+
+  if (
+    phase === "ensure_login" &&
+    job.checkpoint?.entryState === "authenticated"
+  ) {
+    return true;
+  }
+
+  return (
+    typeof phase === "string" &&
+    (phase.startsWith("xhs_prepare_") || phase === "prepared_for_approval")
+  );
+}
+
+function briefFromJob(job: Job): string {
+  try {
+    const parsed = JSON.parse(job.briefJson) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      !Array.isArray(parsed) &&
+      "brief" in parsed &&
+      typeof (parsed as { readonly brief?: unknown }).brief === "string"
+    ) {
+      const brief = (parsed as { readonly brief: string }).brief.trim();
+      if (brief) {
+        return brief;
+      }
+    }
+  } catch {
+    // Fall through to the invariant error below.
+  }
+
+  throw new Error(`Job ${job.id} has an invalid APP-02 brief payload.`);
+}
+
+export class XiaohongshuPrepublishOrchestrator {
+  readonly #jobs: JobRepository;
+  readonly #actionRequests: ActionRequestRepository;
+  readonly #browserProvider: BrowserProvider;
+  readonly #login: LoginServicePort;
+  readonly #prepare: PrepareServicePort;
+  readonly #materialSource: PrepublishMaterialSource;
+  readonly #projections: JobProjectionService;
+  readonly #events: JobProjectionEventBus;
+  readonly #createId: () => string;
+  readonly #now: () => Date;
+  readonly #activeJobs = new Set<string>();
+
+  constructor(dependencies: XiaohongshuPrepublishOrchestratorDependencies) {
+    this.#jobs = dependencies.jobs;
+    this.#actionRequests = dependencies.actionRequests;
+    this.#browserProvider = dependencies.browserProvider;
+    this.#login = dependencies.login;
+    this.#prepare = dependencies.prepare;
+    this.#materialSource = dependencies.materialSource;
+    this.#projections = dependencies.projections;
+    this.#events = dependencies.events;
+    this.#createId = dependencies.createId ?? randomUUID;
+    this.#now = dependencies.now ?? (() => new Date());
+  }
+
+  async createJob(input: CreatePrepublishJobInput): Promise<JobProjection> {
+    const brief = input.brief.trim();
+    if (!brief) {
+      throw new Error("A non-empty publishing brief is required.");
+    }
+
+    const jobId = this.#createId();
+    this.#jobs.create({
+      id: jobId,
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief }),
+      // Material execution data is persisted in JobStep.outputJson, not in the
+      // model-facing material_summary_json field.
+      materialSummaryJson: null,
+    });
+
+    return this.#publish(jobId);
+  }
+
+  getJob(jobId: string): JobProjection {
+    return this.#projections.get(jobId);
+  }
+
+  async continueJob(jobId: string): Promise<ContinuePrepublishResult> {
+    if (this.#activeJobs.has(jobId)) {
+      throw new PrepublishJobBusyError(jobId);
+    }
+
+    const initial = this.#jobs.getById(jobId);
+    if (!initial) {
+      throw new JobNotFoundError(jobId);
+    }
+
+    this.#activeJobs.add(jobId);
+
+    try {
+      let job = initial;
+
+      if (
+        job.status === "waiting_for_approval" ||
+        job.status === "failed" ||
+        job.status === "succeeded"
+      ) {
+        return {
+          projection: this.#publish(jobId),
+          blocked: job.status !== "succeeded",
+          error: null,
+        };
+      }
+
+      if (job.status === "publishing") {
+        throw new UnsupportedPrepublishStateError(jobId, job.status);
+      }
+
+      const currentAction = this.#actionRequests.getCurrentOpenForJob(jobId);
+      if (
+        currentAction &&
+        !(
+          job.status === "waiting_for_login" &&
+          currentAction.type === "login_required"
+        )
+      ) {
+        return {
+          projection: this.#publish(jobId),
+          blocked: true,
+          error: null,
+        };
+      }
+
+      if (
+        (job.status === "created" || job.status === "preparing_materials") &&
+        !this.#getMaterial(jobId)
+      ) {
+        try {
+          job = await this.#materialize(job);
+        } catch (error) {
+          return {
+            projection: this.#publish(jobId),
+            blocked: true,
+            error: {
+              code: errorCode(error),
+              message: safeErrorMessage(error),
+            },
+          };
+        }
+      }
+
+      if (job.status === "preparing_materials") {
+        const material = this.#requireMaterial(jobId);
+        const now = this.#now().toISOString();
+
+        job = this.#jobs.commitCheckpoint(jobId, {
+          status: "preparing_publish",
+          checkpoint: {
+            phase: "material_handoff",
+            materialSource: material.source,
+            generatedFromBrief: material.generatedFromBrief,
+            planId: material.pack.planId,
+          },
+          step: {
+            id: this.#createId(),
+            stepKey: "material_handoff",
+            status: "succeeded",
+            outputJson: JSON.stringify({
+              source: material.source,
+              generatedFromBrief: material.generatedFromBrief,
+              planId: material.pack.planId,
+            }),
+            finishedAt: now,
+          },
+        });
+        this.#publish(jobId);
+      }
+
+      job = this.#jobs.getById(jobId)!;
+      if (
+        job.status !== "preparing_publish" &&
+        job.status !== "waiting_for_login"
+      ) {
+        throw new UnsupportedPrepublishStateError(jobId, job.status);
+      }
+
+      let session: BrowserSession | null = null;
+
+      try {
+        try {
+          session = await this.#browserProvider.acquire({});
+        } catch (error) {
+          this.#recordBrowserAcquireFailure(jobId);
+          throw new PrepublishBrowserUnavailableError({ cause: error });
+        }
+
+        if (
+          job.status === "waiting_for_login" ||
+          !hasAuthenticatedOrPrepareCheckpoint(job)
+        ) {
+          const loginResult: XiaohongshuEnsureLoginResult =
+            await this.#login.ensureLogin({
+              jobId,
+              session,
+            });
+
+          this.#publish(jobId);
+
+          if (loginResult.kind === "human_takeover") {
+            return {
+              projection: this.#projections.get(jobId),
+              blocked: true,
+              error: null,
+            };
+          }
+        }
+
+        job = this.#jobs.getById(jobId)!;
+        if (job.status !== "preparing_publish") {
+          return {
+            projection: this.#publish(jobId),
+            blocked: true,
+            error: null,
+          };
+        }
+
+        const material = this.#requireMaterial(jobId);
+        const prepared: XiaohongshuPrepareForApprovalResult =
+          await this.#prepare.prepareForApproval({
+            jobId,
+            session,
+            materialPack: material.pack,
+          });
+
+        if (prepared.job.status !== "waiting_for_approval") {
+          throw new Error(
+            "Xiaohongshu prepare returned without the durable approval pause.",
+          );
+        }
+
+        return {
+          projection: this.#publish(jobId),
+          blocked: true,
+          error: null,
+        };
+      } catch (error) {
+        const projection = this.#publish(jobId);
+        return {
+          projection,
+          blocked: true,
+          error: {
+            code: errorCode(error),
+            message: safeErrorMessage(error),
+          },
+        };
+      } finally {
+        if (session) {
+          try {
+            await this.#browserProvider.release(session.id);
+          } catch {
+            // BrowserProvider release is resource cleanup after durable workflow
+            // state has already been committed. Keep that business outcome
+            // authoritative, but surface the cleanup defect operationally.
+            process.emitWarning(
+              "Browser session cleanup failed after durable APP-02 state was committed.",
+              { code: "APP_BROWSER_RELEASE_FAILED" },
+            );
+          }
+        }
+      }
+    } finally {
+      this.#activeJobs.delete(jobId);
+    }
+  }
+
+  async #materialize(job: Job): Promise<Job> {
+    const brief = briefFromJob(job);
+
+    try {
+      const material = await this.#materialSource.resolve({
+        jobId: job.id,
+        brief,
+      });
+      const persistedMaterial = serializePrepublishMaterial(material);
+
+      // Re-parse the exact bytes that will become durable Publisher execution
+      // state before committing them.
+      parsePrepublishMaterial(persistedMaterial);
+
+      const latest = this.#requireJob(job.id);
+      if (
+        latest.status !== "created" &&
+        latest.status !== "preparing_materials"
+      ) {
+        throw new Error(
+          `Job ${job.id} advanced to ${latest.status} while material was being prepared.`,
+        );
+      }
+
+      const now = this.#now().toISOString();
+      return this.#jobs.commitCheckpoint(job.id, {
+        status: "preparing_materials",
+        checkpoint: {
+          phase: "material_ready",
+          materialSource: material.source,
+          generatedFromBrief: material.generatedFromBrief,
+          planId: material.pack.planId,
+        },
+        step: {
+          id: this.#createId(),
+          stepKey: PREPUBLISH_MATERIAL_STEP_KEY,
+          status: "succeeded",
+          attempt: this.#nextStepAttempt(job.id, PREPUBLISH_MATERIAL_STEP_KEY),
+          outputJson: persistedMaterial,
+          finishedAt: now,
+        },
+      });
+    } catch (error) {
+      this.#recordMaterialSourceFailure(job.id);
+      throw new PrepublishMaterialSourceError({ cause: error });
+    }
+  }
+
+  #recordMaterialSourceFailure(jobId: string): void {
+    const job = this.#requireJob(jobId);
+    if (job.status !== "created" && job.status !== "preparing_materials") {
+      return;
+    }
+
+    try {
+      const now = this.#now().toISOString();
+      this.#jobs.commitCheckpoint(jobId, {
+        status: "failed",
+        checkpoint: {
+          phase: "material_source_failed",
+        },
+        step: {
+          id: this.#createId(),
+          stepKey: PREPUBLISH_MATERIAL_STEP_KEY,
+          status: "failed",
+          attempt: this.#nextStepAttempt(jobId, PREPUBLISH_MATERIAL_STEP_KEY),
+          errorCode: "MATERIAL_SOURCE_UNAVAILABLE",
+          errorMessage:
+            "The configured pre-publish material source could not prepare valid material.",
+          finishedAt: now,
+        },
+      });
+    } catch {
+      process.emitWarning(
+        "Material-source failure could not be persisted for APP-02.",
+        { code: "APP_MATERIAL_FAILURE_PERSIST_FAILED" },
+      );
+    }
+  }
+
+  #recordBrowserAcquireFailure(jobId: string): void {
+    const job = this.#requireJob(jobId);
+    if (job.status !== "preparing_publish") {
+      return;
+    }
+
+    const openAction = this.#actionRequests.getCurrentOpenForJob(jobId);
+    if (openAction) {
+      return;
+    }
+
+    try {
+      const now = this.#now().toISOString();
+      this.#jobs.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: {
+          phase: "browser_session_unavailable",
+        },
+        step: {
+          id: this.#createId(),
+          stepKey: BROWSER_ACQUIRE_STEP_KEY,
+          status: "failed",
+          attempt: this.#nextStepAttempt(jobId, BROWSER_ACQUIRE_STEP_KEY),
+          errorCode: "BROWSER_UNAVAILABLE",
+          errorMessage: "The controlled browser runtime is currently unavailable.",
+          finishedAt: now,
+        },
+      });
+    } catch {
+      process.emitWarning(
+        "Browser acquisition failure could not be persisted for APP-02.",
+        { code: "APP_BROWSER_FAILURE_PERSIST_FAILED" },
+      );
+    }
+  }
+
+  #getMaterial(jobId: string): PersistedPrepublishMaterial | null {
+    return findPersistedPrepublishMaterial(
+      this.#jobs.getStepsForJob(jobId),
+    );
+  }
+
+  #requireMaterial(jobId: string): PersistedPrepublishMaterial {
+    const material = this.#getMaterial(jobId);
+    if (!material) {
+      throw new Error(
+        `Job ${jobId} has no durable material pack for pre-publish execution.`,
+      );
+    }
+    return material;
+  }
+
+  #nextStepAttempt(jobId: string, stepKey: string): number {
+    return (
+      this.#jobs
+        .getStepsForJob(jobId)
+        .filter((step) => step.stepKey === stepKey)
+        .reduce((highest, step) => Math.max(highest, step.attempt), 0) + 1
+    );
+  }
+
+  #requireJob(jobId: string): Job {
+    const job = this.#jobs.getById(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+    return job;
+  }
+
+  #publish(jobId: string): JobProjection {
+    const projection = this.#projections.get(jobId);
+    this.#events.publish(projection);
+    return projection;
+  }
+}

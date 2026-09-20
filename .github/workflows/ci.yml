@@ -135,6 +135,46 @@ jobs:
           YAML
           echo "SMOKE_COMPOSE_OVERLAY=$overlay" >> "$GITHUB_ENV"
 
+      - name: Prepare APP-02 controlled runtime smoke material
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="data/controlled-material"
+          mkdir -p "$root/assets"
+          printf 'fixture\n' > "$root/assets/cover-ci.png"
+          cat > "$root/material.json" <<'JSON'
+          {
+            "version": 1,
+            "source": "controlled_smoke",
+            "generatedFromBrief": false,
+            "pack": {
+              "mode": "image_text",
+              "status": "ready",
+              "planId": "ci-controlled-plan",
+              "copy": {
+                "title": "APP-02 CI controlled material",
+                "body": "Controlled runtime material for application startup verification.",
+                "tags": ["APP02", "smoke"]
+              },
+              "cover": {
+                "kind": "image",
+                "assetId": "cover-ci",
+                "uri": "asset://controlled/cover-ci",
+                "mimeType": "image/png",
+                "width": 1080,
+                "height": 1440
+              },
+              "images": [],
+              "design": null,
+              "warnings": [],
+              "degradations": []
+            }
+          }
+          JSON
+
+      - name: Build APP-02 app-runtime image
+        run: docker compose --profile app build app-runtime
+
       - name: Build and start browser-runtime
         run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" up -d --build browser-runtime
 
@@ -158,6 +198,32 @@ jobs:
           done
 
           test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+
+      - name: Start and verify APP-02 API runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" --profile app up -d --no-build --no-deps app-runtime
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health/ready >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3000/health/ready | grep -q '"status":"ready"'
+
+          response="$(curl -fsS -X POST http://127.0.0.1:3000/api/jobs \
+            -H 'content-type: application/json' \
+            --data '{"brief":"APP-02 runtime CI smoke","platform":"xiaohongshu","publishMode":"image_text"}')"
+
+          node -e '
+            const payload = JSON.parse(process.argv[1]);
+            if (!payload.job?.id || payload.job.status !== "created") process.exit(1);
+            if (payload.job.material !== null) process.exit(1);
+            console.log("[app-runtime-smoke] durable-job=" + payload.job.id);
+          ' "$response"
 
       - name: Verify CDP stays Compose-internal
         shell: bash
@@ -187,10 +253,10 @@ jobs:
               echo "[compose-smoke] session-constraint=done"
             '
 
-      - name: Browser-runtime logs on failure
+      - name: Runtime logs on failure
         if: failure()
-        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" --profile app logs browser-runtime app-runtime
 
-      - name: Stop browser-runtime
+      - name: Stop runtime services
         if: always()
-        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" down
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" --profile app down
