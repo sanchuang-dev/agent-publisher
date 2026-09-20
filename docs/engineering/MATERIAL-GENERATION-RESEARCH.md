@@ -22,32 +22,36 @@ The goal is not to select every future vendor. The goal is to identify the small
 
 The current architecture is directionally correct, but the real provider integrations should not start by dropping vendor adapters directly behind the existing provider interfaces.
 
-Two cross-cutting gaps must be addressed first:
+Two cross-cutting gaps must be addressed before the final vertical slice:
 
 1. the current `DesignProvider` contract cannot produce the image assets that the Xiaohongshu publishing path actually consumes;
 2. the schema contains an `assets` table, but the repository has no durable `AssetRepository` / `AssetStore` implementation that can ingest provider output and later resolve an `asset://` reference to a controlled local upload path.
 
-Recommended capability order:
+The product decision after this research is stronger than the original recommendation:
+
+> **The MVP must prove a Publisher-owned Builtin image-text material path. Canva and video are optional enhancements and must not be prerequisites for a valid image-text MVP.**
+
+Implementation is split for parallelism:
 
 ```text
-Material foundation
-  ↓
-Builtin rich-layout DesignProvider
-  ↓
-real Material preparation pipeline
-  ↓
-Canva template/design enhancement
-  ↓
-Canva generative candidate workflow
-  ↓
-Yu-Yu VideoProvider after API contract validation
+                 ┌─ MAT-02 Asset foundation
+MAT-01 baseline ─┼─ MAT-03 Design contract
+                 └─ MAT-04 SafeLayout + renderer core
+                           ↓
+                  MAT-05 vertical integration
+                           ↓
+                  Xiaohongshu prepare path
 ```
+
+The first three slices are intentionally independent. MAT-04 must not absorb AssetStore or MaterialPack integration merely to produce a demo; MAT-05 owns the cross-cutting join.
 
 The recommended product positioning is:
 
-- **Builtin renderer is the dependable baseline**, not merely an emergency fallback.
+- **Builtin renderer is the dependable baseline**, not an emergency fallback.
+- **SafeRichLayout is Publisher's contract**; the concrete renderer remains replaceable.
+- **Takumi is the current primary renderer candidate**, with Satori + resvg as the mature comparison/reference path.
 - **Canva is an optional advanced DesignProvider**, useful for existing brand/template workflows and later generative design.
-- **Video remains additive**. It should reuse Publisher checkpoints and asset ingestion rather than introducing a parallel job system.
+- **Video remains additive** and should reuse Publisher checkpoints and asset ingestion rather than introducing a parallel job system.
 
 ## 3. Current code reality
 
@@ -284,37 +288,31 @@ OSS/R2 can remain later implementations behind the same contract.
 
 ## 6. Builtin rich-layout renderer
 
-### 6.1 Recommendation
+### 6.1 Decision
 
-Build a Publisher-owned static rich-layout renderer and treat it as the dependable image-text baseline.
+Build a Publisher-owned static rich-layout renderer and treat it as a **required image-text MVP capability**.
 
-Do **not** let an Agent execute arbitrary HTML/JS inside the persistent browser runtime.
+Do **not** let an Agent execute arbitrary HTML/JS inside the persistent authenticated browser runtime.
 
-Instead, let an Agent produce a validated static layout document that is expressive enough for social cards but incapable of arbitrary execution or network access.
-
-Suggested flow:
+The Agent or deterministic planner should produce a validated static layout document owned by Publisher:
 
 ```text
-MaterialPlan + TextMaterial + source images
+MaterialPlan + TextMaterial + controlled source images
         ↓
-bounded design helper / deterministic planner
+bounded design planner
         ↓
 SafeRichLayout[]
         ↓
 schema + policy validation
         ↓
-Satori
+BuiltinLayoutRenderer
         ↓
-SVG
+PNG bytes (SVG optional)
         ↓
-resvg-js
-        ↓
-PNG
-        ↓
-AssetStore
-        ↓
-MaterialPack.cover + MaterialPack.images
+later: AssetStore / DesignProvider integration in MAT-05
 ```
+
+MAT-04 deliberately stops at deterministic render output so it can run in parallel with the AssetStore and DesignProvider contract slices.
 
 ### 6.2 SafeRichLayout
 
@@ -334,39 +332,45 @@ Divider
 Spacer
 ```
 
-The model may control bounded presentation attributes such as:
+The model may control bounded presentation attributes such as spacing, font size/weight, color, alignment, background, border/radius, image placement, emphasis, and page composition.
 
-- spacing;
-- font size/weight within allowed ranges;
-- color tokens or validated colors;
-- alignment;
-- background;
-- border/radius;
-- image placement;
-- emphasis;
-- page composition.
-
-It should not be able to introduce:
+It must not be able to introduce:
 
 - JavaScript;
 - iframe;
 - arbitrary fetch/network requests;
 - arbitrary external image/font URLs;
-- unbounded CSS;
-- arbitrary SVG references;
-- browser-only APIs.
+- browser APIs;
+- unbounded raw CSS or renderer-specific escape hatches.
 
-### 6.3 Why Satori + resvg-js fits the project
+SafeRichLayout is intentionally **not** Takumi JSX, Satori JSX, or arbitrary HTML. It is the Publisher-owned safety/product contract that can be mapped to one renderer.
 
-Satori converts a static JSX/object tree using a supported HTML/CSS subset into SVG. It supports direct object input without requiring raw HTML string execution, requires supplied fonts for text rendering, and does not support arbitrary `<script>`, external `<link>`, or `<style>` execution.
+### 6.3 Renderer candidates: Takumi first, Satori as reference
+
+The community landscape now supports a cleaner implementation choice than binding the architecture directly to Satori.
+
+**Takumi** is the current primary candidate. Its official project describes a Rust renderer that accepts JSX, HTML, and node trees and emits raster images or SVG without headless Chromium. Its internal model normalizes content into a small node tree and supports a broader CSS/layout surface including Flexbox and Grid.
+
+Reference: https://github.com/kane50613/takumi
+
+**Satori** remains a mature reference candidate. It converts static JSX/object trees through a supported HTML/CSS subset into SVG and is widely used for social/OG image generation. PNG output normally requires a second rasterization step such as resvg.
 
 Reference: https://github.com/vercel/satori
 
-resvg-js converts SVG to PNG from Node.js and has native/prebuilt support across common platforms including Apple Silicon.
+MAT-04 should run both against the same representative SafeRichLayout fixtures, then keep **one** production renderer.
 
-Reference: https://github.com/thx/resvg-js
+The bake-off should cover at least:
 
-This avoids coupling material rendering to the authenticated browser-runtime container.
+- 1080×1440 social card output;
+- Chinese/CJK shaping and wrapping;
+- representative Flex/Grid composition;
+- images, gradients, borders and radius;
+- deterministic dimensions;
+- macOS development runtime;
+- Linux/Docker runtime;
+- package/runtime footprint and observed failure modes.
+
+Do not pick Takumi because it is newer, and do not pick Satori because it is older. Pick the smallest renderer that actually passes Publisher's fixtures.
 
 ### 6.4 Important implementation constraints
 
@@ -374,13 +378,13 @@ This avoids coupling material rendering to the authenticated browser-runtime con
 
 Chinese output must not rely on whatever font happens to be installed on the developer machine.
 
-The renderer needs a deterministic CJK font strategy for local and Docker execution.
+Both candidate renderers require an explicit font strategy for non-Latin/CJK coverage. The chosen implementation needs deterministic font loading in local and Docker execution.
 
 Do not commit a font file without first verifying its redistribution/license boundary.
 
 #### Image ingestion
 
-Source images should be read from AssetStore and passed as controlled buffer/data input to the renderer.
+MAT-04 fixtures should use controlled local/buffer/data resources. When integrated in MAT-05, source images should be read through AssetStore.
 
 Do not allow arbitrary model-generated external image URLs to become renderer network requests.
 
@@ -396,13 +400,13 @@ Layout validation should enforce practical limits such as:
 - allowed image count;
 - deterministic overflow failure rather than clipped silent success.
 
-For Xiaohongshu, `1080 × 1440` is a practical first card size, but the size should live in a platform/design policy rather than be hard-coded throughout the material domain.
+For Xiaohongshu, `1080 × 1440` is a practical first card size, but the size should live in platform/design policy rather than be hard-coded throughout the material domain.
 
 ### 6.5 Difficulty
 
 Estimated engineering difficulty: **medium**.
 
-The difficult part is not rasterization. It is defining a sufficiently expressive but bounded layout contract, deterministic font behavior, and product-quality overflow handling.
+The difficult part is not PNG encoding. It is defining a sufficiently expressive but bounded layout contract, deterministic CJK font behavior, overflow rules, and choosing a renderer from actual evidence rather than API surface alone.
 
 ## 7. Canva MCP
 
@@ -698,9 +702,9 @@ This matches the existing product principle: visible failure, recovery, degradat
 
 ## 11. Implementation slices
 
-These are implementation recommendations, not pre-created Issues.
+These slices now correspond to the active milestone children under Issue #6.
 
-### Slice A — Material asset foundation
+### MAT-02 / #75 — Material asset foundation
 
 Outcome:
 
@@ -710,9 +714,9 @@ Outcome:
 - provide `resolveLocalPath()` compatible with the merged Xiaohongshu `AssetPathResolver`;
 - test ingest/read/resolve and missing/corrupt asset behavior.
 
-This is the common prerequisite for all real providers.
+**Parallel rule:** may start immediately; do not change DesignProvider or renderer behavior.
 
-### Slice B — DesignProvider contract correction
+### MAT-03 / #76 — DesignProvider contract correction
 
 Outcome:
 
@@ -721,57 +725,58 @@ Outcome:
 - migrate fake providers/tests;
 - preserve current degradation behavior.
 
-Keep this bounded to the material contract; do not implement a vendor in the same change if that makes the slice difficult to review.
+**Parallel rule:** may start immediately; do not implement AssetStore or a renderer.
 
-### Slice C — Builtin rich-layout DesignProvider
+### MAT-04 / #77 — SafeRichLayout + Builtin renderer core
 
 Outcome:
 
 - define `SafeRichLayout`;
 - schema/policy validation;
 - deterministic CJK font strategy;
-- Satori → SVG;
-- resvg-js → PNG;
-- ingest output into AssetStore;
-- produce one real Xiaohongshu-ready `MaterialPack` from a controlled brief.
+- compare Takumi against Satori + resvg using the same fixtures;
+- choose one production `BuiltinLayoutRenderer`;
+- render real PNG bytes without authenticated Chromium.
 
-### Slice D — Real MaterialPreparationService
+**Parallel rule:** may start immediately and does **not** depend on MAT-02/MAT-03. It must not assemble MaterialPack, persist through AssetStore, or touch the Xiaohongshu adapter.
+
+### MAT-05 / #78 — Real MaterialPreparationService vertical slice
+
+Starts after MAT-02/03/04 have landed on `dev`.
 
 Outcome:
 
-- connect the existing Content Secretary `MaterialPlan` to real Text/Image/Design provider execution;
-- checkpoint provider steps;
+- connect existing Content Secretary `MaterialPlan` to real material execution;
+- integrate the selected Builtin renderer through the corrected DesignProvider;
+- persist output through AssetStore;
+- checkpoint provider/material steps;
 - preserve accepted results across retry/degradation;
 - assemble a real `MaterialPack`;
-- hand it to the platform path.
+- hand it to the existing Xiaohongshu prepare path.
 
-### Slice E — Canva MCP spike
+The acceptance condition is deliberately strict: this vertical slice must pass with Canva unconfigured and VideoProvider unavailable.
 
-Outcome:
+### Follow-up — Canva MCP spike
+
+After the Builtin image-text MVP baseline is proven:
 
 - connect the official remote Canva MCP using current Publisher MCP infrastructure;
 - validate one operator OAuth;
 - validate fail-closed allowlist;
-- validate one read/design operation and export;
-- validate configured request timeout;
-- ingest one exported file into AssetStore;
-- record product/account/plan limitations.
+- validate one design/edit/export flow;
+- ingest exported files into AssetStore.
 
-Do not add candidate-selection UI in the spike.
+Do not make Canva a prerequisite for MAT-05.
 
-### Slice F — Canva controlled DesignProvider
-
-Outcome:
+### Follow-up — Canva controlled DesignProvider
 
 - use an existing approved Canva design/template-like source;
 - copy/edit/commit/export through bounded tools;
 - retain Canva design/edit provenance;
 - export and ingest PNG assets;
-- Builtin remains available when Canva is unavailable.
+- Builtin remains the fallback/base capability.
 
-### Slice G — Canva generative candidate workflow
-
-Outcome:
+### Follow-up — Canva generative candidate workflow
 
 - `generate-design`;
 - present candidates;
@@ -781,15 +786,11 @@ Outcome:
 - `create-design-from-candidate`;
 - export/ingest.
 
-This is intentionally later than the controlled Canva path.
-
-### Slice H — Yu-Yu API spike
-
-Outcome:
+### Follow-up — Yu-Yu API spike
 
 - read and record the real API contract;
 - verify authentication;
-- verify one generation against a non-production/controlled prompt;
+- verify one controlled generation;
 - establish submit/status/result semantics;
 - determine idempotency/retry behavior;
 - determine asset ingress/egress shape;
