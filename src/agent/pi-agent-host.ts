@@ -386,6 +386,10 @@ function buildSessionSystemPrompt(
 export class PiAgentHost implements AgentHost {
   readonly #options: PiAgentHostOptions;
 
+  get supportsDurableResume(): boolean {
+    return Boolean(this.#options.sessionDirectory);
+  }
+
   constructor(options: PiAgentHostOptions) {
     const initializationTimeoutMs =
       options.initializationTimeoutMs ?? DEFAULT_INITIALIZATION_TIMEOUT_MS;
@@ -417,10 +421,20 @@ export class PiAgentHost implements AgentHost {
     this.#assertInput(input);
 
     const cwd = this.#options.cwd ?? process.cwd();
-    const sessionManager = this.#options.sessionDirectory
-      ? SessionManager.create(cwd, this.#options.sessionDirectory)
-      : SessionManager.inMemory(cwd);
-    const ref = createPiAgentSessionRef(sessionManager.getSessionId());
+    let sessionManager: SessionManager;
+    let ref: AgentSessionRef;
+    try {
+      sessionManager = this.#options.sessionDirectory
+        ? SessionManager.create(cwd, this.#options.sessionDirectory)
+        : SessionManager.inMemory(cwd);
+      ref = createPiAgentSessionRef(sessionManager.getSessionId());
+    } catch (error) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_INITIALIZATION_FAILED",
+        `Agent session persistence initialization failed: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
 
     return this.#createWithSessionManager(
       input,
