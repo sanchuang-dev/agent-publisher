@@ -454,7 +454,11 @@ describe("Publisher Job context and Pi session resume boundary", () => {
 
     const incompatible = await createPersisted("job-future-session");
     const lines = readFileSync(incompatible.path, "utf8").trimEnd().split("\n");
-    const header = JSON.parse(lines[0]) as Record<string, unknown>;
+    const headerLine = lines[0];
+    if (!headerLine) {
+      throw new Error("persisted Pi session is unexpectedly empty");
+    }
+    const header = JSON.parse(headerLine) as Record<string, unknown>;
     header.version = CURRENT_SESSION_VERSION + 1;
     lines[0] = JSON.stringify(header);
     writeFileSync(incompatible.path, `${lines.join("\n")}\n`);
