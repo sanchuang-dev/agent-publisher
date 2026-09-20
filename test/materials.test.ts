@@ -277,7 +277,8 @@ describe("material contracts", () => {
 
   test("fake provider slots accept the inputs needed by later pipeline tests", async () => {
     const text = createFakeTextProvider();
-    const providers = createFakeProviderSlots({ text });
+    const design = createFakeDesignProvider();
+    const providers = createFakeProviderSlots({ text, design });
     const imageTextPlan = createImageTextPlanFixture();
     const videoPlan = createVideoPlanFixture();
     const copy = createTextMaterialFixture();
@@ -299,10 +300,7 @@ describe("material contracts", () => {
     expect(videoResult?.ok).toBe(true);
     expect(text.calls[0]).toBe(imageTextPlan);
     expect(providers.design?.slot).toBe("design");
-    expect(
-      "calls" in (providers.design ?? {}) &&
-        (providers.design as ReturnType<typeof createFakeDesignProvider>).calls[0],
-    ).toBe(designInput);
+    expect(design.calls[0]).toBe(designInput);
     expect(providers.image.slot).toBe("image");
     expect(providers.video?.slot).toBe("video");
 
