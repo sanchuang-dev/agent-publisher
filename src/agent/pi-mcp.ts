@@ -107,6 +107,12 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
     );
   }
 
+  if (url.username || url.password) {
+    throw new Error(
+      `MCP server "${server.name}" URL must not embed credentials`,
+    );
+  }
+
   const auth = server.transport.auth;
   const hasCredentials = auth !== undefined && auth.kind !== "none";
   const normalizedHost = url.hostname
