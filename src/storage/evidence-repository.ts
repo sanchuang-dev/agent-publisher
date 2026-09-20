@@ -84,20 +84,19 @@ const forbiddenKeyNames = new Set([
 
 const forbiddenStringPatterns = [
   /\bauthorization\s*:\s*bearer\b/i,
-  /\b(?:access_token|refresh_token|id_token|api_key|client_secret|password|passwd|cookie|set-cookie)\s*=/i,
-  /\b(?:storage[_-]?state|local[_-]?storage|session[_-]?storage)\s*[:=]/i,
+  /\b(?:access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|client[-_]?secret|password|passwd|cookie|set-cookie)\s*=/i,
+  /\b(?:storage[-_]?state|local[-_]?storage|session[-_]?storage)\s*[:=]/i,
 ];
 
 const forbiddenUriQueryKeys = new Set([
-  "access_token",
-  "api_key",
+  "accesstoken",
   "apikey",
   "authorization",
-  "client_secret",
+  "clientsecret",
   "cookie",
-  "id_token",
+  "idtoken",
   "password",
-  "refresh_token",
+  "refreshtoken",
   "token",
 ]);
 
@@ -222,9 +221,24 @@ function normalizeUri(
   }
 
   for (const key of parsed.searchParams.keys()) {
-    if (forbiddenUriQueryKeys.has(key.toLowerCase())) {
+    if (forbiddenUriQueryKeys.has(normalizeKeyName(key))) {
       throw new SensitivePublicationEvidenceError(`uri.query.${key}`);
     }
+  }
+
+  let decodedPathAndFragment: string;
+  try {
+    decodedPathAndFragment = decodeURIComponent(`${parsed.pathname}${parsed.hash}`);
+  } catch {
+    decodedPathAndFragment = `${parsed.pathname}${parsed.hash}`;
+  }
+
+  if (
+    forbiddenStringPatterns.some((pattern) =>
+      pattern.test(decodedPathAndFragment),
+    )
+  ) {
+    throw new SensitivePublicationEvidenceError("uri.path_or_fragment");
   }
 
   if (kind === "result_url" && parsed.protocol !== "https:" && parsed.protocol !== "http:") {
@@ -264,6 +278,10 @@ function normalizeValue(
       "value",
       `must be at most ${MAX_VALUE_LENGTH} characters`,
     );
+  }
+
+  if (forbiddenStringPatterns.some((pattern) => pattern.test(normalized))) {
+    throw new SensitivePublicationEvidenceError("value");
   }
 
   return normalized;
