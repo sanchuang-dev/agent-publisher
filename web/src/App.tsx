@@ -10,7 +10,7 @@ import {
   type TimelineStep,
   type Worker,
 } from "./model";
-import { taskRepository } from "./task-api";
+import { shouldAutoContinueTask, taskRepository } from "./task-api";
 
 type Route =
   | { page: "home" }
@@ -236,16 +236,11 @@ function TaskDetail({
     const scheduleContinue = (current: TaskFixture) => {
       if (fixtureState || cancelled) return;
 
-      const status = current.backendStatus;
-      if (
-        status !== "created" &&
-        status !== "preparing_materials" &&
-        status !== "preparing_publish" &&
-        status !== "waiting_for_login"
-      ) {
+      if (!shouldAutoContinueTask(current)) {
         return;
       }
 
+      const status = current.backendStatus;
       const delay = status === "waiting_for_login" ? 2500 : 120;
       timer = setTimeout(() => {
         void taskRepository
