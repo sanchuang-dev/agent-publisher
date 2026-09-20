@@ -171,6 +171,15 @@ function assertBoundedIdentity(
       `must be at most ${MAX_ID_LENGTH} characters`,
     );
   }
+
+  assertNoSensitiveString(value, field);
+
+  if (!safeReferencePattern.test(value)) {
+    throw new InvalidPublicationEvidenceError(
+      field,
+      "must be an application-generated bounded identifier",
+    );
+  }
 }
 
 function normalizeMetadata(
