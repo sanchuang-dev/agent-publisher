@@ -39,6 +39,7 @@
     "tsx": "4.23.13",
     "typescript": "7.0.2",
     "vite": "7.3.5",
-    "vitest": "3.2.6"
+    "vitest": "3.2.6",
+    "@types/cross-spawn": "6.0.6"
   }
 }
