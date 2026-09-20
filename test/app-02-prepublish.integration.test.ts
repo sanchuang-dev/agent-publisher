@@ -437,7 +437,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
           status: "waiting_for_approval",
           humanAction: { type: "approval_required" },
         },
-        blocked: false,
+        blocked: true,
         error: null,
       });
       expect(application.runtime.jobs.getById(created.id)).toMatchObject({
