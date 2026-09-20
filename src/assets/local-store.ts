@@ -103,12 +103,12 @@ export class LocalAssetStore implements AssetStore {
     try {
       return this.#repository.create({
         id: input.id,
-        jobId: input.jobId,
+        jobId: input.jobId ?? null,
         kind: input.kind,
         uri,
         mimeType: input.mimeType,
         checksum: digest,
-        metadata: input.metadata,
+        metadata: input.metadata ?? null,
       });
     } catch (error) {
       await unlink(filePath).catch(() => undefined);
