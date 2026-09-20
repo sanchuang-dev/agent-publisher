@@ -70,6 +70,31 @@ export interface TextMaterial {
   readonly tags: readonly string[];
 }
 
+/**
+ * Fully resolved image-text input for a design provider.
+ *
+ * Design providers do not reach into hidden orchestration state for copy or
+ * source imagery. The caller resolves those inputs first and supplies them
+ * explicitly with the image-text plan.
+ */
+export interface DesignRenderInput {
+  readonly plan: ImageTextMaterialPlan;
+  readonly copy: TextMaterial;
+  readonly sourceImages: readonly ImageAssetReference[];
+}
+
+/**
+ * Publishable output from a design provider.
+ *
+ * source keeps optional editable/provider provenance (for example a Canva
+ * design) while cover/images are the concrete platform-consumable assets.
+ */
+export interface DesignRenderResult {
+  readonly source: DesignAssetReference | null;
+  readonly cover: ImageAssetReference;
+  readonly images: readonly ImageAssetReference[];
+}
+
 export type MaterialWarningCode =
   | "VIDEO_PROVIDER_UNAVAILABLE"
   | "DESIGN_PROVIDER_UNAVAILABLE"
