@@ -8,7 +8,11 @@ import { join, resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { build, preview } from "vite";
 
+import { createMvpPrepublishApplication } from "../../src/app/mvp-prepublish-application.js";
+import { createControlledMaterialSource } from "../../src/app/prepublish-material-source.js";
+import type { BrowserProvider, BrowserSession } from "../../src/browser/provider.js";
 import {
+  fingerprintXiaohongshuImageTextMaterialPack,
   prepareXiaohongshuPublication,
   XiaohongshuComposerNotFreshError,
   XiaohongshuPageStateError,
@@ -140,7 +144,7 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   };
 
   for (const state of states) {
-    await page.goto(`${baseUrl}/#/task/${state}`, {
+    await page.goto(`${baseUrl}/#/fixture/${state}`, {
       waitUntil: "domcontentloaded",
     });
 
@@ -158,7 +162,7 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
     });
   }
 
-  await page.goto(`${baseUrl}/#/task/waiting_for_login`, {
+  await page.goto(`${baseUrl}/#/fixture/waiting_for_login`, {
     waitUntil: "domcontentloaded",
   });
   const fixtureFrame = page.locator('iframe[title="Browser Live View"]');
@@ -176,32 +180,89 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   assert.equal(await fixtureFrame.getAttribute("tabindex"), "-1");
   assert.equal(await page.getByText("控制权已让给你").count(), 0);
 
-  await page.goto(`${baseUrl}/#/task/waiting_for_approval`, {
+  await page.goto(`${baseUrl}/#/fixture/waiting_for_approval`, {
     waitUntil: "domcontentloaded",
   });
   await page.getByText("发布后将产生外部不可逆副作用").waitFor({
     state: "visible",
   });
 
-  await page.goto(`${baseUrl}/#/task/succeeded`, {
+  await page.goto(`${baseUrl}/#/fixture/succeeded`, {
     waitUntil: "domcontentloaded",
   });
   await page.getByText("结果地址").waitFor({ state: "visible" });
   await page.getByText("平台确认").waitFor({ state: "visible" });
 });
 
-test("Task Home assignment carries edited brief and video mode into detail", async (t) => {
+test("real Web assignment reaches APP-02 waiting_for_approval without publish", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-f3-real-ui-"));
+  const databasePath = join(root, "app.db");
+  const pack = createImageTextMaterialPackFixture();
+  const prepared = {
+    platform: "xiaohongshu" as const,
+    mode: "image_text" as const,
+    planId: pack.planId,
+    title: pack.copy.title,
+    bodyLength: pack.copy.body.length,
+    tags: pack.copy.tags,
+    imageAssetIds: [pack.cover, ...pack.images].map((asset) => asset.assetId),
+    imageCount: new Set([pack.cover.assetId, ...pack.images.map((asset) => asset.assetId)]).size,
+    contentFingerprint: fingerprintXiaohongshuImageTextMaterialPack(pack),
+    verifiedAt: "2026-09-20T12:00:00.000Z",
+  };
+
+  const browserProvider: BrowserProvider = {
+    async acquire(): Promise<BrowserSession> {
+      return {
+        id: "f3-browser-session",
+        profileRef: "f3-profile",
+        page: {} as BrowserSession["page"],
+      };
+    },
+    async release() {},
+    async health() {
+      return { status: "reachable" as const };
+    },
+  };
+
+  const application = createMvpPrepublishApplication({
+    databasePath,
+    browserProvider,
+    materialSource: createControlledMaterialSource(async () => pack),
+    resolveAssetPath: (asset) => "/controlled/" + asset.assetId + ".png",
+    xiaohongshu: {
+      openEntry: async () => ({ kind: "authenticated" }),
+      inspectEntry: async () => ({ kind: "authenticated" }),
+      preparePage: async (input) => {
+        await input.onMutationStarted?.();
+        return prepared;
+      },
+      verifyPreparedPage: async () => ({
+        title: prepared.title,
+        bodyLength: prepared.bodyLength,
+        tags: prepared.tags,
+        imageCount: prepared.imageCount,
+      }),
+    },
+  });
+
+  const backendOrigin = await application.start({
+    host: "127.0.0.1",
+    port: 3011,
+  });
+
   const vitePath = resolve("node_modules/vite/bin/vite.js");
+  const uiOrigin = "http://127.0.0.1:4174";
   const server = spawn(
     process.execPath,
     [vitePath, "web", "--host", "127.0.0.1", "--port", "4174", "--strictPort"],
     {
       cwd: process.cwd(),
+      env: { ...process.env, WEB_API_PROXY_TARGET: backendOrigin },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
 
-  const assignmentBaseUrl = "http://127.0.0.1:4174";
   let browser: Browser | undefined;
 
   t.after(async () => {
@@ -209,9 +270,11 @@ test("Task Home assignment carries edited brief and video mode into detail", asy
     if (server.exitCode === null) {
       server.kill("SIGTERM");
     }
+    await application.stop();
+    rmSync(root, { recursive: true, force: true });
   });
 
-  await waitForServer(server, assignmentBaseUrl);
+  await waitForServer(server, uiOrigin);
 
   browser = await chromium.launch({
     executablePath: findChrome(),
@@ -223,25 +286,46 @@ test("Task Home assignment carries edited brief and video mode into detail", asy
     viewport: { width: 1440, height: 900 },
   });
 
-  await page.goto(`${assignmentBaseUrl}/#/`, {
-    waitUntil: "domcontentloaded",
-  });
+  await page.goto(uiOrigin + "/#/", { waitUntil: "domcontentloaded" });
 
-  const brief = "用自定义 brief 发布一条视频任务";
+  const brief = "真人 Web → APP-02 预发布接线 smoke";
   await page.locator("#brief").fill(brief);
-  await page.getByRole("button", { name: "视频" }).click();
   await page.getByRole("button", { name: "交给内容秘书" }).click();
 
-  await page.getByRole("heading", { name: brief }).waitFor({
-    state: "visible",
-  });
-  await page.locator(".detail-meta").getByText("视频", { exact: true }).waitFor({
-    state: "visible",
-  });
-  await page.getByText("视频成片").waitFor({ state: "visible" });
-  await page.getByText("VIDEO").first().waitFor({ state: "visible" });
-});
+  await page.waitForURL(/#\/task\/[^/]+$/);
+  assert.equal(page.url().includes("#/fixture/"), false);
 
+  await page.getByText("执行秘书已准备好发布").waitFor({
+    state: "visible",
+    timeout: 10_000,
+  });
+  await page.getByText("受控测试物料 · generatedFromBrief=false").waitFor({
+    state: "visible",
+  });
+  await page.getByText(pack.copy.title, { exact: true }).first().waitFor({
+    state: "visible",
+  });
+
+  const publishButton = page.getByRole("button", { name: "批准发布" });
+  assert.equal(await publishButton.isDisabled(), true);
+  assert.equal(
+    await page.getByText("当前仅到审批前，最终发布尚未启用。").count(),
+    1,
+  );
+
+  const durableUrl = page.url();
+  await page.reload({ waitUntil: "domcontentloaded" });
+  assert.equal(page.url(), durableUrl);
+  await page.getByText("执行秘书已准备好发布").waitFor({
+    state: "visible",
+    timeout: 10_000,
+  });
+  await page.getByText(pack.copy.title, { exact: true }).first().waitFor({
+    state: "visible",
+  });
+
+  await assertThreeColumnLayout(page);
+});
 
 test("runtime config supports interactive takeover then revokes input on agent resume", async (t) => {
   const vitePath = resolve("node_modules/vite/bin/vite.js");
@@ -278,7 +362,7 @@ test("runtime config supports interactive takeover then revokes input on agent r
     viewport: { width: 1440, height: 900 },
   });
 
-  await page.goto(`${injectedBaseUrl}/#/task/waiting_for_login`, {
+  await page.goto(`${injectedBaseUrl}/#/fixture/waiting_for_login`, {
     waitUntil: "domcontentloaded",
   });
 
@@ -299,7 +383,7 @@ test("runtime config supports interactive takeover then revokes input on agent r
   );
 
   await page.evaluate(() => {
-    window.location.hash = "#/task/preparing_publish";
+    window.location.hash = "#/fixture/preparing_publish";
   });
   await page.getByText("执行秘书正在操作").waitFor({ state: "visible" });
   await page.waitForFunction(
@@ -387,7 +471,7 @@ test("production build preserves injected Live View runtime config", async (t) =
     viewport: { width: 1440, height: 900 },
   });
 
-  await page.goto(`${productionBaseUrl}/#/task/waiting_for_login`, {
+  await page.goto(`${productionBaseUrl}/#/fixture/waiting_for_login`, {
     waitUntil: "domcontentloaded",
   });
 

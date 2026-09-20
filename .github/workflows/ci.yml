@@ -36,6 +36,29 @@ jobs:
         run: npm run check
 
 
+  web-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run F3 focused Web tests
+        run: npx vitest run web/test/task-api.test.ts web/test/model.test.ts web/test/app.test.tsx
+
+      - name: Run backend-connected Web browser smoke
+        run: npm run test:browser
+
+
   browser-runtime-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 12

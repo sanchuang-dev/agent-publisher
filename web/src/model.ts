@@ -38,6 +38,9 @@ export interface TimelineStep {
 export interface TaskFixture {
   id: string;
   state: FixtureState;
+  backendStatus?: string;
+  runtimeSource?: "fixture" | "api";
+  updatedAt?: string;
   statusLabel: string;
   brief: string;
   platformLabel: "小红书";
@@ -52,6 +55,10 @@ export interface TaskFixture {
     body: string;
     tags: string[];
     media: string[];
+  };
+  materialProvenance?: {
+    source: "controlled_smoke" | "provider_pipeline";
+    generatedFromBrief: boolean;
   };
   browserLiveViewUrl?: string;
   browserLiveViewMode?: LiveViewMode;
@@ -282,11 +289,13 @@ export function getTaskFixture(
 
 export interface TaskRepository {
   list(): Promise<TaskFixture[]>;
-  get(state: FixtureState): Promise<TaskFixture>;
-  assign(input: TaskAssignmentInput): TaskFixture;
+  get(id: string): Promise<TaskFixture>;
+  assign(input: TaskAssignmentInput): Promise<TaskFixture>;
+  continue(id: string): Promise<TaskFixture>;
+  subscribe(id: string, listener: (task: TaskFixture) => void): () => void;
 }
 
-class FixtureTaskRepository implements TaskRepository {
+export class FixtureTaskRepository implements TaskRepository {
   private assignedTask: TaskFixture | undefined;
 
   private runtimeConfig(): LiveViewRuntimeConfig {
@@ -301,15 +310,19 @@ class FixtureTaskRepository implements TaskRepository {
     );
   }
 
-  async get(state: FixtureState): Promise<TaskFixture> {
-    if (state === "preparing_materials" && this.assignedTask) {
+  async get(id: string): Promise<TaskFixture> {
+    if (!isFixtureState(id)) {
+      throw new Error("Unknown fixture state: " + id);
+    }
+
+    if (id === "preparing_materials" && this.assignedTask) {
       return this.assignedTask;
     }
 
-    return getTaskFixture(state, undefined, this.runtimeConfig());
+    return getTaskFixture(id, undefined, this.runtimeConfig());
   }
 
-  assign(input: TaskAssignmentInput): TaskFixture {
+  async assign(input: TaskAssignmentInput): Promise<TaskFixture> {
     this.assignedTask = getTaskFixture(
       "preparing_materials",
       input,
@@ -317,9 +330,17 @@ class FixtureTaskRepository implements TaskRepository {
     );
     return this.assignedTask;
   }
+
+  async continue(id: string): Promise<TaskFixture> {
+    return this.get(id);
+  }
+
+  subscribe(): () => void {
+    return () => undefined;
+  }
 }
 
-export const taskRepository: TaskRepository = new FixtureTaskRepository();
+export const fixtureTaskRepository: TaskRepository = new FixtureTaskRepository();
 
 export function isFixtureState(value: string): value is FixtureState {
   return fixtureStates.includes(value as FixtureState);
