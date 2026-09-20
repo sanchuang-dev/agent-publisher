@@ -4,7 +4,9 @@ import {
   JobNotFoundError,
   type Job,
   type JobRepository,
+  type JobStep,
 } from "../contracts/job.js";
+import { assertJobStatusTransitionAllowed } from "../jobs/state-machine.js";
 import type { MaterialPlan } from "../materials/contracts.js";
 import { parseMaterialPlanOutput } from "../materials/material-plan-validation.js";
 import type { AgentDefinition } from "./definition.js";
@@ -70,9 +72,16 @@ export interface ContentSecretaryMaterialPlanResult {
   readonly job: Job;
 }
 
+export class ContentSecretaryJobStateConflictError extends Error {
+  constructor(readonly jobId: string, message: string) {
+    super(`Content Secretary cannot update Job ${jobId}: ${message}`);
+    this.name = "ContentSecretaryJobStateConflictError";
+  }
+}
+
 type ContentSecretaryJobs = Pick<
   JobRepository,
-  "getById" | "commitCheckpoint"
+  "getById" | "getStepsForJob" | "commitCheckpoint"
 >;
 
 type ContentSecretaryBindings = Pick<
@@ -84,6 +93,23 @@ type ContentSecretarySessions = Pick<
   JobAgentSessionService,
   "create" | "resume"
 >;
+
+function materialPlanSteps(steps: readonly JobStep[]): readonly JobStep[] {
+  return steps.filter((step) => step.stepKey === "material_plan");
+}
+
+function nextMaterialPlanAttempt(steps: readonly JobStep[]): number {
+  return (
+    materialPlanSteps(steps).reduce(
+      (highest, step) => Math.max(highest, step.attempt),
+      0,
+    ) + 1
+  );
+}
+
+function sameCheckpoint(left: Job["checkpoint"], right: Job["checkpoint"]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export class ContentSecretaryService {
   readonly #jobs: ContentSecretaryJobs;
@@ -107,6 +133,9 @@ export class ContentSecretaryService {
     if (!job) {
       throw new JobNotFoundError(jobId);
     }
+
+    const initialSteps = this.#jobs.getStepsForJob(job.id);
+    this.#assertPlanningState(job, initialSteps);
 
     const scope = { jobId: job.id, role: CONTENT_SECRETARY_ROLE };
     const existingBinding = this.#bindings.getForScope(scope);
@@ -134,6 +163,16 @@ export class ContentSecretaryService {
       });
       const finishedAt = new Date().toISOString();
 
+      // Re-read Publisher truth after the model run. If another workflow step
+      // advanced or rewrote the Job while the model was working, do not let a
+      // stale MaterialPlan overwrite that newer checkpoint. commitCheckpoint
+      // still performs the authoritative transition check transactionally.
+      const latestJob = this.#requireJob(job.id);
+      const latestSteps = this.#jobs.getStepsForJob(job.id);
+      this.#assertPlanningState(latestJob, latestSteps);
+      this.#assertJobSnapshotUnchanged(job, latestJob);
+
+      const attempt = nextMaterialPlanAttempt(latestSteps);
       const checkpointedJob = this.#jobs.commitCheckpoint(job.id, {
         status: "preparing_materials",
         checkpoint: {
@@ -141,10 +180,10 @@ export class ContentSecretaryService {
           materialPlanId: plan.id,
         },
         step: {
-          id: `${job.id}:material-plan:1`,
+          id: `${job.id}:material-plan:${attempt}`,
           stepKey: "material_plan",
           status: "succeeded",
-          attempt: 1,
+          attempt,
           outputJson: JSON.stringify(plan),
           startedAt,
           finishedAt,
@@ -154,6 +193,47 @@ export class ContentSecretaryService {
       return { plan, job: checkpointedJob };
     } finally {
       await session.dispose();
+    }
+  }
+
+  #requireJob(jobId: string): Job {
+    const job = this.#jobs.getById(jobId);
+    if (!job) {
+      throw new JobNotFoundError(jobId);
+    }
+    return job;
+  }
+
+  #assertPlanningState(job: Job, steps: readonly JobStep[]): void {
+    // The repository enforces this again at the transaction boundary. Checking
+    // before the model run avoids spending a model call on a Job that has
+    // already left material planning.
+    assertJobStatusTransitionAllowed(job.status, "preparing_materials");
+
+    if (
+      materialPlanSteps(steps).length > 0 &&
+      (job.status !== "preparing_materials" ||
+        job.currentStep !== "material_plan" ||
+        job.checkpoint?.phase !== "material_plan_ready")
+    ) {
+      throw new ContentSecretaryJobStateConflictError(
+        job.id,
+        "a MaterialPlan already exists but the Job has advanced beyond the material_plan checkpoint",
+      );
+    }
+  }
+
+  #assertJobSnapshotUnchanged(initial: Job, latest: Job): void {
+    if (
+      latest.status !== initial.status ||
+      latest.currentStep !== initial.currentStep ||
+      latest.updatedAt !== initial.updatedAt ||
+      !sameCheckpoint(latest.checkpoint, initial.checkpoint)
+    ) {
+      throw new ContentSecretaryJobStateConflictError(
+        initial.id,
+        "Publisher Job state changed while the Content Secretary was planning",
+      );
     }
   }
 }

@@ -353,3 +353,182 @@ test("two Publish Jobs receive isolated Content Secretary sessions and contexts"
     disposeHarness(harness);
   }
 });
+
+
+test("same Job resumes its Content Secretary session and preserves MaterialPlan attempt history", async () => {
+  const harness = await createHarness("publisher-content-secretary-resume");
+
+  try {
+    harness.jobs.create({
+      id: "job-replan",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ topic: "replan with history" }),
+    });
+
+    const firstPlan = imageTextPlan("plan-replan-1", "First plan");
+    const secondPlan = imageTextPlan("plan-replan-2", "Second plan");
+
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxText(JSON.stringify(firstPlan))),
+    ]);
+    await harness.secretary.createMaterialPlan("job-replan");
+
+    const firstBinding = harness.bindings.getForScope({
+      jobId: "job-replan",
+      role: CONTENT_SECRETARY_ROLE,
+    });
+    expect(firstBinding).not.toBeNull();
+
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxText(JSON.stringify(secondPlan))),
+    ]);
+    const secondResult = await harness.secretary.createMaterialPlan(
+      "job-replan",
+    );
+
+    const secondBinding = harness.bindings.getForScope({
+      jobId: "job-replan",
+      role: CONTENT_SECRETARY_ROLE,
+    });
+    expect(secondBinding?.sessionRef).toBe(firstBinding?.sessionRef);
+    expect(secondResult.plan).toEqual(secondPlan);
+
+    const planSteps = harness.jobs
+      .getStepsForJob("job-replan")
+      .filter((step) => step.stepKey === "material_plan");
+    expect(planSteps).toHaveLength(2);
+    expect(planSteps.map((step) => step.attempt)).toEqual([1, 2]);
+    expect(planSteps.map((step) => step.outputJson)).toEqual([
+      JSON.stringify(firstPlan),
+      JSON.stringify(secondPlan),
+    ]);
+    expect(secondResult.job.checkpoint).toEqual({
+      phase: "material_plan_ready",
+      materialPlanId: "plan-replan-2",
+    });
+  } finally {
+    disposeHarness(harness);
+  }
+});
+
+test("Content Secretary rejects a Job that already advanced past material planning without mutation", async () => {
+  const harness = await createHarness("publisher-content-secretary-state-guard");
+
+  try {
+    harness.jobs.create({
+      id: "job-past-planning",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ topic: "already advanced" }),
+    });
+    harness.jobs.commitCheckpoint("job-past-planning", {
+      status: "preparing_materials",
+      checkpoint: {
+        phase: "material_plan_ready",
+        materialPlanId: "existing-plan",
+      },
+      step: {
+        id: "job-past-planning:material-plan:1",
+        stepKey: "material_plan",
+        status: "succeeded",
+        attempt: 1,
+        outputJson: JSON.stringify(
+          imageTextPlan("existing-plan", "Existing plan"),
+        ),
+      },
+    });
+    harness.jobs.commitCheckpoint("job-past-planning", {
+      status: "preparing_publish",
+      checkpoint: { phase: "publish_preparation" },
+      step: {
+        id: "job-past-planning:prepare-publish:1",
+        stepKey: "prepare_publish",
+        status: "succeeded",
+      },
+    });
+
+    const before = harness.jobs.getById("job-past-planning");
+    const beforeSteps = harness.jobs.getStepsForJob("job-past-planning");
+
+    await expect(
+      harness.secretary.createMaterialPlan("job-past-planning"),
+    ).rejects.toMatchObject({
+      name: "IllegalJobStatusTransitionError",
+      fromStatus: "preparing_publish",
+      toStatus: "preparing_materials",
+    });
+
+    expect(harness.jobs.getById("job-past-planning")).toEqual(before);
+    expect(harness.jobs.getStepsForJob("job-past-planning")).toEqual(
+      beforeSteps,
+    );
+    expect(
+      harness.bindings.getForScope({
+        jobId: "job-past-planning",
+        role: CONTENT_SECRETARY_ROLE,
+      }),
+    ).toBeNull();
+  } finally {
+    disposeHarness(harness);
+  }
+});
+
+test("Content Secretary does not replace a later preparing_materials checkpoint", async () => {
+  const harness = await createHarness(
+    "publisher-content-secretary-material-phase-guard",
+  );
+
+  try {
+    harness.jobs.create({
+      id: "job-later-material-phase",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ topic: "images already generated" }),
+    });
+    harness.jobs.commitCheckpoint("job-later-material-phase", {
+      status: "preparing_materials",
+      checkpoint: {
+        phase: "material_plan_ready",
+        materialPlanId: "existing-plan",
+      },
+      step: {
+        id: "job-later-material-phase:material-plan:1",
+        stepKey: "material_plan",
+        status: "succeeded",
+        attempt: 1,
+        outputJson: JSON.stringify(
+          imageTextPlan("existing-plan", "Existing plan"),
+        ),
+      },
+    });
+    harness.jobs.commitCheckpoint("job-later-material-phase", {
+      status: "preparing_materials",
+      checkpoint: { phase: "images_ready" },
+      step: {
+        id: "job-later-material-phase:generate-images:1",
+        stepKey: "generate_images",
+        status: "succeeded",
+      },
+    });
+
+    const before = harness.jobs.getById("job-later-material-phase");
+    const beforeSteps = harness.jobs.getStepsForJob(
+      "job-later-material-phase",
+    );
+
+    await expect(
+      harness.secretary.createMaterialPlan("job-later-material-phase"),
+    ).rejects.toMatchObject({
+      name: "ContentSecretaryJobStateConflictError",
+      jobId: "job-later-material-phase",
+    });
+
+    expect(harness.jobs.getById("job-later-material-phase")).toEqual(before);
+    expect(
+      harness.jobs.getStepsForJob("job-later-material-phase"),
+    ).toEqual(beforeSteps);
+  } finally {
+    disposeHarness(harness);
+  }
+});
