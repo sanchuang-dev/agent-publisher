@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-
 import {
+  CURRENT_SESSION_VERSION,
   SessionManager,
   SettingsManager,
   createAgentSession,
@@ -16,6 +15,7 @@ import type {
   AgentTaskResult,
   AgentToolExecutionEvidence,
   CreatePublisherAgentSessionInput,
+  ResumePublisherAgentSessionInput,
 } from "./definition.js";
 import {
   AgentSessionError,
@@ -23,7 +23,11 @@ import {
   type PublisherAgentSession,
 } from "./host.js";
 import { compilePublisherMcpProfile } from "./pi-mcp.js";
-import { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
+import {
+  createPiAgentSessionRef,
+  parsePiAgentSessionRef,
+  type AgentSessionRef,
+} from "./session-ref.js";
 
 type PiAgentSession = Awaited<
   ReturnType<typeof createAgentSession>
@@ -46,7 +50,7 @@ export interface PiResourceLoaderFactoryInput {
   readonly systemPrompt: string;
   readonly cwd: string;
   readonly allowedTools: readonly string[];
-  readonly extensionFactories: readonly InlineExtension[];
+  readonly extensionFactories?: readonly InlineExtension[];
 }
 
 export interface PiAgentHostOptions {
@@ -58,6 +62,11 @@ export interface PiAgentHostOptions {
   readonly tools?: readonly string[];
   readonly sessionOptions?: PiHostSessionOptions;
   readonly cwd?: string;
+  /**
+   * Explicit Publisher-owned Pi session directory. When omitted, newly created
+   * sessions remain in-memory and process-restart resume is unavailable.
+   */
+  readonly sessionDirectory?: string;
   readonly initializationTimeoutMs?: number;
   readonly defaultRunTimeoutMs: number;
   readonly defaultAbortTimeoutMs?: number;
@@ -98,12 +107,8 @@ async function shutdownAndDispose(
     disposeError = error;
   }
 
-  if (shutdownError !== undefined) {
-    throw shutdownError;
-  }
-  if (disposeError !== undefined) {
-    throw disposeError;
-  }
+  if (shutdownError !== undefined) throw shutdownError;
+  if (disposeError !== undefined) throw disposeError;
 }
 
 async function safeDispose(
@@ -113,8 +118,7 @@ async function safeDispose(
   try {
     await shutdownAndDispose(session, timeoutMs);
   } catch {
-    // Cleanup after an initialization/run failure remains best-effort. Explicit
-    // Publisher dispose() surfaces teardown failures instead.
+    // Initialization/run failure cleanup remains best-effort.
   }
 }
 
@@ -211,34 +215,39 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
   #disposed = false;
   #running = false;
+  #disposeTask: Promise<void> | null = null;
 
   constructor(
     private readonly session: PiAgentSession,
+    ref: AgentSessionRef,
     definition: AgentDefinition,
     scope: AgentSessionScope,
     private readonly defaultRunTimeoutMs: number,
     private readonly defaultAbortTimeoutMs: number,
     private readonly defaultDisposeTimeoutMs: number,
   ) {
-    this.ref = asAgentSessionRef(`agent-session:${randomUUID()}`);
+    this.ref = ref;
     this.definition = definition;
     this.scope = scope;
   }
 
   async #invalidate(reportFailure = false): Promise<void> {
-    if (this.#disposed) {
-      return;
+    if (!this.#disposeTask) {
+      this.#disposed = true;
+      this.#disposeTask = shutdownAndDispose(
+        this.session,
+        this.defaultDisposeTimeoutMs,
+      );
     }
 
-    this.#disposed = true;
     try {
-      await shutdownAndDispose(this.session, this.defaultDisposeTimeoutMs);
+      await this.#disposeTask;
     } catch (error) {
       if (reportFailure) {
         throw new AgentSessionError(
           "AGENT_SESSION_DISPOSE_FAILED",
           `Agent session disposal failed: ${toMessage(error)}`,
-          { cause: error },
+          { cause: error, runStopped: true },
         );
       }
     }
@@ -414,8 +423,23 @@ class PiPublisherAgentSession implements PublisherAgentSession {
   }
 }
 
+function buildSessionSystemPrompt(
+  input: CreatePublisherAgentSessionInput,
+): string {
+  const stablePrompt = input.definition.systemPrompt.trim();
+  const dynamicContext = input.context?.trim();
+
+  return dynamicContext
+    ? `${stablePrompt}\n\n${dynamicContext}`
+    : stablePrompt;
+}
+
 export class PiAgentHost implements AgentHost {
   readonly #options: PiAgentHostOptions;
+
+  get supportsDurableResume(): boolean {
+    return Boolean(this.#options.sessionDirectory);
+  }
 
   constructor(options: PiAgentHostOptions) {
     const initializationTimeoutMs =
@@ -452,6 +476,116 @@ export class PiAgentHost implements AgentHost {
   async createSession(
     input: CreatePublisherAgentSessionInput,
   ): Promise<PublisherAgentSession> {
+    this.#assertInput(input);
+
+    const cwd = this.#options.cwd ?? process.cwd();
+    let sessionManager: SessionManager;
+    let ref: AgentSessionRef;
+    try {
+      sessionManager = this.#options.sessionDirectory
+        ? SessionManager.create(cwd, this.#options.sessionDirectory)
+        : SessionManager.inMemory(cwd);
+      ref = createPiAgentSessionRef(sessionManager.getSessionId());
+    } catch (error) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_INITIALIZATION_FAILED",
+        `Agent session persistence initialization failed: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
+
+    return this.#createWithSessionManager(
+      input,
+      sessionManager,
+      ref,
+      "AGENT_SESSION_INITIALIZATION_FAILED",
+      "initialization",
+    );
+  }
+
+  async resumeSession(
+    input: ResumePublisherAgentSessionInput,
+  ): Promise<PublisherAgentSession> {
+    this.#assertInput(input);
+
+    const sessionDirectory = this.#options.sessionDirectory;
+    if (!sessionDirectory) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RESUME_FAILED",
+        "Pi session resume requires an explicit Publisher session directory",
+        { runStopped: true },
+      );
+    }
+
+    const sessionId = parsePiAgentSessionRef(input.ref);
+    if (!sessionId) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_INCOMPATIBLE",
+        `Agent session reference is not compatible with this Pi host: ${input.ref}`,
+        { runStopped: true },
+      );
+    }
+
+    const cwd = this.#options.cwd ?? process.cwd();
+    let info: Awaited<ReturnType<typeof SessionManager.list>>[number] | undefined;
+    try {
+      const sessions = await SessionManager.list(cwd, sessionDirectory);
+      info = sessions.find((candidate) => candidate.id === sessionId);
+    } catch (error) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RESUME_FAILED",
+        `Failed to discover persisted Pi session ${input.ref}: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
+
+    if (!info) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_NOT_FOUND",
+        `Persisted Pi session is missing or unreadable: ${input.ref}`,
+        { runStopped: true },
+      );
+    }
+
+    let sessionManager: SessionManager;
+    try {
+      sessionManager = SessionManager.open(
+        info.path,
+        sessionDirectory,
+        cwd,
+      );
+    } catch (error) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RESUME_FAILED",
+        `Persisted Pi session could not be opened: ${input.ref}: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
+
+    const header = sessionManager.getHeader();
+    const persistedVersion = header?.version ?? 1;
+    if (
+      !header ||
+      header.id !== sessionId ||
+      persistedVersion > CURRENT_SESSION_VERSION
+    ) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_INCOMPATIBLE",
+        `Persisted Pi session is incompatible with @earendil-works/pi-coding-agent 0.85.1: ${input.ref}`,
+        { runStopped: true },
+      );
+    }
+
+    return this.#createWithSessionManager(
+      input,
+      sessionManager,
+      input.ref,
+      "AGENT_SESSION_RESUME_FAILED",
+      "resume",
+    );
+  }
+
+  #assertInput(input: CreatePublisherAgentSessionInput): void {
     assertSessionConfigNonEmpty(input.definition.id, "Agent definition id");
     assertSessionConfigNonEmpty(
       input.definition.systemPrompt,
@@ -459,16 +593,26 @@ export class PiAgentHost implements AgentHost {
     );
     assertSessionConfigNonEmpty(input.scope.jobId, "Agent session job id");
     assertSessionConfigNonEmpty(input.scope.role, "Agent session role");
+  }
 
+  async #createWithSessionManager(
+    input: CreatePublisherAgentSessionInput,
+    sessionManager: SessionManager,
+    ref: AgentSessionRef,
+    failureCode:
+      | "AGENT_SESSION_INITIALIZATION_FAILED"
+      | "AGENT_SESSION_RESUME_FAILED",
+    operation: "initialization" | "resume",
+  ): Promise<PublisherAgentSession> {
     const cwd = this.#options.cwd ?? process.cwd();
     let mcp;
     try {
       mcp = compilePublisherMcpProfile(input.definition.mcp);
     } catch (error) {
       throw new AgentSessionError(
-        "AGENT_SESSION_INITIALIZATION_FAILED",
-        `Agent MCP profile is invalid: ${toMessage(error)}`,
-        { cause: error },
+        failureCode,
+        `Agent MCP profile is invalid during ${operation}: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
       );
     }
 
@@ -478,11 +622,12 @@ export class PiAgentHost implements AgentHost {
         ...mcp.toolNames,
       ]),
     ];
+    const systemPrompt = buildSessionSystemPrompt(input);
     const creation = (async () => {
       const resourceLoader = await this.#options.createResourceLoader({
         definition: input.definition,
         scope: input.scope,
-        systemPrompt: input.definition.systemPrompt.trim(),
+        systemPrompt,
         cwd,
         allowedTools,
         extensionFactories: mcp.extensionFactories,
@@ -495,7 +640,7 @@ export class PiAgentHost implements AgentHost {
         modelRuntime: this.#options.modelRuntime,
         resourceLoader,
         tools: allowedTools,
-        sessionManager: SessionManager.inMemory(cwd),
+        sessionManager,
         settingsManager: SettingsManager.inMemory(),
       });
     })();
@@ -521,14 +666,27 @@ export class PiAgentHost implements AgentHost {
       }
 
       throw new AgentSessionError(
-        "AGENT_SESSION_INITIALIZATION_FAILED",
-        `Agent session initialization failed: ${toMessage(error)}`,
-        { cause: error },
+        failureCode,
+        `Agent session ${operation} failed: ${toMessage(error)}`,
+        { cause: error, runStopped: true },
+      );
+    }
+
+    if (created.session.sessionId !== sessionManager.getSessionId()) {
+      await safeDispose(
+        created.session,
+        this.#options.defaultDisposeTimeoutMs ?? DEFAULT_DISPOSE_TIMEOUT_MS,
+      );
+      throw new AgentSessionError(
+        "AGENT_SESSION_INCOMPATIBLE",
+        `Pi session identity changed while binding ${ref}`,
+        { runStopped: true },
       );
     }
 
     return new PiPublisherAgentSession(
       created.session,
+      ref,
       input.definition,
       input.scope,
       this.#options.defaultRunTimeoutMs,

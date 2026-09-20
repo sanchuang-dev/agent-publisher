@@ -165,6 +165,26 @@ export const migrations: readonly Migration[] = [
       );
     },
   },
+  {
+    version: 4,
+    name: "add-agent-session-bindings",
+    up(db) {
+      db.exec(`
+        CREATE TABLE agent_session_bindings (
+          job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          definition_id TEXT NOT NULL,
+          session_ref TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (job_id, role)
+        );
+
+        CREATE INDEX idx_agent_session_bindings_ref
+          ON agent_session_bindings(session_ref);
+      `);
+    },
+  },
 ];
 
 function readUserVersion(db: Database.Database): number {

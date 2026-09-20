@@ -39,6 +39,7 @@ interface JobRow {
   status: string;
   current_step: string | null;
   brief_json: string;
+  material_summary_json: string | null;
   checkpoint_json: string | null;
   created_at: string;
   updated_at: string;
@@ -77,6 +78,7 @@ function mapJob(row: JobRow): Job {
     status: row.status as Job["status"],
     currentStep: row.current_step,
     briefJson: row.brief_json,
+    materialSummaryJson: row.material_summary_json,
     checkpoint: row.checkpoint_json ? (JSON.parse(row.checkpoint_json) as Job["checkpoint"]) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -116,11 +118,19 @@ export class JobRepository implements JobRepositoryContract {
       .prepare(
         `INSERT INTO jobs (
           id, platform, publish_mode, status, current_step,
-          brief_json, checkpoint_json, version,
+          brief_json, material_summary_json, checkpoint_json, version,
           created_at, updated_at, completed_at
-        ) VALUES (?, ?, ?, 'created', NULL, ?, NULL, 0, ?, ?, NULL)`,
+        ) VALUES (?, ?, ?, 'created', NULL, ?, ?, NULL, 0, ?, ?, NULL)`,
       )
-      .run(input.id, input.platform, input.publishMode, input.briefJson, now, now);
+      .run(
+        input.id,
+        input.platform,
+        input.publishMode,
+        input.briefJson,
+        input.materialSummaryJson ?? null,
+        now,
+        now,
+      );
 
     return this.#requireJob(input.id);
   }
@@ -129,7 +139,8 @@ export class JobRepository implements JobRepositoryContract {
     const row = this.#db
       .prepare(
         `SELECT id, platform, publish_mode, status, current_step,
-                brief_json, checkpoint_json, created_at, updated_at, completed_at
+                brief_json, material_summary_json, checkpoint_json,
+                created_at, updated_at, completed_at
          FROM jobs
          WHERE id = ?`,
       )
