@@ -1010,6 +1010,48 @@
         }
       ],
       "comment": "Chromium Credentials::MoveToNewUserNS uses unshare(CLONE_NEWUSER); no other unshare namespace flags are allowed."
+    },
+    {
+      "names": [
+        "clone"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 0,
+          "value": 2114060288,
+          "valueTwo": 536870912,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ],
+      "comment": "Chromium zygote child fork: after entering the user namespace, ForkInNewPidNamespace uses clone(CLONE_NEWPID | SIGCHLD). Allow only the CLONE_NEWPID namespace bit.",
+      "excludes": {
+        "arches": [
+          "s390",
+          "s390x"
+        ]
+      }
+    },
+    {
+      "names": [
+        "clone"
+      ],
+      "action": "SCMP_ACT_ALLOW",
+      "args": [
+        {
+          "index": 1,
+          "value": 2114060288,
+          "valueTwo": 536870912,
+          "op": "SCMP_CMP_MASKED_EQ"
+        }
+      ],
+      "comment": "s390 Chromium zygote child fork: allow only CLONE_NEWPID in the namespace mask.",
+      "includes": {
+        "arches": [
+          "s390",
+          "s390x"
+        ]
+      }
     }
   ]
 }

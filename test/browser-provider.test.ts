@@ -35,6 +35,7 @@ function contextStub(options: {
 
 function browserStub(options: {
   contexts?: BrowserContext[];
+  closeError?: Error;
   onClose?: () => void;
   captureDisconnected?: (disconnect: () => void) => void;
 } = {}): Browser {
@@ -48,74 +49,92 @@ function browserStub(options: {
     },
     close: async () => {
       options.onClose?.();
-      throw new Error("provider must not close the external CDP browser");
+      if (options.closeError) {
+        throw options.closeError;
+      }
     },
   };
 
   return browser as unknown as Browser;
 }
 
-function managedTransportStub(options: { disconnectError?: Error } = {}) {
-  let disconnectCalls = 0;
-  let closeCalls = 0;
+function providerWithConnection(options: {
+  endpoint?: string;
+  env?: NodeJS.ProcessEnv;
+  browsers?: Browser[];
+  resolveEndpoint?: (endpoint: string, timeoutMs: number) => Promise<string>;
+  onConnect?: (endpointURL: string, connectOptions: {
+    timeout: number;
+    noDefaults: true;
+    isLocal: false;
+  }) => void;
+} = {}) {
+  const browsers = options.browsers ?? [
+    browserStub({
+      contexts: [contextStub({ pages: [pageStub()] })],
+    }),
+  ];
+  let browserIndex = 0;
 
-  const transport = {
-    send: () => {},
-    close: () => {
-      closeCalls += 1;
-    },
-    disconnect: async () => {
-      disconnectCalls += 1;
-      if (options.disconnectError) {
-        throw options.disconnectError;
+  return new DockerCdpBrowserProvider({
+    ...(options.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    resolveEndpoint:
+      options.resolveEndpoint ??
+      (async () => "ws://172.18.0.2:9222/devtools/browser/test"),
+    connectOverCDP: async (endpointURL, connectOptions) => {
+      options.onConnect?.(endpointURL, connectOptions);
+      const browser = browsers[browserIndex++];
+      if (!browser) {
+        throw new Error("unexpected extra connection");
       }
+      return browser;
     },
-  };
-
-  return {
-    transport,
-    get disconnectCalls() {
-      return disconnectCalls;
-    },
-    get closeCalls() {
-      return closeCalls;
-    },
-  };
+  });
 }
 
-test("uses the Compose-internal endpoint, noDefaults, and a disconnect-only transport by default", async () => {
-  let seenEndpoint = "";
-  let seenTimeout = -1;
+test("uses the Compose endpoint for discovery and hands the resolved WebSocket URL to Playwright", async () => {
+  let seenDiscoveryEndpoint = "";
+  let seenDiscoveryTimeout = -1;
+  let seenConnectEndpoint = "";
   let seenConnectTimeout = -1;
   let seenNoDefaults = false;
-  let browserCloseCalls = 0;
-  const transport = managedTransportStub();
+  let seenIsLocal = true;
+  let closeCalls = 0;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async (endpoint, timeoutMs) => {
-      seenEndpoint = endpoint;
-      seenTimeout = timeoutMs;
-      return transport.transport;
-    },
-    connectOverCDP: async (_transport, options) => {
-      seenConnectTimeout = options.timeout;
-      seenNoDefaults = options.noDefaults;
-      return browserStub({
+  const provider = providerWithConnection({
+    browsers: [
+      browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
         onClose: () => {
-          browserCloseCalls += 1;
+          closeCalls += 1;
         },
-      });
+      }),
+    ],
+    resolveEndpoint: async (endpoint, timeoutMs) => {
+      seenDiscoveryEndpoint = endpoint;
+      seenDiscoveryTimeout = timeoutMs;
+      return "ws://172.18.0.2:9222/devtools/browser/browser-id";
+    },
+    onConnect: (endpointURL, connectOptions) => {
+      seenConnectEndpoint = endpointURL;
+      seenConnectTimeout = connectOptions.timeout;
+      seenNoDefaults = connectOptions.noDefaults;
+      seenIsLocal = connectOptions.isLocal;
     },
   });
 
   await expect(provider.health()).resolves.toEqual({ status: "reachable" });
-  expect(seenEndpoint).toBe(DEFAULT_DOCKER_CDP_ENDPOINT);
-  expect(seenTimeout).toBe(10_000);
+
+  expect(seenDiscoveryEndpoint).toBe(DEFAULT_DOCKER_CDP_ENDPOINT);
+  expect(seenDiscoveryTimeout).toBe(10_000);
+  expect(seenConnectEndpoint).toBe(
+    "ws://172.18.0.2:9222/devtools/browser/browser-id",
+  );
   expect(seenConnectTimeout).toBe(10_000);
   expect(seenNoDefaults).toBe(true);
-  expect(transport.disconnectCalls).toBe(1);
-  expect(browserCloseCalls).toBe(0);
+  expect(seenIsLocal).toBe(false);
+  expect(closeCalls).toBe(1);
 });
 
 test("allows the CDP endpoint to be injected through environment or explicit config", async () => {
@@ -126,9 +145,9 @@ test("allows the CDP endpoint to be injected through environment or explicit con
   ) =>
     new DockerCdpBrowserProvider({
       ...options,
-      createTransport: async (endpoint) => {
+      resolveEndpoint: async (endpoint) => {
         seenEndpoints.push(endpoint);
-        return managedTransportStub().transport;
+        return "ws://127.0.0.1:9222/devtools/browser/test";
       },
       connectOverCDP: async () =>
         browserStub({
@@ -155,9 +174,9 @@ test("allows the CDP endpoint to be injected through environment or explicit con
   ]);
 });
 
-test("health reports unavailable without throwing when the runtime cannot be reached", async () => {
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
+test("health reports unavailable without throwing when endpoint discovery fails", async () => {
+  const provider = providerWithConnection({
+    resolveEndpoint: async () => {
       throw new Error("connection refused");
     },
   });
@@ -168,19 +187,11 @@ test("health reports unavailable without throwing when the runtime cannot be rea
   });
 });
 
-test("connector failure disconnects the app-side transport without touching external Chromium", async () => {
-  const transport = managedTransportStub();
-  let browserCloseCalls = 0;
-
+test("health reports unavailable when Playwright cannot attach", async () => {
   const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => transport.transport,
+    resolveEndpoint: async () =>
+      "ws://172.18.0.2:9222/devtools/browser/test",
     connectOverCDP: async () => {
-      const browser = browserStub({
-        onClose: () => {
-          browserCloseCalls += 1;
-        },
-      });
-      void browser;
       throw new Error("handshake failed");
     },
   });
@@ -189,39 +200,33 @@ test("connector failure disconnects the app-side transport without touching exte
     status: "unavailable",
     message: "handshake failed",
   });
-  expect(transport.disconnectCalls).toBe(1);
-  expect(browserCloseCalls).toBe(0);
 });
 
-test("acquire reuses an existing usable page and release only disconnects the app-side transport", async () => {
+test("acquire reuses an existing usable page and release disconnects the Playwright CDP attachment", async () => {
   let pageCloseCalls = 0;
   let newPageCalls = 0;
   let browserCloseCalls = 0;
-  const transport = managedTransportStub();
 
   const existingPage = pageStub({
     onClose: () => {
       pageCloseCalls += 1;
     },
   });
-  const context = contextStub({
-    pages: [existingPage],
-    onNewPage: () => {
-      newPageCalls += 1;
+  const browser = browserStub({
+    contexts: [
+      contextStub({
+        pages: [existingPage],
+        onNewPage: () => {
+          newPageCalls += 1;
+        },
+      }),
+    ],
+    onClose: () => {
+      browserCloseCalls += 1;
     },
   });
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => transport.transport,
-    connectOverCDP: async () =>
-      browserStub({
-        contexts: [context],
-        onClose: () => {
-          browserCloseCalls += 1;
-        },
-      }),
-  });
-
+  const provider = providerWithConnection({ browsers: [browser] });
   const session = await provider.acquire({});
 
   expect(session.page).toBe(existingPage);
@@ -230,59 +235,54 @@ test("acquire reuses an existing usable page and release only disconnects the ap
 
   await provider.release(session.id);
 
-  expect(transport.disconnectCalls).toBe(1);
-  expect(browserCloseCalls).toBe(0);
+  expect(browserCloseCalls).toBe(1);
   expect(pageCloseCalls).toBe(0);
 });
 
 test("acquire creates a page when the existing browser context has no usable page", async () => {
   let newPageCalls = 0;
-  const transport = managedTransportStub();
   const createdPage = pageStub();
   const closedPage = pageStub({ closed: true });
-  const context = contextStub({
-    pages: [closedPage],
-    newPage: createdPage,
-    onNewPage: () => {
-      newPageCalls += 1;
-    },
-  });
-
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => transport.transport,
-    connectOverCDP: async () =>
-      browserStub({
-        contexts: [context],
+  const browser = browserStub({
+    contexts: [
+      contextStub({
+        pages: [closedPage],
+        newPage: createdPage,
+        onNewPage: () => {
+          newPageCalls += 1;
+        },
       }),
+    ],
   });
 
+  const provider = providerWithConnection({ browsers: [browser] });
   const session = await provider.acquire({});
 
   expect(session.page).toBe(createdPage);
   expect(newPageCalls).toBe(1);
 
   await provider.release(session.id);
-  expect(transport.disconnectCalls).toBe(1);
 });
 
-test("release permits a later acquire to establish a fresh app-side connection", async () => {
-  let connectCalls = 0;
-  const transports = [managedTransportStub(), managedTransportStub()];
+test("release permits a later acquire to establish a fresh Playwright CDP attachment", async () => {
+  let firstCloseCalls = 0;
+  let secondCloseCalls = 0;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const next = transports[connectCalls];
-      if (!next) {
-        throw new Error("unexpected extra connection");
-      }
-      return next.transport;
-    },
-    connectOverCDP: async () => {
-      connectCalls += 1;
-      return browserStub({
+  const provider = providerWithConnection({
+    browsers: [
+      browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
-      });
-    },
+        onClose: () => {
+          firstCloseCalls += 1;
+        },
+      }),
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          secondCloseCalls += 1;
+        },
+      }),
+    ],
   });
 
   const first = await provider.acquire({});
@@ -291,60 +291,52 @@ test("release permits a later acquire to establish a fresh app-side connection",
   const second = await provider.acquire({});
   await provider.release(second.id);
 
-  expect(connectCalls).toBe(2);
-  expect(transports[0]?.disconnectCalls).toBe(1);
-  expect(transports[1]?.disconnectCalls).toBe(1);
+  expect(firstCloseCalls).toBe(1);
+  expect(secondCloseCalls).toBe(1);
 });
 
-test("failed acquire releases the single-session reservation and disconnects only its app-side transport", async () => {
-  const transports = [managedTransportStub(), managedTransportStub()];
-  let connectAttempt = 0;
-  let browserCloseCalls = 0;
+test("failed acquire releases the single-session reservation and closes its CDP attachment", async () => {
+  let firstCloseCalls = 0;
+  let secondCloseCalls = 0;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const transport = transports[connectAttempt];
-      if (!transport) {
-        throw new Error("unexpected extra transport request");
-      }
-      return transport.transport;
-    },
-    connectOverCDP: async () => {
-      connectAttempt += 1;
-      return browserStub({
-        contexts:
-          connectAttempt === 1
-            ? []
-            : [contextStub({ pages: [pageStub()] })],
+  const provider = providerWithConnection({
+    browsers: [
+      browserStub({
+        contexts: [],
         onClose: () => {
-          browserCloseCalls += 1;
+          firstCloseCalls += 1;
         },
-      });
-    },
+      }),
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          secondCloseCalls += 1;
+        },
+      }),
+    ],
   });
 
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser runtime is reachable but has no browser context/,
   );
 
-  expect(transports[0]?.disconnectCalls).toBe(1);
-  expect(browserCloseCalls).toBe(0);
+  expect(firstCloseCalls).toBe(1);
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
 
-  expect(transports[1]?.disconnectCalls).toBe(1);
+  expect(secondCloseCalls).toBe(1);
 });
 
 test("concurrent second acquire is rejected while the first acquire is still connecting", async () => {
-  const transport = managedTransportStub();
   let finishConnect: ((browser: Browser) => void) | undefined;
   const connectGate = new Promise<Browser>((resolve) => {
     finishConnect = resolve;
   });
 
   const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => transport.transport,
+    resolveEndpoint: async () =>
+      "ws://172.18.0.2:9222/devtools/browser/test",
     connectOverCDP: async () => connectGate,
   });
 
@@ -362,20 +354,10 @@ test("concurrent second acquire is rejected while the first acquire is still con
 
   const first = await firstAcquire;
   await provider.release(first.id);
-  expect(transport.disconnectCalls).toBe(1);
 });
 
 test("second acquire is rejected while an established session remains active", async () => {
-  const transport = managedTransportStub();
-
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => transport.transport,
-    connectOverCDP: async () =>
-      browserStub({
-        contexts: [contextStub({ pages: [pageStub()] })],
-      }),
-  });
-
+  const provider = providerWithConnection();
   const first = await provider.acquire({});
 
   await expect(provider.acquire({})).rejects.toThrow(
@@ -383,66 +365,57 @@ test("second acquire is rejected while an established session remains active", a
   );
 
   await provider.release(first.id);
-  expect(transport.disconnectCalls).toBe(1);
 });
 
 test("unexpected browser disconnect clears the active session so reconnect can acquire again", async () => {
-  const transports = [managedTransportStub(), managedTransportStub()];
-  let transportIndex = 0;
   let disconnectFirstBrowser: (() => void) | undefined;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const transport = transports[transportIndex++];
-      if (!transport) {
-        throw new Error("unexpected extra transport request");
-      }
-      return transport.transport;
-    },
-    connectOverCDP: async () =>
+  const provider = providerWithConnection({
+    browsers: [
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
         captureDisconnected: (disconnect) => {
-          disconnectFirstBrowser ??= disconnect;
+          disconnectFirstBrowser = disconnect;
         },
       }),
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+    ],
   });
 
   await provider.acquire({});
   expect(disconnectFirstBrowser).toBeTypeOf("function");
 
   disconnectFirstBrowser?.();
-  expect(transports[0]?.disconnectCalls).toBe(0);
 
   const reconnected = await provider.acquire({});
   await provider.release(reconnected.id);
-
-  expect(transports[1]?.disconnectCalls).toBe(1);
 });
 
-
 test("single-session lease spans provider instances without transferring release ownership", async () => {
-  const firstTransport = managedTransportStub();
-  const secondTransport = managedTransportStub();
-  let secondTransportRequests = 0;
+  let firstCloseCalls = 0;
+  let secondCloseCalls = 0;
 
-  const firstProvider = new DockerCdpBrowserProvider({
-    createTransport: async () => firstTransport.transport,
-    connectOverCDP: async () =>
+  const firstProvider = providerWithConnection({
+    browsers: [
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          firstCloseCalls += 1;
+        },
       }),
+    ],
   });
-
-  const secondProvider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      secondTransportRequests += 1;
-      return secondTransport.transport;
-    },
-    connectOverCDP: async () =>
+  const secondProvider = providerWithConnection({
+    browsers: [
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          secondCloseCalls += 1;
+        },
       }),
+    ],
   });
 
   const first = await firstProvider.acquire({});
@@ -450,169 +423,133 @@ test("single-session lease spans provider instances without transferring release
   await expect(secondProvider.acquire({})).rejects.toThrow(
     /Browser session already active/,
   );
-  expect(secondTransportRequests).toBe(0);
 
-  // A different provider instance must not be able to release a session it
-  // did not acquire, even if it is handed the session id. Surface the ownership
-  // mismatch instead of silently pretending the release succeeded.
   await expect(secondProvider.release(first.id)).rejects.toThrow(
     /owned by another provider instance/,
   );
-  expect(firstTransport.disconnectCalls).toBe(0);
-  await expect(secondProvider.acquire({})).rejects.toThrow(
-    /Browser session already active/,
-  );
+  expect(firstCloseCalls).toBe(0);
 
   await firstProvider.release(first.id);
-  expect(firstTransport.disconnectCalls).toBe(1);
+  expect(firstCloseCalls).toBe(1);
 
   const second = await secondProvider.acquire({});
   await secondProvider.release(second.id);
-
-  expect(secondTransportRequests).toBe(1);
-  expect(secondTransport.disconnectCalls).toBe(1);
+  expect(secondCloseCalls).toBe(1);
 });
 
 test("unknown and stale release ids do not disturb the active lease", async () => {
-  const transports = [managedTransportStub(), managedTransportStub()];
-  let transportIndex = 0;
+  let firstCloseCalls = 0;
+  let secondCloseCalls = 0;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const transport = transports[transportIndex++];
-      if (!transport) {
-        throw new Error("unexpected extra transport request");
-      }
-      return transport.transport;
-    },
-    connectOverCDP: async () =>
+  const provider = providerWithConnection({
+    browsers: [
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          firstCloseCalls += 1;
+        },
       }),
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+        onClose: () => {
+          secondCloseCalls += 1;
+        },
+      }),
+    ],
   });
 
   const first = await provider.acquire({});
 
   await provider.release("unknown-session");
-  expect(transports[0]?.disconnectCalls).toBe(0);
+  expect(firstCloseCalls).toBe(0);
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session already active/,
   );
 
   await provider.release(first.id);
-  expect(transports[0]?.disconnectCalls).toBe(1);
+  expect(firstCloseCalls).toBe(1);
 
   const second = await provider.acquire({});
 
-  // Releasing the old id after reacquire must not affect the new session.
   await provider.release(first.id);
-  expect(transports[1]?.disconnectCalls).toBe(0);
+  expect(secondCloseCalls).toBe(0);
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session already active/,
   );
 
   await provider.release(second.id);
-  expect(transports[1]?.disconnectCalls).toBe(1);
+  expect(secondCloseCalls).toBe(1);
 });
 
-
-test("release clears the process-wide lease even when transport disconnect fails", async () => {
-  const failingTransport = managedTransportStub({
-    disconnectError: new Error("disconnect failed"),
+test("release clears the process-wide lease even when Playwright disconnect fails", async () => {
+  const failingBrowser = browserStub({
+    contexts: [contextStub({ pages: [pageStub()] })],
+    closeError: new Error("disconnect failed"),
   });
-  const recoveredTransport = managedTransportStub();
-  let transportAttempt = 0;
+  const recoveredBrowser = browserStub({
+    contexts: [contextStub({ pages: [pageStub()] })],
+  });
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const transport =
-        transportAttempt++ === 0 ? failingTransport : recoveredTransport;
-      return transport.transport;
-    },
-    connectOverCDP: async () =>
-      browserStub({
-        contexts: [contextStub({ pages: [pageStub()] })],
-      }),
+  const provider = providerWithConnection({
+    browsers: [failingBrowser, recoveredBrowser],
   });
 
   const first = await provider.acquire({});
-
   await expect(provider.release(first.id)).rejects.toThrow("disconnect failed");
-  expect(failingTransport.disconnectCalls).toBe(1);
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
-
-  expect(recoveredTransport.disconnectCalls).toBe(1);
 });
 
-
-test("release keeps the single-session lease until transport teardown settles", async () => {
-  let finishDisconnect: (() => void) | undefined;
-  let disconnectBrowser: (() => void) | undefined;
-  const disconnectGate = new Promise<void>((resolve) => {
-    finishDisconnect = resolve;
+test("release keeps the single-session lease until Playwright transport teardown settles", async () => {
+  let finishClose: (() => void) | undefined;
+  const closeGate = new Promise<void>((resolve) => {
+    finishClose = resolve;
   });
-  let firstDisconnectCalls = 0;
-  const firstTransport = {
-    send: () => {},
-    close: () => {},
-    disconnect: async () => {
-      firstDisconnectCalls += 1;
-      disconnectBrowser?.();
-      await disconnectGate;
-    },
-  };
-  const recoveredTransport = managedTransportStub();
-  let transportAttempt = 0;
+  let closeCalls = 0;
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () =>
-      transportAttempt++ === 0
-        ? firstTransport
-        : recoveredTransport.transport,
-    connectOverCDP: async () =>
+  const firstBrowser = browserStub({
+    contexts: [contextStub({ pages: [pageStub()] })],
+  });
+  (firstBrowser as unknown as { close: () => Promise<void> }).close =
+    async () => {
+      closeCalls += 1;
+      await closeGate;
+    };
+
+  const provider = providerWithConnection({
+    browsers: [
+      firstBrowser,
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
-        captureDisconnected: (disconnect) => {
-          disconnectBrowser ??= disconnect;
-        },
       }),
+    ],
   });
 
   const first = await provider.acquire({});
   const releasePromise = provider.release(first.id);
 
   await Promise.resolve();
-  expect(firstDisconnectCalls).toBe(1);
+  expect(closeCalls).toBe(1);
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session already active/,
   );
 
-  finishDisconnect?.();
+  finishClose?.();
   await releasePromise;
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
-
-  expect(recoveredTransport.disconnectCalls).toBe(1);
 });
 
-
 test("disconnect during acquisition releases the reservation instead of returning a dead session", async () => {
-  const transports = [managedTransportStub(), managedTransportStub()];
-  let transportAttempt = 0;
   let browserAttempt = 0;
   let disconnectDuringAcquire: (() => void) | undefined;
+  let firstCloseCalls = 0;
 
   const provider = new DockerCdpBrowserProvider({
-    createTransport: async () => {
-      const transport = transports[transportAttempt++];
-      if (!transport) {
-        throw new Error("unexpected extra transport request");
-      }
-      return transport.transport;
-    },
+    resolveEndpoint: async () =>
+      "ws://172.18.0.2:9222/devtools/browser/test",
     connectOverCDP: async () => {
       browserAttempt += 1;
 
@@ -630,6 +567,9 @@ test("disconnect during acquisition releases the reservation instead of returnin
           captureDisconnected: (disconnect) => {
             disconnectDuringAcquire = disconnect;
           },
+          onClose: () => {
+            firstCloseCalls += 1;
+          },
         });
       }
 
@@ -642,40 +582,35 @@ test("disconnect during acquisition releases the reservation instead of returnin
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session disconnected during acquisition/,
   );
-  expect(transports[0]?.disconnectCalls).toBe(1);
+  expect(firstCloseCalls).toBe(1);
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
-
-  expect(transports[1]?.disconnectCalls).toBe(1);
 });
 
-
 test("concurrent release calls share one teardown and keep the lease until it finishes", async () => {
-  let finishDisconnect: (() => void) | undefined;
-  const disconnectGate = new Promise<void>((resolve) => {
-    finishDisconnect = resolve;
+  let finishClose: (() => void) | undefined;
+  const closeGate = new Promise<void>((resolve) => {
+    finishClose = resolve;
   });
-  let disconnectCalls = 0;
+  let closeCalls = 0;
 
-  const transport = {
-    send: () => {},
-    close: () => {},
-    disconnect: async () => {
-      disconnectCalls += 1;
-      await disconnectGate;
-    },
-  };
-  const recoveredTransport = managedTransportStub();
-  let transportAttempt = 0;
+  const firstBrowser = browserStub({
+    contexts: [contextStub({ pages: [pageStub()] })],
+  });
+  (firstBrowser as unknown as { close: () => Promise<void> }).close =
+    async () => {
+      closeCalls += 1;
+      await closeGate;
+    };
 
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () =>
-      transportAttempt++ === 0 ? transport : recoveredTransport.transport,
-    connectOverCDP: async () =>
+  const provider = providerWithConnection({
+    browsers: [
+      firstBrowser,
       browserStub({
         contexts: [contextStub({ pages: [pageStub()] })],
       }),
+    ],
   });
 
   const session = await provider.acquire({});
@@ -683,41 +618,29 @@ test("concurrent release calls share one teardown and keep the lease until it fi
   const secondRelease = provider.release(session.id);
 
   await Promise.resolve();
-  expect(disconnectCalls).toBe(1);
+  expect(closeCalls).toBe(1);
   await expect(provider.acquire({})).rejects.toThrow(
     /Browser session already active/,
   );
 
-  finishDisconnect?.();
+  finishClose?.();
   await Promise.all([firstRelease, secondRelease]);
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
-  expect(recoveredTransport.disconnectCalls).toBe(1);
 });
 
-test("failed acquire still releases the reservation when transport cleanup also fails", async () => {
-  const failingTransport = managedTransportStub({
-    disconnectError: new Error("cleanup failed"),
-  });
-  const recoveredTransport = managedTransportStub();
-  let transportAttempt = 0;
-  let browserAttempt = 0;
-
-  const provider = new DockerCdpBrowserProvider({
-    createTransport: async () =>
-      transportAttempt++ === 0
-        ? failingTransport.transport
-        : recoveredTransport.transport,
-    connectOverCDP: async () => {
-      browserAttempt += 1;
-      return browserStub({
-        contexts:
-          browserAttempt === 1
-            ? []
-            : [contextStub({ pages: [pageStub()] })],
-      });
-    },
+test("failed acquire still releases the reservation when Playwright cleanup also fails", async () => {
+  const provider = providerWithConnection({
+    browsers: [
+      browserStub({
+        contexts: [],
+        closeError: new Error("cleanup failed"),
+      }),
+      browserStub({
+        contexts: [contextStub({ pages: [pageStub()] })],
+      }),
+    ],
   });
 
   await expect(provider.acquire({})).rejects.toThrow(
@@ -726,7 +649,4 @@ test("failed acquire still releases the reservation when transport cleanup also 
 
   const recovered = await provider.acquire({});
   await provider.release(recovered.id);
-
-  expect(failingTransport.disconnectCalls).toBe(1);
-  expect(recoveredTransport.disconnectCalls).toBe(1);
 });

@@ -13,6 +13,7 @@ RUN apt-get update \
         fonts-liberation \
         gosu \
         novnc \
+        socat \
         tini \
         websockify \
         x11vnc \

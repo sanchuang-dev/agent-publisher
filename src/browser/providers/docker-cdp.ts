@@ -8,25 +8,22 @@ import type {
   BrowserProviderHealth,
   BrowserSession,
 } from "../provider.js";
-import {
-  createWebSocketCdpTransport,
-  type CdpTransport,
-  type ManagedCdpTransport,
-} from "./docker-cdp-transport.js";
+import { resolveCdpWebSocketEndpoint } from "./docker-cdp-transport.js";
 
 export const DEFAULT_DOCKER_CDP_ENDPOINT = "http://browser-runtime:9222";
 export const DEFAULT_DOCKER_PROFILE_REF = "browser-profile";
 
-type CreateCdpTransport = (
+type ResolveCdpEndpoint = (
   endpoint: string,
   timeoutMs: number,
-) => Promise<ManagedCdpTransport>;
+) => Promise<string>;
 
 type ConnectOverCdp = (
-  transport: CdpTransport,
+  endpointURL: string,
   options: {
     timeout: number;
     noDefaults: true;
+    isLocal: false;
   },
 ) => Promise<Browser>;
 
@@ -35,7 +32,7 @@ export interface DockerCdpBrowserProviderOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly connectTimeoutMs?: number;
   readonly profileRef?: string;
-  readonly createTransport?: CreateCdpTransport;
+  readonly resolveEndpoint?: ResolveCdpEndpoint;
   readonly connectOverCDP?: ConnectOverCdp;
 }
 
@@ -43,20 +40,16 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-interface ConnectedBrowser {
-  readonly browser: Browser;
-  readonly transport: ManagedCdpTransport;
-}
-
 export class DockerCdpBrowserProvider implements BrowserProvider {
   readonly #endpoint: string;
   readonly #connectTimeoutMs: number;
   readonly #profileRef: string;
-  readonly #createTransport: CreateCdpTransport;
+  readonly #resolveEndpoint: ResolveCdpEndpoint;
   readonly #connectOverCDP: ConnectOverCdp;
-  readonly #connections = new Map<string, ManagedCdpTransport>();
+  readonly #connections = new Map<string, Browser>();
   readonly #releasePromises = new Map<string, Promise<void>>();
   readonly #releasingSessionIds = new Set<string>();
+
   // MVP exclusivity is process-wide: the accepted deployment is one Node app
   // process driving one browser-runtime/profile. Distributed/multi-replica
   // locking is intentionally out of scope; release ownership remains local to
@@ -85,12 +78,12 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
     this.#endpoint = endpoint;
     this.#connectTimeoutMs = connectTimeoutMs;
     this.#profileRef = options.profileRef ?? DEFAULT_DOCKER_PROFILE_REF;
-    this.#createTransport =
-      options.createTransport ?? createWebSocketCdpTransport;
+    this.#resolveEndpoint =
+      options.resolveEndpoint ?? resolveCdpWebSocketEndpoint;
     this.#connectOverCDP =
       options.connectOverCDP ??
-      ((transport, connectOptions) =>
-        chromium.connectOverCDP(transport, connectOptions));
+      ((endpointURL, connectOptions) =>
+        chromium.connectOverCDP(endpointURL, connectOptions));
   }
 
   async acquire(_input: BrowserAcquireInput): Promise<BrowserSession> {
@@ -100,21 +93,15 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
       );
     }
 
-    // Reserve the single MVP slot before the first async boundary so two
-    // concurrent acquire() calls cannot both attach to the persistent browser.
     const id = randomUUID();
     DockerCdpBrowserProvider.#activeSessionId = id;
 
-    let connection: ConnectedBrowser | undefined;
+    let browser: Browser | undefined;
 
     try {
-      connection = await this.#connect();
+      browser = await this.#connect();
 
-      // A runtime restart or transport loss invalidates the app-side session.
-      // Chromium itself is owned by browser-runtime and must not be closed here.
-      connection.browser.once("disconnected", () => {
-        // release() owns cleanup while an intentional transport teardown is
-        // in progress; otherwise this is an unexpected session loss.
+      browser.once("disconnected", () => {
         if (this.#releasingSessionIds.has(id)) {
           return;
         }
@@ -122,7 +109,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         this.#clearSession(id);
       });
 
-      const context = connection.browser.contexts()[0];
+      const context = browser.contexts()[0];
       if (!context) {
         throw new Error(
           "Browser runtime is reachable but has no browser context",
@@ -137,7 +124,7 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         throw new Error("Browser session disconnected during acquisition");
       }
 
-      this.#connections.set(id, connection.transport);
+      this.#connections.set(id, browser);
 
       return {
         id,
@@ -145,9 +132,9 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         profileRef: this.#profileRef,
       };
     } catch (error) {
-      if (connection) {
+      if (browser) {
         try {
-          await connection.transport.disconnect();
+          await browser.close();
         } catch (disconnectError) {
           throw new AggregateError(
             [error, disconnectError],
@@ -168,15 +155,14 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async release(sessionId: string): Promise<void> {
-    const existingRelease =
-      this.#releasePromises.get(sessionId);
+    const existingRelease = this.#releasePromises.get(sessionId);
     if (existingRelease) {
       await existingRelease;
       return;
     }
 
-    const transport = this.#connections.get(sessionId);
-    if (!transport) {
+    const browser = this.#connections.get(sessionId);
+    if (!browser) {
       if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
         throw new Error(
           "Browser session is owned by another provider instance and cannot be released here",
@@ -187,7 +173,10 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
 
     this.#releasingSessionIds.add(sessionId);
     const releasePromise = Promise.resolve()
-      .then(() => transport.disconnect())
+      // For a browser obtained through connectOverCDP(), Playwright closes the
+      // client transport here; it does not terminate the externally-owned
+      // Chromium process. The real integration/runtime smokes enforce this.
+      .then(() => browser.close())
       .finally(() => {
         this.#releasingSessionIds.delete(sessionId);
         this.#clearSession(sessionId);
@@ -207,19 +196,19 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
   }
 
   async health(): Promise<BrowserProviderHealth> {
-    let connection: ConnectedBrowser | undefined;
+    let browser: Browser | undefined;
 
     try {
-      connection = await this.#connect();
-      await connection.transport.disconnect();
+      browser = await this.#connect();
+      await browser.close();
 
       return {
         status: "reachable",
       };
     } catch (error) {
-      if (connection) {
+      if (browser) {
         try {
-          await connection.transport.disconnect();
+          await browser.close();
         } catch (disconnectError) {
           return {
             status: "unavailable",
@@ -237,30 +226,16 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
     }
   }
 
-  async #connect(): Promise<ConnectedBrowser> {
-    const transport = await this.#createTransport(
+  async #connect(): Promise<Browser> {
+    const endpointURL = await this.#resolveEndpoint(
       this.#endpoint,
       this.#connectTimeoutMs,
     );
 
-    try {
-      const browser = await this.#connectOverCDP(transport, {
-        timeout: this.#connectTimeoutMs,
-        noDefaults: true,
-      });
-
-      return {
-        browser,
-        transport,
-      };
-    } catch (error) {
-      try {
-        await transport.disconnect();
-      } catch {
-        // Preserve the original connection error.
-      }
-
-      throw error;
-    }
+    return await this.#connectOverCDP(endpointURL, {
+      timeout: this.#connectTimeoutMs,
+      noDefaults: true,
+      isLocal: false,
+    });
   }
 }

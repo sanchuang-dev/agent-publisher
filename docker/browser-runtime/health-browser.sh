@@ -33,9 +33,12 @@ check_process() {
   fi
 }
 
-for process_name in xvfb chromium x11vnc websockify; do
+for process_name in xvfb chromium cdp-proxy x11vnc websockify; do
   check_process "${process_name}"
 done
 
+# 9223 proves Chromium's loopback DevTools endpoint is alive; 9222 proves the
+# Compose-facing proxy path is alive as well.
+curl --fail --silent --show-error --max-time 1 http://127.0.0.1:9223/json/version >/dev/null
 curl --fail --silent --show-error --max-time 1 http://127.0.0.1:9222/json/version >/dev/null
 curl --fail --silent --show-error --max-time 1 http://127.0.0.1:6080/vnc.html >/dev/null

@@ -23,16 +23,23 @@ Docker's default profile denies namespace-creating `clone` calls and
 `unshare` without `CAP_SYS_ADMIN`. Chromium's namespace sandbox needs a much
 smaller exception:
 
-- `clone` may create `CLONE_NEWUSER`, optionally together with
-  `CLONE_NEWPID` and/or `CLONE_NEWNET`;
+- startup namespace creation may use `CLONE_NEWUSER`, optionally together
+  with `CLONE_NEWPID` and/or `CLONE_NEWNET`;
+- after the zygote has entered its user namespace, Chromium may fork a child
+  with exactly `CLONE_NEWPID` in the namespace mask. Chromium's
+  `NamespaceSandbox::ForkInNewPidNamespace()` uses
+  `clone(CLONE_NEWPID | SIGCHLD)` for this path;
 - `clone` remains denied when the namespace mask includes `CLONE_NEWNS`,
   `CLONE_NEWIPC`, `CLONE_NEWUTS`, or `CLONE_NEWCGROUP`;
 - `unshare` is allowed only for exactly `CLONE_NEWUSER`.
 
 The allowed combinations follow Chromium's Linux namespace sandbox contract:
-`NamespaceSandbox` supports `CLONE_NEWUSER` (required), `CLONE_NEWPID`, and
-`CLONE_NEWNET`; `Credentials::MoveToNewUserNS` uses
-`unshare(CLONE_NEWUSER)`.
+`NamespaceSandbox` startup supports `CLONE_NEWUSER` (required),
+`CLONE_NEWPID`, and `CLONE_NEWNET`; `Credentials::MoveToNewUserNS` uses
+`unshare(CLONE_NEWUSER)`. Once the zygote is inside that sandbox,
+`ForkInNewPidNamespace()` creates renderer/utility children with
+`CLONE_NEWPID | SIGCHLD`, so the seccomp delta also permits the
+`CLONE_NEWPID`-only namespace mask.
 
 This service must not compensate for a broken sandbox by adding `SYS_ADMIN`,
 using privileged mode, setting `seccomp=unconfined`, or starting Chromium with
