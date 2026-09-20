@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { chromium, type Browser, type Page } from "playwright";
 import { build, preview } from "vite";
+
+import {
+  prepareXiaohongshuPublication,
+  XiaohongshuComposerNotFreshError,
+  XiaohongshuPageStateError,
+  XiaohongshuPrepareCheckpointError,
+  XiaohongshuPreparedValidationError,
+} from "../../src/platforms/xiaohongshu/image-text-prepare.js";
+import { createImageTextMaterialPackFixture } from "../../src/materials/testing/fake-providers.js";
 
 const baseUrl = "http://127.0.0.1:4173";
 const states = [
@@ -391,4 +400,418 @@ test("production build preserves injected Live View runtime config", async (t) =
   );
   assert.equal(await frame.getAttribute("tabindex"), "0");
   await page.getByText("控制权已让给你").waitFor({ state: "visible" });
+});
+
+
+test("Xiaohongshu image-text page fixture verifies platform previews and never publishes", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-xhs-page-"));
+  const pack = createImageTextMaterialPackFixture();
+  const assetPaths = new Map<string, string>();
+
+  for (const asset of [pack.cover, ...pack.images]) {
+    const path = join(root, asset.assetId + ".png");
+    writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    assetPaths.set(asset.assetId, path);
+  }
+
+  const resolveAssetPath = (asset: (typeof pack.images)[number]) => {
+    const path = assetPaths.get(asset.assetId);
+    assert.ok(path, "fixture asset path must exist");
+    return path;
+  };
+
+  const browser = await chromium.launch({
+    executablePath: findChrome(),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+
+  t.after(async () => {
+    await browser.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const page = await browser.newPage();
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab" id="image-text-tab" aria-selected="false">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <div id="upload-status">等待上传</div>
+        <div style="display:none"><div data-testid="uploaded-image">hidden stale preview</div></div>
+        <div id="previews"></div>
+        <input id="title" placeholder="填写标题" />
+        <div contenteditable="true">unrelated editor</div>
+        <textarea id="body" placeholder="填写正文"></textarea>
+        <input id="tags" placeholder="添加话题" />
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+          document.querySelector("#image-text-tab").addEventListener("click", (event) => {
+            event.currentTarget.setAttribute("aria-selected", "true");
+          });
+          document.querySelector("#image-upload").addEventListener("change", (event) => {
+            const previews = document.querySelector("#previews");
+            previews.replaceChildren();
+            for (const file of event.currentTarget.files) {
+              const preview = document.createElement("div");
+              preview.dataset.testid = "uploaded-image";
+              preview.textContent = file.name;
+              previews.append(preview);
+            }
+            document.querySelector("#upload-status").textContent = "上传成功";
+          });
+          document.querySelector("#publish").addEventListener("click", () => {
+            window.__publishClicks += 1;
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const prepared = await prepareXiaohongshuPublication({
+    page,
+    materialPack: pack,
+    resolveAssetPath,
+    timeoutMs: 2_000,
+    now: () => new Date("2026-09-20T05:00:00.000Z"),
+  });
+
+  assert.equal(
+    await page.locator("#image-text-tab").getAttribute("aria-selected"),
+    "true",
+  );
+  assert.equal(
+    await page.locator('#previews [data-testid="uploaded-image"]').count(),
+    3,
+  );
+  assert.equal(await page.locator("#title").inputValue(), pack.copy.title);
+  assert.equal(await page.locator("#body").inputValue(), pack.copy.body);
+  assert.equal(
+    await page.locator("#tags").inputValue(),
+    pack.copy.tags.map((tag) => "#" + tag).join(" "),
+  );
+  assert.deepEqual(prepared.tags, pack.copy.tags);
+  assert.equal(prepared.imageCount, 3);
+  assert.equal(prepared.bodyLength, pack.copy.body.length);
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <div id="upload-status">等待上传</div>
+        <div id="previews"></div>
+        <input id="title" placeholder="填写标题" />
+        <textarea id="body" placeholder="填写正文"></textarea>
+        <input id="tags" placeholder="添加话题" />
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+          document.querySelector("#image-upload").addEventListener("change", (event) => {
+            const previews = document.querySelector("#previews");
+            for (const file of event.currentTarget.files) {
+              const preview = document.createElement("div");
+              preview.dataset.testid = "uploaded-image";
+              preview.textContent = file.name;
+              previews.append(preview);
+            }
+          });
+          document.querySelector("#title").addEventListener("input", (event) => {
+            event.currentTarget.value = "页面改写后的标题";
+          });
+          document.querySelector("#publish").addEventListener("click", () => {
+            window.__publishClicks += 1;
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 2_000,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPreparedValidationError);
+      assert.deepEqual(error.mismatches, ["title"]);
+      return true;
+    },
+  );
+
+  assert.equal(await page.locator('[data-testid="uploaded-image"]').count(), 3);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 250,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuComposerNotFreshError);
+      assert.equal(error.code, "COMPOSER_NOT_FRESH");
+      return true;
+    },
+  );
+  assert.equal(
+    await page.locator('[data-testid="uploaded-image"]').count(),
+    3,
+    "retry must fail closed instead of appending duplicate attachments",
+  );
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <input placeholder="填写标题" />
+        <textarea placeholder="填写正文"></textarea>
+        <input placeholder="添加话题" />
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+        </script>
+      </body>
+    </html>
+  `);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 250,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.equal(error.code, "PLATFORM_UPLOAD_TIMEOUT");
+      return true;
+    },
+    "holding local input files without platform previews must not count as ready",
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <div id="upload-status"></div>
+        <input placeholder="填写标题" />
+        <textarea placeholder="填写正文"></textarea>
+        <input placeholder="添加话题" />
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+          document.querySelector("#image-upload").addEventListener("change", () => {
+            document.querySelector("#upload-status").textContent = "上传失败";
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 250,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.equal(error.code, "PLATFORM_UPLOAD_FAILED");
+      return true;
+    },
+    "explicit platform upload failure must fail closed",
+  );
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <div id="previews"></div>
+        <input placeholder="填写标题" />
+        <textarea placeholder="填写正文"></textarea>
+        <input placeholder="添加话题" />
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+        </script>
+      </body>
+    </html>
+  `);
+
+  const assetCause = new Error("controlled asset is unavailable");
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath: async () => {
+          throw assetCause;
+        },
+        timeoutMs: 250,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.equal(error.code, "ASSET_RESOLUTION_FAILED");
+      assert.equal(error.cause, assetCause);
+      return true;
+    },
+  );
+  assert.equal(await page.locator('[data-testid="uploaded-image"]').count(), 0);
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <div id="previews"></div>
+        <input placeholder="填写标题" />
+        <textarea placeholder="填写正文"></textarea>
+        <input placeholder="添加话题" />
+        <script>
+          document.querySelector("#image-upload").addEventListener("change", (event) => {
+            const previews = document.querySelector("#previews");
+            for (const file of event.currentTarget.files) {
+              const preview = document.createElement("div");
+              preview.dataset.testid = "uploaded-image";
+              preview.textContent = file.name;
+              previews.append(preview);
+            }
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const checkpointCause = new Error("fixture persistence unavailable");
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 250,
+        onMutationStarted: () => {
+          throw checkpointCause;
+        },
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPrepareCheckpointError);
+      assert.equal(error.code, "PREPARE_CHECKPOINT_FAILED");
+      assert.equal(error.cause, checkpointCause);
+      return true;
+    },
+  );
+  assert.equal(
+    await page.locator('[data-testid="uploaded-image"]').count(),
+    0,
+    "failed durable checkpoint must abort before setInputFiles",
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab">图文</button>
+        <input id="image-upload" type="file" accept="image/png" multiple />
+        <input placeholder="填写标题" />
+        <input placeholder="备用标题" />
+        <textarea placeholder="填写正文"></textarea>
+        <input placeholder="添加话题" />
+      </body>
+    </html>
+  `);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 250,
+      }),
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.equal(error.code, "PLATFORM_EDITOR_STATE_CHANGED");
+      return true;
+    },
+  );
+
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab" id="image-text-tab">图文</button>
+        <div id="composer"></div>
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+          document.querySelector("#image-text-tab").addEventListener("click", () => {
+            setTimeout(() => {
+              document.querySelector("#composer").innerHTML = \`
+                <input id="image-upload" type="file" accept="image/png" multiple />
+                <input id="title" placeholder="填写标题" value="已有草稿标题" />
+                <textarea id="body" placeholder="填写正文">已有草稿正文</textarea>
+                <input id="tags" placeholder="添加话题" value="#已有话题" />
+              \`;
+            }, 50);
+          });
+          document.querySelector("#publish").addEventListener("click", () => {
+            window.__publishClicks += 1;
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  await assert.rejects(
+    () =>
+      prepareXiaohongshuPublication({
+        page,
+        materialPack: pack,
+        resolveAssetPath,
+        timeoutMs: 1_000,
+      }),
+    XiaohongshuComposerNotFreshError,
+    "draft content restored after tab activation must be observed before mutation",
+  );
+  assert.equal(await page.locator("#title").inputValue(), "已有草稿标题");
+  assert.equal(await page.locator("#body").inputValue(), "已有草稿正文");
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
+
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
 });
