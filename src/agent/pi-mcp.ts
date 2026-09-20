@@ -157,6 +157,7 @@ export function compilePublisherMcpProfile(
     mcpServers,
     settings: {
       directTools: false,
+      namespaceProxyTools: false,
       scriptMode: false,
       hostConfigDiscovery: "off",
       notifyOnStartupConnect: false,
