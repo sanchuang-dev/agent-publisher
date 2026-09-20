@@ -14,10 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 
-import {
-  PiSdkSessionError,
-  runInMemoryPiSession,
-} from "../src/agent/pi-sdk-session.js";
+import { runInMemoryPiSession } from "../src/agent/pi-sdk-session.js";
 
 function createNoDiscoveryResourceLoader(): ResourceLoader {
   return {
