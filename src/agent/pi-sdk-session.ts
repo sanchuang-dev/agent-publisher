@@ -131,6 +131,7 @@ export async function runInMemoryPiSession(
   assertPositiveDeadline(timeoutMs, "Pi session timeout");
   assertPositiveDeadline(abortTimeoutMs, "Pi session abort timeout");
 
+  const deadline = createDeadline(timeoutMs);
   const cwd = input.sessionOptions.cwd ?? process.cwd();
   const creation = createAgentSession({
     ...input.sessionOptions,
@@ -141,7 +142,7 @@ export async function runInMemoryPiSession(
 
   let created: Awaited<ReturnType<typeof createAgentSession>>;
   try {
-    created = await withDeadline(creation, timeoutMs);
+    created = await withDeadline(creation, deadline);
   } catch (error) {
     if (error instanceof DeadlineExceededError) {
       void creation.then(
