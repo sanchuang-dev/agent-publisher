@@ -815,8 +815,8 @@ describe("XiaohongshuPrepareService", () => {
   test("the same browser session cannot be driven by two jobs concurrently", async () => {
     const firstJobId = "job-xhs-session-a";
     const secondJobId = "job-xhs-session-b";
-    createPreparingPublishJob(firstJobId);
-    createPreparingPublishJob(secondJobId);
+    createPreparingPublishJob(firstJobId, "image_text", "shared-profile");
+    createPreparingPublishJob(secondJobId, "image_text", "shared-profile");
     const { pack, prepared } = preparedFixture();
     const sharedSession = fakeSession("shared-profile", "shared-session");
     let releasePrepare!: () => void;
