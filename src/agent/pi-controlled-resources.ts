@@ -16,6 +16,9 @@ const FORBIDDEN_PUBLISHER_BUILTINS = new Set([
   "powershell",
   "write",
   "edit",
+  "grep",
+  "find",
+  "ls",
 ]);
 
 interface CanonicalResourcePath {

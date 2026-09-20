@@ -116,8 +116,10 @@ describe("controlled Pi resources", () => {
     await mkdir(workspace, { recursive: true });
     await mkdir(outside, { recursive: true });
 
+    const workspaceBrief = join(workspace, "brief.txt");
     const outsideSecret = join(outside, "secret.txt");
     const linkedSecret = join(workspace, "linked-secret.txt");
+    await writeFile(workspaceBrief, "APPROVED_WORKSPACE_BRIEF", "utf8");
     await writeFile(outsideSecret, "OUTSIDE_SECRET_MUST_NOT_LEAK", "utf8");
     await symlink(outsideSecret, linkedSecret);
 
@@ -214,6 +216,37 @@ describe("controlled Pi resources", () => {
 
     faux.setResponses([
       fauxAssistantMessage(
+        fauxToolCall("read", { path: "brief.txt" }, { id: "read-relative" }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const relativeReadWorked = context.messages.some(
+          (message) =>
+            message.role === "toolResult" &&
+            JSON.stringify(message).includes("APPROVED_WORKSPACE_BRIEF"),
+        );
+        return fauxAssistantMessage(
+          fauxText(relativeReadWorked ? "RELATIVE_READ_OK" : "RELATIVE_READ_FAILED"),
+        );
+      },
+    ]);
+
+    const relativeResult = await session.run({
+      prompt: "Read the approved workspace brief using a relative path.",
+    });
+
+    expect(relativeResult.finalText).toBe("RELATIVE_READ_OK");
+    expect(relativeResult.toolExecutions).toEqual([
+      expect.objectContaining({
+        toolCallId: "read-relative",
+        toolName: "read",
+        completed: true,
+        isError: false,
+      }),
+    ]);
+
+    faux.setResponses([
+      fauxAssistantMessage(
         fauxToolCall("read", { path: linkedSecret }, { id: "read-outside" }),
         { stopReason: "toolUse" },
       ),
@@ -269,24 +302,34 @@ describe("controlled Pi resources", () => {
     await session.dispose();
   });
 
-  test("rejects unrestricted mutating or shell built-ins from the Publisher profile", async () => {
+  test("rejects unrestricted shell, mutation, and filesystem-discovery built-ins", async () => {
     const root = await createTempDir("publisher-forbidden-builtins-");
     const workspace = join(root, "job-workspace");
     await mkdir(workspace, { recursive: true });
 
-    await expect(
-      createControlledPiResourceLoader({
-        cwd: workspace,
-        systemPrompt: definition.systemPrompt,
-        allowedTools: ["bash"],
-        policy: {
-          skillPaths: [],
-          readRoots: [workspace],
-        },
-      }),
-    ).rejects.toThrow(
-      'Publisher controlled sessions must not enable unrestricted built-in tool "bash"',
-    );
+    for (const toolName of [
+      "bash",
+      "powershell",
+      "write",
+      "edit",
+      "grep",
+      "find",
+      "ls",
+    ]) {
+      await expect(
+        createControlledPiResourceLoader({
+          cwd: workspace,
+          systemPrompt: definition.systemPrompt,
+          allowedTools: [toolName],
+          policy: {
+            skillPaths: [],
+            readRoots: [workspace],
+          },
+        }),
+      ).rejects.toThrow(
+        `Publisher controlled sessions must not enable unrestricted built-in tool "${toolName}"`,
+      );
+    }
   });
 
   test("execution guard blocks a visible but forbidden custom tool before side effect", async () => {
