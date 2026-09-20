@@ -121,6 +121,21 @@ type PromptSettlement =
   | { readonly status: "fulfilled" }
   | { readonly status: "rejected"; readonly reason: unknown };
 
+function observePromptSettlement(
+  promptTask: Promise<void>,
+): () => PromptSettlement | null {
+  let settlement: PromptSettlement | null = null;
+  void promptTask.then(
+    () => {
+      settlement = { status: "fulfilled" };
+    },
+    (reason: unknown) => {
+      settlement = { status: "rejected", reason };
+    },
+  );
+  return () => settlement;
+}
+
 async function settleTimedOutRun(
   promptTask: Promise<void>,
   session: PiAgentSession,
@@ -272,15 +287,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
     try {
       const promptTask = this.session.prompt(input.prompt);
-      let promptSettlementBeforeAbort: PromptSettlement | null = null;
-      void promptTask.then(
-        () => {
-          promptSettlementBeforeAbort = { status: "fulfilled" };
-        },
-        (reason: unknown) => {
-          promptSettlementBeforeAbort = { status: "rejected", reason };
-        },
-      );
+      const getPromptSettlement = observePromptSettlement(promptTask);
 
       try {
         await withDeadline(promptTask, timeoutMs);
@@ -290,8 +297,9 @@ class PiPublisherAgentSession implements PublisherAgentSession {
           // Pi to abort. Only a prompt that genuinely completed before the abort
           // request may be recovered as success.
           await Promise.resolve();
+          const settlementBeforeAbort = getPromptSettlement();
           if (
-            promptSettlementBeforeAbort?.status === "fulfilled" &&
+            settlementBeforeAbort?.status === "fulfilled" &&
             finalAssistantMessageObserved
           ) {
             return snapshotResult();
