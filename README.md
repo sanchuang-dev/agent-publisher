@@ -8,6 +8,12 @@ The canonical product definition is [docs/product/PRD.md](docs/product/PRD.md).
 
 The PRD owns durable product intent, MVP boundaries, interaction model, and product decisions. Individual work-item scope and acceptance remain in GitHub Issues.
 
+## Roadmap
+
+The current phase/dependency roadmap is [docs/ROADMAP.md](docs/ROADMAP.md).
+
+GitHub Issues and Organization Project #1 remain the live lifecycle source of truth; the roadmap records sequencing and dependencies rather than duplicating task status.
+
 ## Goal
 
 Given a content intent or source material, the system should be able to:
