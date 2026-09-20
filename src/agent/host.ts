@@ -56,6 +56,12 @@ export interface PublisherAgentSession {
 }
 
 export interface AgentHost {
+  /**
+   * True only when sessions created by this host can be recovered after a
+   * process restart using their opaque AgentSessionRef.
+   */
+  readonly supportsDurableResume: boolean;
+
   createSession(
     input: CreatePublisherAgentSessionInput,
   ): Promise<PublisherAgentSession>;
