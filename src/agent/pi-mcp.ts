@@ -16,6 +16,13 @@ export interface CompiledPublisherMcpProfile {
   readonly toolNames: readonly string[];
 }
 
+type PublisherMcpSettings = NonNullable<
+  NonNullable<McpAdapterOptions["config"]>["settings"]
+> & {
+  /** Supported by pi-mcp-adapter 2.34.0 runtime but omitted from its public McpSettings type. */
+  readonly namespaceProxyTools: false;
+};
+
 function assertNonEmpty(value: string, label: string): string {
   const normalized = value.trim();
   if (!normalized) {
@@ -153,19 +160,21 @@ export function compilePublisherMcpProfile(
     mcpServers[name] = compileServer({ ...server, name });
   }
 
-  const config: NonNullable<McpAdapterOptions["config"]> = {
-    mcpServers,
-    settings: {
-      directTools: false,
-      namespaceProxyTools: false,
-      scriptMode: false,
+  const settings: PublisherMcpSettings = {
+    directTools: false,
+    namespaceProxyTools: false,
+    scriptMode: false,
       hostConfigDiscovery: "off",
       notifyOnStartupConnect: false,
       mcpFooterStatus: "off",
       autoAuth: false,
-      authRequiredMessage:
-        'MCP server "${server}" requires authentication through Publisher-controlled setup.',
-    },
+    authRequiredMessage:
+      'MCP server "${server}" requires authentication through Publisher-controlled setup.',
+  };
+
+  const config: NonNullable<McpAdapterOptions["config"]> = {
+    mcpServers,
+    settings,
   };
 
   return {
