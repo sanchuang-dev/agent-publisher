@@ -4,18 +4,21 @@ set -eu
 display="${DISPLAY:-:99}"
 profile_dir="${BROWSER_PROFILE_DIR:-/data/profile}"
 runtime_dir="${BROWSER_RUNTIME_DIR:-/run/browser-runtime}"
+novnc_bind_address="${NOVNC_BIND_ADDRESS:-127.0.0.1}"
+novnc_password="${NOVNC_PASSWORD:-}"
 
 # Internal browser-runtime transport contract. Host/reverse-proxy exposure belongs
 # to Compose or the application boundary instead of a second container port config.
 vnc_port="5900"
 novnc_port="6080"
+vnc_password_file="${runtime_dir}/vnc.pass"
 
 display_number="${display#:}"
 x_socket="/tmp/.X11-unix/X${display_number}"
 
 mkdir -p "${profile_dir}" "${runtime_dir}"
 chown -R browser:browser "${profile_dir}"
-rm -f "${runtime_dir}"/*.pid
+rm -f "${runtime_dir}"/*.pid "${vnc_password_file}"
 
 xvfb_pid=""
 chromium_pid=""
@@ -51,7 +54,7 @@ cleanup() {
     fi
   done
 
-  rm -f "${runtime_dir}"/*.pid
+  rm -f "${runtime_dir}"/*.pid "${vnc_password_file}"
 }
 
 shutdown() {
@@ -106,14 +109,34 @@ gosu browser socat \
 cdp_proxy_pid=$!
 record_pid cdp-proxy "${cdp_proxy_pid}"
 
-gosu browser x11vnc \
-  -display "${display}" \
-  -rfbport "${vnc_port}" \
-  -localhost \
-  -forever \
-  -shared \
-  -nopw \
-  -xkb &
+if [ "${novnc_bind_address}" = "127.0.0.1" ] || [ "${novnc_bind_address}" = "localhost" ]; then
+  gosu browser x11vnc \
+    -display "${display}" \
+    -rfbport "${vnc_port}" \
+    -localhost \
+    -forever \
+    -shared \
+    -nopw \
+    -xkb &
+else
+  if [ -z "${novnc_password}" ]; then
+    echo "NOVNC_PASSWORD is required when NOVNC_BIND_ADDRESS is not loopback" >&2
+    exit 1
+  fi
+
+  x11vnc -storepasswd "${novnc_password}" "${vnc_password_file}" >/dev/null 2>&1
+  chown browser:browser "${vnc_password_file}"
+  chmod 600 "${vnc_password_file}"
+
+  gosu browser x11vnc \
+    -display "${display}" \
+    -rfbport "${vnc_port}" \
+    -localhost \
+    -forever \
+    -shared \
+    -rfbauth "${vnc_password_file}" \
+    -xkb &
+fi
 x11vnc_pid=$!
 record_pid x11vnc "${x11vnc_pid}"
 
