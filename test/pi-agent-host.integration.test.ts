@@ -403,7 +403,7 @@ describe("PiAgentHost", () => {
     });
   });
 
-  test("returns success when a delayed prompt actually fulfills during timeout reconciliation", async () => {
+  test("does not treat abort-fulfilled prompt settlement as successful completion without a final assistant message", async () => {
     const faux = fauxProvider({ provider: "publisher-agent-host-timeout-race" });
     const modelRuntime = await createFauxRuntime(faux);
     const host = new PiAgentHost({
@@ -436,11 +436,20 @@ describe("PiAgentHost", () => {
         timeoutMs: 10,
         abortTimeoutMs: 200,
       }),
-    ).resolves.toMatchObject({
-      finalText: "COMPLETED_DURING_RECONCILIATION",
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_TIMEOUT",
+      runStopped: true,
+      partialResult: {
+        finalText: "",
+      },
     });
 
-    await session.dispose();
+    await expect(
+      session.run({ prompt: "Timeout requires a fresh session." }),
+    ).rejects.toMatchObject({
+      code: "AGENT_SESSION_DISPOSED",
+    });
   });
 
   test("keeps Pi framework types out of Publisher-facing contract modules", async () => {

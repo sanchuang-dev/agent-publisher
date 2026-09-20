@@ -222,6 +222,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     const eventTypes: string[] = [];
     const toolExecutions = new Map<string, AgentToolExecutionEvidence>();
     let finalText = "";
+    let finalAssistantMessageObserved = false;
 
     const snapshotResult = (): AgentTaskResult => ({
       finalText,
@@ -236,6 +237,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         event.type === "message_end" &&
         event.message.role === "assistant"
       ) {
+        finalAssistantMessageObserved = true;
         finalText = event.message.content
           .filter((block) => block.type === "text")
           .map((block) => block.text)
@@ -270,25 +272,40 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
     try {
       const promptTask = this.session.prompt(input.prompt);
+      let promptSettlementBeforeAbort: PromptSettlement | null = null;
+      void promptTask.then(
+        () => {
+          promptSettlementBeforeAbort = { status: "fulfilled" };
+        },
+        (reason: unknown) => {
+          promptSettlementBeforeAbort = { status: "rejected", reason };
+        },
+      );
 
       try {
         await withDeadline(promptTask, timeoutMs);
       } catch (error) {
         if (error instanceof DeadlineExceededError) {
-          const settlement = await settleTimedOutRun(
+          // Flush already-queued prompt settlement/message events before asking
+          // Pi to abort. Only a prompt that genuinely completed before the abort
+          // request may be recovered as success.
+          await Promise.resolve();
+          if (
+            promptSettlementBeforeAbort?.status === "fulfilled" &&
+            finalAssistantMessageObserved
+          ) {
+            return snapshotResult();
+          }
+
+          const settlementAfterAbort = await settleTimedOutRun(
             promptTask,
             this.session,
             abortTimeoutMs,
           );
-
-          if (settlement?.status === "fulfilled") {
-            return snapshotResult();
-          }
-
           const partialResult = snapshotResult();
           this.#invalidate();
 
-          if (!settlement) {
+          if (!settlementAfterAbort) {
             throw new AgentSessionError(
               "AGENT_SESSION_ABORT_UNCONFIRMED",
               `Agent session exceeded the ${timeoutMs}ms run deadline and did not confirm local prompt settlement within ${abortTimeoutMs}ms`,
@@ -300,7 +317,10 @@ class PiPublisherAgentSession implements PublisherAgentSession {
             "AGENT_SESSION_TIMEOUT",
             `Agent session exceeded the ${timeoutMs}ms run deadline and local prompt settlement was confirmed`,
             {
-              cause: settlement.reason,
+              cause:
+                settlementAfterAbort.status === "rejected"
+                  ? settlementAfterAbort.reason
+                  : error,
               runStopped: true,
               partialResult,
             },
