@@ -8,6 +8,7 @@ profiles/
 storage-state/
 sessions/
 data/
+.secrets/
 .env
 .env.*
 !.env.example
