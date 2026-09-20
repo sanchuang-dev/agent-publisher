@@ -21,15 +21,14 @@ async function loadFonts(): Promise<readonly Font[]> {
   const fileNames = (await readdir(filesDirectory))
     .filter(
       (name) =>
-        name.endsWith(".woff2") &&
-        name.includes("chinese-simplified") &&
-        name.includes("wght"),
+        name.startsWith("noto-sans-sc-") &&
+        name.endsWith("-wght-normal.woff2"),
     )
     .sort();
 
   if (fileNames.length === 0) {
     throw new Error(
-      `No Simplified Chinese variable font files found in ${builtinCjkFontPackage}`,
+      `No Noto Sans SC variable font subsets found in ${builtinCjkFontPackage}`,
     );
   }
 
