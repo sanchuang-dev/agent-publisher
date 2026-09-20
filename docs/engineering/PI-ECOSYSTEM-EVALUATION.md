@@ -232,14 +232,22 @@ The implementation work must measure per-session server lifecycle. If the adapte
 
 Publisher pins `pi-mcp-adapter@2.34.0` and constructs it only through
 `createMcpAdapter({ config })`. `AgentDefinition.mcp` is compiled per
-AgentSession, while ambient `.mcp.json`, `~/.pi`, host MCP imports, direct
-tools, namespace proxy tools, and script mode stay disabled.
+AgentSession, while ambient `.mcp.json`, `~/.pi`, and host MCP imports stay
+disabled. Direct tools and script mode are disabled in adapter config; the
+Publisher Pi active-tool allowlist exposes only the `mcp` gateway, so namespace
+proxy tools are not model-visible even though the pinned adapter's public
+`McpSettings` type does not expose a namespace-proxy toggle.
 
 Every server requires a non-empty `includeTools` allowlist and may narrow it
 with `excludeTools`. Stdio children use adapter platform defaults without
 inheriting the Publisher process environment. HTTP bearer auth stores only an
 environment-variable name (`bearerTokenEnv`), not the credential value;
 OAuth remains adapter-owned with automatic auth disabled.
+
+The pinned npm package exports its Pi extension entry as TypeScript source, so
+the repository's no-emit TypeScript check enables `allowImportingTsExtensions`.
+This is an adapter packaging compatibility requirement, not permission for
+Publisher source to import arbitrary machine-local TypeScript modules.
 
 Lifecycle is AgentSession-scoped: two sessions using one stdio profile own
 independent child processes. Publisher adds no shared MCP multiplexer. Since
