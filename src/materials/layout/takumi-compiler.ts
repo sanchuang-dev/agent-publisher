@@ -293,7 +293,7 @@ function compileNode(
 export function compileSafeRichLayoutToTakumi(
   layout: SafeRichLayout,
   resources: SafeLayoutResources = {},
-): TakumiNode {
+): ContainerNode {
   return {
     type: "container",
     children: compileChildren(layout.children, resources),
