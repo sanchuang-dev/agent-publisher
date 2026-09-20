@@ -230,32 +230,27 @@ The implementation work must measure per-session server lifecycle. If the adapte
 
 ### Publisher integration baseline (AGT-04)
 
-Publisher pins `pi-mcp-adapter@2.34.0` and creates it only through
-`createMcpAdapter({ config })`. The config is compiled from the
-`AgentDefinition.mcp` profile for each AgentSession, so Publisher does not read
-developer-machine `.mcp.json`, `~/.pi`, host MCP imports, or adapter management
-state.
+Publisher pins `pi-mcp-adapter@2.34.0` and constructs it only through
+`createMcpAdapter({ config })`. `AgentDefinition.mcp` is compiled per
+AgentSession, while ambient `.mcp.json`, `~/.pi`, host MCP imports, direct
+tools, namespace proxy tools, and script mode stay disabled.
 
-The MVP surface is deliberately proxy-first:
+Every server requires a non-empty `includeTools` allowlist and may narrow it
+with `excludeTools`. Stdio children use adapter platform defaults without
+inheriting the Publisher process environment. HTTP bearer auth stores only an
+environment-variable name (`bearerTokenEnv`), not the credential value;
+OAuth remains adapter-owned with automatic auth disabled.
 
-- only the adapter's `mcp` gateway tool is activated;
-- every server must declare a non-empty `includeTools` fail-closed allowlist;
-- `excludeTools` may narrow that allowlist further;
-- direct tools, namespace proxy tools, and MCP script mode are disabled;
-- stdio environment and HTTP credential headers can be sourced by environment
-  variable name rather than committed secret values.
+Lifecycle is AgentSession-scoped: two sessions using one stdio profile own
+independent child processes. Publisher adds no shared MCP multiplexer. Since
+Pi's bare `AgentSession.dispose()` does not emit extension shutdown,
+`PiAgentHost` emits bounded `session_shutdown` first. The same wiring is used
+for both new and AGT-05 resumed sessions.
 
-Lifecycle remains AgentSession-scoped. Two sessions that reference the same
-stdio profile are expected to own two independent child processes; Publisher
-does not add a shared MCP multiplexer. Because Pi's bare `AgentSession.dispose()`
-does not emit extension shutdown, `PiAgentHost` must emit
-`session_shutdown` before disposing the Pi session. Teardown is bounded and an
-explicit dispose failure is surfaced as an AgentSession error.
-
-The AGT-04 integration tests use controlled stdio and Streamable HTTP fixtures
-to cover discovery, invocation, negative allowlisting, per-session process
-isolation/disposal, unavailable-server containment, and invalid-profile
-fail-closed behavior.
+AGT-04 integration tests use controlled stdio and Streamable HTTP fixtures for
+discovery/invocation, negative allowlisting, per-session process isolation and
+teardown, unavailable-server containment, and invalid-profile fail-closed
+behavior.
 
 ## 9. Context model
 

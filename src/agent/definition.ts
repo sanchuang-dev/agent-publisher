@@ -5,12 +5,6 @@ export interface AgentMcpStdioTransport {
   readonly command: string;
   readonly args?: readonly string[];
   readonly cwd?: string;
-  /**
-   * Names of environment variables copied from the Publisher process into the
-   * child. Values stay runtime-only and are never stored in AgentDefinition.
-   */
-  readonly envFromProcess?: readonly string[];
-  readonly inheritEnv?: boolean;
 }
 
 export type AgentMcpHttpAuth =
@@ -21,11 +15,6 @@ export type AgentMcpHttpAuth =
 export interface AgentMcpHttpTransport {
   readonly kind: "http";
   readonly url: string;
-  /**
-   * Header name -> Publisher process environment variable name.
-   * This keeps credentials out of committed AgentDefinition values.
-   */
-  readonly headersFromEnvironment?: Readonly<Record<string, string>>;
   readonly auth?: AgentMcpHttpAuth;
 }
 

@@ -18,7 +18,7 @@ export interface CompiledPublisherMcpProfile {
 
 function assertNonEmpty(value: string, label: string): string {
   const normalized = value.trim();
-  if (normalized.length === 0) {
+  if (!normalized) {
     throw new Error(`${label} must not be empty`);
   }
   return normalized;
@@ -28,21 +28,13 @@ function normalizeToolPatterns(
   values: readonly string[],
   label: string,
 ): string[] {
-  const normalized = values.map((value, index) =>
-    assertNonEmpty(value, `${label}[${index}]`),
-  );
-  return [...new Set(normalized)];
-}
-
-function resolveProcessEnv(name: string, label: string): string {
-  const envName = assertNonEmpty(name, label);
-  const value = process.env[envName];
-  if (value === undefined) {
-    throw new Error(
-      `${label} references missing Publisher environment variable "${envName}"`,
-    );
-  }
-  return value;
+  return [
+    ...new Set(
+      values.map((value, index) =>
+        assertNonEmpty(value, `${label}[${index}]`),
+      ),
+    ),
+  ];
 }
 
 function compileHttpAuth(
@@ -71,51 +63,19 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
     );
   }
 
-  const excludeTools = normalizeToolPatterns(
-    server.excludeTools ?? [],
-    `MCP server "${server.name}" excludeTools`,
-  );
-  const excluded = new Set(excludeTools);
-  const overlap = includeTools.filter((tool) => excluded.has(tool));
-  if (overlap.length > 0) {
-    throw new Error(
-      `MCP server "${server.name}" includes and excludes the same tool pattern: ${overlap.join(", ")}`,
-    );
-  }
-
   const common: ServerEntry = {
     lifecycle: server.lifecycle ?? "lazy",
     includeTools,
-    excludeTools,
+    excludeTools: normalizeToolPatterns(
+      server.excludeTools ?? [],
+      `MCP server "${server.name}" excludeTools`,
+    ),
     directTools: false,
     debug: false,
     trace: false,
   };
 
   if (server.transport.kind === "stdio") {
-    const envNames = [
-      ...new Set(
-        (server.transport.envFromProcess ?? []).map((name, index) =>
-          assertNonEmpty(
-            name,
-            `MCP server "${server.name}" envFromProcess[${index}]`,
-          ),
-        ),
-      ),
-    ];
-    const env =
-      envNames.length === 0
-        ? undefined
-        : Object.fromEntries(
-            envNames.map((name) => [
-              name,
-              resolveProcessEnv(
-                name,
-                `MCP server "${server.name}" envFromProcess`,
-              ),
-            ]),
-          );
-
     return {
       ...common,
       command: assertNonEmpty(
@@ -124,51 +84,33 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
       ),
       args: server.transport.args ? [...server.transport.args] : undefined,
       cwd: server.transport.cwd,
-      env,
-      inheritEnv: server.transport.inheritEnv ?? false,
+      // Do not expose Publisher credentials to local MCP children by default.
+      inheritEnv: false,
     };
   }
 
-  const urlText = assertNonEmpty(
+  const rawUrl = assertNonEmpty(
     server.transport.url,
     `MCP server "${server.name}" url`,
   );
-  let parsed: URL;
+  let url: URL;
   try {
-    parsed = new URL(urlText);
+    url = new URL(rawUrl);
   } catch (error) {
     throw new Error(`MCP server "${server.name}" has an invalid URL`, {
       cause: error,
     });
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error(
       `MCP server "${server.name}" URL must use http or https`,
     );
   }
 
-  const headerEntries = Object.entries(
-    server.transport.headersFromEnvironment ?? {},
-  ).map(([headerName, envName]) => [
-    assertNonEmpty(
-      headerName,
-      `MCP server "${server.name}" HTTP header name`,
-    ),
-    resolveProcessEnv(
-      envName,
-      `MCP server "${server.name}" HTTP header "${headerName}"`,
-    ),
-  ]);
-  const headers =
-    headerEntries.length === 0
-      ? undefined
-      : Object.fromEntries(headerEntries);
-
   return {
     ...common,
-    url: parsed.toString(),
+    url: url.toString(),
     httpTransport: "streamable-http",
-    headers,
     ...compileHttpAuth(server.transport.auth),
   };
 }

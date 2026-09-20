@@ -81,7 +81,6 @@ function stdioDefinition(
             kind: "stdio",
             command: process.execPath,
             args: [fixturePath],
-            inheritEnv: false,
           },
           includeTools,
         },
@@ -408,8 +407,7 @@ describe("Publisher Pi MCP adapter", () => {
             transport: {
               kind: "stdio",
               command: "/publisher/definitely-missing-mcp-command",
-              inheritEnv: false,
-            },
+              },
             includeTools: ["allowed_echo"],
           },
         ],
