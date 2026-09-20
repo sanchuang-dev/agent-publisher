@@ -182,6 +182,26 @@ describe("EvidenceRepository integration", () => {
         kind: "result_url" as const,
         uri: "https://example.test/result?access_token=redacted",
       },
+      {
+        id: "evidence-uri-token-camel",
+        kind: "result_url" as const,
+        uri: "https://example.test/result?accessToken=redacted",
+      },
+      {
+        id: "evidence-uri-token-kebab",
+        kind: "result_url" as const,
+        uri: "https://example.test/result?access-token=redacted",
+      },
+      {
+        id: "evidence-value-token",
+        kind: "confirmation_ref" as const,
+        value: "access_token=redacted",
+      },
+      {
+        id: "evidence-fragment-token",
+        kind: "result_url" as const,
+        uri: "https://example.test/result#refreshToken=redacted",
+      },
     ];
 
     for (const input of forbiddenInputs) {
