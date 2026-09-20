@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 test("placeholder takeover does not claim interactive human control", async () => {
-  window.location.hash = "#/task/waiting_for_login";
+  window.location.hash = "#/fixture/waiting_for_login";
   render(<App />);
 
   await screen.findByText("等待 Browser Live View");
@@ -25,7 +25,7 @@ test("placeholder takeover does not claim interactive human control", async () =
 test("Browser surface uses injected trusted Live View URL in agent view-only mode", async () => {
   const fakeUrl = "/fake-novnc/vnc.html";
   vi.stubEnv("VITE_LIVE_VIEW_URL", fakeUrl);
-  window.location.hash = "#/task/preparing_publish";
+  window.location.hash = "#/fixture/preparing_publish";
 
   render(<App />);
 
@@ -38,7 +38,7 @@ test("Browser surface uses injected trusted Live View URL in agent view-only mod
 
 test("trusted runtime takeover is interactive", async () => {
   vi.stubEnv("VITE_LIVE_VIEW_URL", "/fake-novnc/vnc.html");
-  window.location.hash = "#/task/waiting_for_login";
+  window.location.hash = "#/fixture/waiting_for_login";
 
   render(<App />);
 
@@ -52,7 +52,7 @@ test("trusted runtime takeover is interactive", async () => {
 
 test("blocked runtime config is surfaced as unavailable", async () => {
   vi.stubEnv("VITE_LIVE_VIEW_URL", "http://browser-runtime:9222");
-  window.location.hash = "#/task/waiting_for_login";
+  window.location.hash = "#/fixture/waiting_for_login";
 
   render(<App />);
 

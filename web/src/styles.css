@@ -585,3 +585,21 @@ dd { margin: 0; color: var(--fg); font-size: 14px; line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .001ms !important; animation-duration: .001ms !important; }
 }
+
+
+/* F3-01 real runtime states: keep existing geometry, add only bounded status copy. */
+.assignment-error,
+.runtime-notice,
+.material-provenance {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.assignment-error { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger); }
+.runtime-notice { max-width: 720px; border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
+.material-provenance { margin: 0; border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }

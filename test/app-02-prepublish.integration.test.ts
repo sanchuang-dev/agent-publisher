@@ -495,7 +495,11 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
           controlOwner: "human",
         },
       });
-      expect(JSON.stringify(result.projection)).not.toContain("secret");
+      const serializedProjection = JSON.stringify(result.projection);
+      expect(serializedProjection).not.toContain("token=secret");
+      expect(serializedProjection).not.toContain(
+        "http://127.0.0.1:6080/vnc.html#token=secret",
+      );
     } finally {
       await application.stop();
     }

@@ -295,6 +295,7 @@ export class XiaohongshuPrepublishOrchestrator {
       ) {
         try {
           job = await this.#materialize(job);
+          this.#publish(jobId);
         } catch (error) {
           return {
             projection: this.#publish(jobId),

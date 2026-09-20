@@ -119,6 +119,49 @@ runtime contract. Configure `APP_CONTROLLED_MATERIAL_PATH`,
 `APP_CONTROLLED_ASSET_ROOT`, and a reachable `BROWSER_CDP_ENDPOINT`
 explicitly.
 
+### Run the Web MVP pre-publish smoke
+
+With `browser-runtime` and `app-runtime` healthy, start the existing Web shell
+on the Docker host:
+
+```bash
+npm install
+npm run dev:web
+```
+
+Open `http://127.0.0.1:5173`, submit a Xiaohongshu image-text task, and keep
+the task detail page open. The Web reads the real APP-02 Job/SSE projection,
+shows Browser Live View only when login/verification needs human control, then
+continues to the real `waiting_for_approval` summary. F3-01 stops there:
+`批准发布` remains disabled and no final-publish route is called.
+
+## Live Content Secretary model smoke
+
+The default automated suite uses controlled Pi providers and does not require external model credentials. A real OpenAI-compatible Content Secretary smoke is an explicit manual check.
+
+The runtime reads only these product-owned variables:
+
+- `PUBLISHER_AI_BASE_URL`
+- `PUBLISHER_AI_API_KEY`
+- `PUBLISHER_AI_MODEL`
+
+The endpoint must use HTTPS, except for an explicit loopback development endpoint.
+
+On Windows PowerShell, set the values only in the current process and opt in to the external call:
+
+```powershell
+$env:PUBLISHER_LIVE_MODEL_SMOKE="1"
+$env:PUBLISHER_AI_BASE_URL="https://your-openai-compatible-gateway.example/v1"
+$env:PUBLISHER_AI_MODEL="your-model-id"
+$env:PUBLISHER_AI_API_KEY="your-key"
+
+npm run smoke:content-secretary-live
+
+Remove-Item Env:PUBLISHER_AI_API_KEY -ErrorAction SilentlyContinue
+```
+
+Do not commit the key, put it in `.env`, or paste it into Issue/PR evidence. The smoke prints only bounded provider/model/MaterialPlan/checkpoint evidence and uses a disposable local database/session directory.
+
 ## POC boundaries
 
 - This is not a general-purpose browser agent.
