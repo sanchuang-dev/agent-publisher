@@ -537,21 +537,18 @@ describe("XiaohongshuLoginService", () => {
         throw new Error("expected human takeover");
       }
 
-      jobs.create({
-        id: "job-step-collision",
-        platform: "xiaohongshu",
-        publishMode: "image_text",
-        briefJson: "{}",
-      });
-      jobs.commitCheckpoint("job-step-collision", {
-        status: "preparing_materials",
-        checkpoint: { phase: "collision" },
-        step: {
-          id: "xhs-test-3",
-          stepKey: "collision",
-          status: "running",
-        },
-      });
+      const commitCheckpoint = jobs.commitCheckpoint.bind(jobs);
+      jobs.commitCheckpoint = ((jobId, input) => {
+        if (
+          jobId === "job-login-atomic" &&
+          input.status === "preparing_publish" &&
+          input.step.stepKey === "ensure_login"
+        ) {
+          throw new Error("fixture continuation checkpoint failure");
+        }
+
+        return commitCheckpoint(jobId, input);
+      }) as typeof jobs.commitCheckpoint;
 
       inspectedState = { kind: "authenticated" };
       await expect(
