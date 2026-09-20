@@ -107,11 +107,23 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
     );
   }
 
+  const auth = server.transport.auth;
+  const hasCredentials = auth !== undefined && auth.kind !== "none";
+  const isLoopback =
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "::1" ||
+    url.hostname === "localhost";
+  if (hasCredentials && url.protocol !== "https:" && !isLoopback) {
+    throw new Error(
+      `MCP server "${server.name}" authenticated HTTP endpoints must use https or loopback`,
+    );
+  }
+
   return {
     ...common,
     url: url.toString(),
     httpTransport: "streamable-http",
-    ...compileHttpAuth(server.transport.auth),
+    ...compileHttpAuth(auth),
   };
 }
 
