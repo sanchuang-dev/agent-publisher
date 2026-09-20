@@ -1,5 +1,7 @@
 import type {
   DesignAssetReference,
+  DesignRenderInput,
+  DesignRenderResult,
   ImageAssetReference,
   ImageTextCreativeBrief,
   ImageTextMaterialPack,
@@ -51,7 +53,7 @@ export interface FakeImageProvider extends ImageProvider {
 }
 
 export interface FakeDesignProvider extends DesignProvider {
-  readonly calls: MaterialPlan[];
+  readonly calls: DesignRenderInput[];
 }
 
 export interface FakeVideoProvider extends VideoProvider {
@@ -104,26 +106,48 @@ export function createTextMaterialFixture(): TextMaterial {
   };
 }
 
-export function createCoverFixture(): ImageAssetReference {
+function createImageReference(
+  assetId: string,
+): ImageAssetReference {
   return {
     kind: "image",
-    assetId: "cover-1",
-    uri: "asset://fixture/cover-1",
+    assetId,
+    uri: `asset://fixture/${assetId}`,
     mimeType: "image/png",
     width: 1080,
     height: 1440,
   };
 }
 
+export function createCoverFixture(): ImageAssetReference {
+  return createImageReference("cover-1");
+}
+
 export function createImageFixtures(count = 2): readonly ImageAssetReference[] {
-  return Array.from({ length: count }, (_, index) => ({
-    kind: "image" as const,
-    assetId: `image-${index + 1}`,
-    uri: `asset://fixture/image-${index + 1}`,
-    mimeType: "image/png",
-    width: 1080,
-    height: 1440,
-  }));
+  return Array.from({ length: count }, (_, index) =>
+    createImageReference(`image-${index + 1}`),
+  );
+}
+
+export function createDesignSourceFixture(): DesignAssetReference {
+  return {
+    kind: "design",
+    assetId: "design-source-1",
+    uri: "asset://fixture/design-source-1",
+    mimeType: "application/json",
+  };
+}
+
+export function createDesignRenderResultFixture(
+  plan: ImageTextMaterialPlan = createImageTextPlanFixture(),
+): DesignRenderResult {
+  return {
+    source: createDesignSourceFixture(),
+    cover: createImageReference("design-cover-1"),
+    images: Array.from({ length: plan.imageCount }, (_, index) =>
+      createImageReference(`design-image-${index + 1}`),
+    ),
+  };
 }
 
 export function createVideoAssetFixture(): VideoAssetReference {
@@ -204,15 +228,17 @@ export function createFakeImageProvider(
 }
 
 export function createFakeDesignProvider(
-  result: ProviderResult<readonly DesignAssetReference[]> = providerSuccess([]),
+  result: ProviderResult<DesignRenderResult> = providerSuccess(
+    createDesignRenderResultFixture(),
+  ),
 ): FakeDesignProvider {
-  const calls: MaterialPlan[] = [];
+  const calls: DesignRenderInput[] = [];
 
   return {
     slot: "design",
     calls,
-    async render(plan) {
-      calls.push(plan);
+    async render(input) {
+      calls.push(input);
       return result;
     },
   };
