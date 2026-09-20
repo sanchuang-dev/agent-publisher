@@ -183,7 +183,7 @@ test("healthcheck fails when an endpoint probe fails", () => {
   }
 });
 
-test("compose exposes Live View only on localhost while keeping raw VNC and CDP internal", () => {
+test("compose exposes Live View on the host while keeping raw VNC and CDP internal", () => {
   const composeFile = read("compose.yaml");
 
   expect(composeFile).toMatch(/expose:\n(?:\s+- ".+"\n)*\s+- "9222"/);
