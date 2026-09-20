@@ -190,14 +190,17 @@ describe("Publisher Pi MCP adapter", () => {
     });
 
     faux.setResponses([
-      fauxAssistantMessage(
-        fauxToolCall(
-          "mcp",
-          { search: "allowed echo", server: "stdio-fixture" },
-          { id: "stdio-search" },
-        ),
-        { stopReason: "toolUse" },
-      ),
+      (context) => {
+        expect((context.tools ?? []).map((tool) => tool.name)).toEqual(["mcp"]);
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            { search: "allowed echo", server: "stdio-fixture" },
+            { id: "stdio-search" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
       (context) => {
         const serialized = JSON.stringify(context.messages);
         expect(serialized).toContain("allowed_echo");
