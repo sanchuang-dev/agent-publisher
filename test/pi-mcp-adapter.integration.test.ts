@@ -290,8 +290,8 @@ describe("Publisher Pi MCP adapter", () => {
       fauxAssistantMessage(
         fauxToolCall(
           "mcp",
-          { search: "allowed echo", server: "http-fixture" },
-          { id: "http-search" },
+          { connect: "http-fixture" },
+          { id: "http-connect" },
         ),
         { stopReason: "toolUse" },
       ),
@@ -422,8 +422,8 @@ describe("Publisher Pi MCP adapter", () => {
       fauxAssistantMessage(
         fauxToolCall(
           "mcp",
-          { search: "allowed echo", server: "fixture-a" },
-          { id: "unavailable-search" },
+          { connect: "fixture-a" },
+          { id: "unavailable-connect" },
         ),
         { stopReason: "toolUse" },
       ),
@@ -434,9 +434,10 @@ describe("Publisher Pi MCP adapter", () => {
             message.toolName === "mcp",
         );
         const serializedResults = JSON.stringify(mcpToolResults);
-        const failureVisible =
-          /ENOENT|not available|connection|spawn/i.test(serializedResults);
         expect(mcpToolResults.length).toBeGreaterThan(0);
+        const failureVisible =
+          serializedResults.includes('"error":"connect_failed"') &&
+          serializedResults.includes('Failed to connect to \\"fixture-a\\"');
         return fauxAssistantMessage(
           fauxText(
             failureVisible ? "MCP_FAILURE_OBSERVED" : "MCP_FAILURE_MISSING",
