@@ -1,3 +1,5 @@
+import { get } from "node:http";
+
 import type { FastifyPluginAsync } from "fastify";
 import { describe, expect, test } from "vitest";
 
@@ -7,6 +9,14 @@ import {
   createApplication,
   type AgentPublisherApplication,
 } from "../src/app/bootstrap.js";
+
+interface TestSseClient {
+  readonly statusCode: number | undefined;
+  readonly contentType: string;
+  readonly firstChunk: string;
+  readonly closed: Promise<void>;
+  disconnect(): void;
+}
 
 async function waitFor(
   predicate: () => boolean,
@@ -31,6 +41,33 @@ function createSseTestApplication(): AgentPublisherApplication {
     routeModules: {
       events: createSseFixtureRoutes(sseConnections),
     },
+  });
+}
+
+function connectSse(url: string): Promise<TestSseClient> {
+  return new Promise((resolve, reject) => {
+    const request = get(url, (response) => {
+      response.setEncoding("utf8");
+      response.once("error", reject);
+
+      response.once("data", (chunk) => {
+        const closed = new Promise<void>((resolveClosed) => {
+          response.once("close", resolveClosed);
+        });
+
+        resolve({
+          statusCode: response.statusCode,
+          contentType: String(response.headers["content-type"] ?? ""),
+          firstChunk: String(chunk),
+          closed,
+          disconnect: () => {
+            response.destroy();
+          },
+        });
+      });
+    });
+
+    request.once("error", reject);
   });
 }
 
@@ -90,35 +127,22 @@ describe("Fastify application bootstrap", () => {
   test("streams one controlled SSE event and releases a disconnected client", async () => {
     const application = createSseTestApplication();
     const origin = await application.start({ host: "127.0.0.1", port: 0 });
-    const abort = new AbortController();
 
     try {
-      const response = await fetch(`${origin}/api/_fixtures/events`, {
-        signal: abort.signal,
-      });
-      expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain(
-        "text/event-stream",
-      );
+      const client = await connectSse(`${origin}/api/_fixtures/events`);
 
-      const reader = response.body?.getReader();
-      expect(reader).toBeDefined();
-
-      const firstRead = await reader!.read();
-      const payload = new TextDecoder().decode(firstRead.value);
-
-      expect(payload).toContain("event: fixture");
-      expect(payload).toContain('data: {"status":"connected"}');
+      expect(client.statusCode).toBe(200);
+      expect(client.contentType).toContain("text/event-stream");
+      expect(client.firstChunk).toContain("event: fixture");
+      expect(client.firstChunk).toContain('data: {"status":"connected"}');
       expect(application.dependencies.sseConnections.activeCount).toBe(1);
 
-      const readerClosed = reader!.closed.catch(() => undefined);
-      abort.abort();
-      await readerClosed;
+      client.disconnect();
+      await client.closed;
       await waitFor(
         () => application.dependencies.sseConnections.activeCount === 0,
       );
     } finally {
-      abort.abort();
       await application.stop();
     }
   });
@@ -126,21 +150,14 @@ describe("Fastify application bootstrap", () => {
   test("graceful shutdown closes active SSE listeners deterministically", async () => {
     const application = createSseTestApplication();
     const origin = await application.start({ host: "127.0.0.1", port: 0 });
+    const client = await connectSse(`${origin}/api/_fixtures/events`);
 
-    const response = await fetch(`${origin}/api/_fixtures/events`);
-    const reader = response.body?.getReader();
-    expect(reader).toBeDefined();
-
-    const firstRead = await reader!.read();
-    expect(firstRead.done).toBe(false);
     expect(application.dependencies.sseConnections.activeCount).toBe(1);
 
     const stopPromise = application.stop();
-    const finalRead = await reader!.read();
-
+    await client.closed;
     await stopPromise;
 
-    expect(finalRead.done).toBe(true);
     expect(application.dependencies.sseConnections.activeCount).toBe(0);
     expect(application.server.server.listening).toBe(false);
   });
