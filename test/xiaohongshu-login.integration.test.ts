@@ -514,6 +514,72 @@ describe("XiaohongshuLoginService", () => {
     }
   });
 
+  test("login resolution rolls back if the continuation checkpoint cannot commit", async () => {
+    const temp = makeTempDb();
+    cleanupRoots.push(temp.root);
+    const db = openDatabase({ databasePath: temp.databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    createPreparingPublishJob(jobs, "job-login-atomic");
+
+    let inspectedState: XiaohongshuEntryState = { kind: "login_required" };
+    const service = makeService(db, jobs, actions, {
+      openEntry: async () => ({ kind: "login_required" }),
+      inspectEntry: async () => inspectedState,
+    });
+
+    try {
+      const waiting = await service.ensureLogin({
+        jobId: "job-login-atomic",
+        session: fakeSession(),
+      });
+      if (waiting.kind !== "human_takeover") {
+        throw new Error("expected human takeover");
+      }
+
+      jobs.create({
+        id: "job-step-collision",
+        platform: "xiaohongshu",
+        publishMode: "image_text",
+        briefJson: "{}",
+      });
+      jobs.commitCheckpoint("job-step-collision", {
+        status: "preparing_materials",
+        checkpoint: { phase: "collision" },
+        step: {
+          id: "xhs-test-3",
+          stepKey: "collision",
+          status: "running",
+        },
+      });
+
+      inspectedState = { kind: "authenticated" };
+      await expect(
+        service.ensureLogin({
+          jobId: "job-login-atomic",
+          session: fakeSession(),
+        }),
+      ).rejects.toThrow();
+
+      expect(actions.getById(waiting.action.id)).toMatchObject({
+        id: waiting.action.id,
+        type: "login_required",
+        status: "open",
+        resolution: null,
+      });
+      expect(jobs.getById("job-login-atomic")).toMatchObject({
+        status: "waiting_for_login",
+        currentStep: "ensure_login",
+        checkpoint: {
+          actionRequestId: waiting.action.id,
+          entryState: "login_required",
+        },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("challenge state becomes the same bounded login_required takeover without persisting session material", async () => {
     const temp = makeTempDb();
     cleanupRoots.push(temp.root);
