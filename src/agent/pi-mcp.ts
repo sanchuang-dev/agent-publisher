@@ -164,10 +164,10 @@ export function compilePublisherMcpProfile(
     directTools: false,
     namespaceProxyTools: false,
     scriptMode: false,
-      hostConfigDiscovery: "off",
-      notifyOnStartupConnect: false,
-      mcpFooterStatus: "off",
-      autoAuth: false,
+    hostConfigDiscovery: "off",
+    notifyOnStartupConnect: false,
+    mcpFooterStatus: "off",
+    autoAuth: false,
     authRequiredMessage:
       'MCP server "${server}" requires authentication through Publisher-controlled setup.',
   };
