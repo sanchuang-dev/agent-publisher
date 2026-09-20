@@ -104,6 +104,33 @@ function normalizeKeyName(key: string): string {
   return key.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
+const forbiddenKeyMarkers = [
+  "token",
+  "secret",
+  "password",
+  "passwd",
+  "cookie",
+  "credential",
+  "apikey",
+  "authorization",
+  "bearer",
+  "jwt",
+  "privatekey",
+  "storagestate",
+  "localstorage",
+  "sessionstorage",
+  "qrcode",
+  "qrartifact",
+] as const;
+
+function isForbiddenKeyName(key: string): boolean {
+  const normalized = normalizeKeyName(key);
+  return (
+    forbiddenKeyNames.has(normalized) ||
+    forbiddenKeyMarkers.some((marker) => normalized.includes(marker))
+  );
+}
+
 function assertBoundedIdentity(
   field: "id" | "jobId",
   value: string,
@@ -155,7 +182,7 @@ function assertJsonSafe(
   }
 
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (forbiddenKeyNames.has(normalizeKeyName(key))) {
+    if (isForbiddenKeyName(key)) {
       throw new SensitivePublicationEvidenceError(`${path}.${key}`);
     }
     assertJsonSafe(nestedValue, `${path}.${key}`, depth + 1);
@@ -220,9 +247,16 @@ function normalizeUri(
     throw new SensitivePublicationEvidenceError("uri.credentials");
   }
 
-  for (const key of parsed.searchParams.keys()) {
-    if (forbiddenUriQueryKeys.has(normalizeKeyName(key))) {
+  for (const [key, queryValue] of parsed.searchParams.entries()) {
+    if (
+      forbiddenUriQueryKeys.has(normalizeKeyName(key)) ||
+      isForbiddenKeyName(key)
+    ) {
       throw new SensitivePublicationEvidenceError(`uri.query.${key}`);
+    }
+
+    if (forbiddenStringPatterns.some((pattern) => pattern.test(queryValue))) {
+      throw new SensitivePublicationEvidenceError(`uri.query.${key}.value`);
     }
   }
 
