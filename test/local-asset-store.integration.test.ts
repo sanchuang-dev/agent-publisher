@@ -17,6 +17,7 @@ import {
   AssetAlreadyExistsError,
   AssetNotFoundError,
 } from "../src/contracts/asset.js";
+import { JobNotFoundError } from "../src/contracts/job.js";
 import {
   AssetFileMissingError,
   AssetIntegrityError,
@@ -246,7 +247,7 @@ describe("LocalAssetStore integration", () => {
         mimeType: "image/png",
         bytes: Buffer.from("orphan-prevention"),
       }),
-    ).rejects.toBeInstanceOf(Error);
+    ).rejects.toBeInstanceOf(JobNotFoundError);
 
     expect(repository.getById("asset-missing-owner")).toBeNull();
     expect(existsSync(assetRoot) ? readdirSync(assetRoot) : []).toEqual([]);
