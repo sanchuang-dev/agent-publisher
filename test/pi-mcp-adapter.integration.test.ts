@@ -403,10 +403,10 @@ describe("Publisher Pi MCP adapter", () => {
       mcp: {
         servers: [
           {
-            name: "missing-fixture",
+            name: "fixture-a",
             transport: {
               kind: "stdio",
-              command: "/publisher/definitely-missing-mcp-command",
+              command: "/publisher/ghost-command-x",
               },
             includeTools: ["allowed_echo"],
           },
@@ -422,15 +422,22 @@ describe("Publisher Pi MCP adapter", () => {
       fauxAssistantMessage(
         fauxToolCall(
           "mcp",
-          { search: "allowed echo", server: "missing-fixture" },
-          { id: "missing-search" },
+          { search: "allowed echo", server: "fixture-a" },
+          { id: "unavailable-search" },
         ),
         { stopReason: "toolUse" },
       ),
       (context) => {
-        const serialized = JSON.stringify(context.messages);
+        const mcpToolResults = context.messages.filter(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === "mcp",
+        );
+        const serializedResults = JSON.stringify(mcpToolResults);
         const failureVisible =
-          /failed|unavailable|not available|enoent|missing/i.test(serialized);
+          /ENOENT|not available|connection|spawn/i.test(serializedResults);
+        expect(mcpToolResults.length).toBeGreaterThan(0);
+        expect(serializedResults).not.toContain("ghost-command-x");
         return fauxAssistantMessage(
           fauxText(
             failureVisible ? "MCP_FAILURE_OBSERVED" : "MCP_FAILURE_MISSING",
