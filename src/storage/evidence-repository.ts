@@ -32,6 +32,7 @@ interface DatabaseHandle {
 
 interface JobLookupRow {
   id: string;
+  platform: PublishPlatform;
 }
 
 interface EvidenceIdRow {
@@ -486,7 +487,17 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
     const createdAt = new Date().toISOString();
 
     const insert = this.#db.transaction(() => {
-      this.#requireJob(normalized.jobId);
+      const job = this.#requireJob(normalized.jobId);
+
+      if (
+        normalized.metadata?.platform !== undefined &&
+        normalized.metadata.platform !== job.platform
+      ) {
+        throw new InvalidPublicationEvidenceError(
+          "metadata",
+          "platform must match the owning Job",
+        );
+      }
 
       const existing = this.#db
         .prepare("SELECT id FROM evidence WHERE id = ?")
@@ -534,14 +545,16 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
     ).map(mapEvidence);
   }
 
-  #requireJob(jobId: string): void {
+  #requireJob(jobId: string): JobLookupRow {
     const row = this.#db
-      .prepare("SELECT id FROM jobs WHERE id = ?")
+      .prepare("SELECT id, platform FROM jobs WHERE id = ?")
       .get(jobId) as JobLookupRow | undefined;
 
     if (!row) {
       throw new JobNotFoundError(jobId);
     }
+
+    return row;
   }
 
   #requireEvidence(evidenceId: string): PublicationEvidence {

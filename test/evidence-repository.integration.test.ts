@@ -339,6 +339,18 @@ describe("EvidenceRepository integration", () => {
       }),
     ).toThrow(InvalidPublicationEvidenceError);
 
+    expect(() =>
+      evidence.append({
+        id: "platform-mismatch",
+        jobId: "job-evidence",
+        kind: "result_url",
+        uri: "https://example.test/posts/post-1",
+        metadata: {
+          platform: "douyin",
+        },
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
+
     expect(evidence.getByJob("job-evidence")).toEqual([]);
   });
 
