@@ -26,5 +26,31 @@ services:
       - browser-profile:/data/profile
     restart: unless-stopped
 
+  app-runtime:
+    profiles:
+      - app
+    build:
+      context: .
+      dockerfile: docker/app-runtime/Dockerfile
+    depends_on:
+      browser-runtime:
+        condition: service_healthy
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "3000"
+      APP_BROWSER_LIVE_VIEW_URL: "${APP_BROWSER_LIVE_VIEW_URL:-http://127.0.0.1:6080/vnc.html}"
+      APP_CONTROLLED_MATERIAL_PATH: "/controlled-material/material.json"
+      APP_CONTROLLED_ASSET_ROOT: "/controlled-material/assets"
+      BROWSER_CDP_ENDPOINT: "http://browser-runtime:9222"
+      DATABASE_SQLITE_PATH: "/data/app.db"
+    ports:
+      # Product API remains host-local for the POC. The browser's raw CDP port
+      # stays Compose-internal and is never published to the host.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - app-data:/data
+      - ./data/controlled-material:/controlled-material:ro
+
 volumes:
   browser-profile:
+  app-data:

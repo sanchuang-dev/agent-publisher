@@ -17,7 +17,8 @@
     "dev:web": "vite web",
     "build": "vite build web",
     "smoke:session-constraint": "tsx scripts/session-constraint-smoke.ts",
-    "smoke:xhs-login": "tsx scripts/xiaohongshu-login-smoke.ts"
+    "smoke:xhs-login": "tsx scripts/xiaohongshu-login-smoke.ts",
+    "start:api": "tsx scripts/start-app.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
