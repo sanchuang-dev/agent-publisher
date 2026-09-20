@@ -4,21 +4,21 @@ set -eu
 display="${DISPLAY:-:99}"
 profile_dir="${BROWSER_PROFILE_DIR:-/data/profile}"
 runtime_dir="${BROWSER_RUNTIME_DIR:-/run/browser-runtime}"
-novnc_bind_address="${NOVNC_BIND_ADDRESS:-127.0.0.1}"
-novnc_password="${NOVNC_PASSWORD:-}"
+novnc_password_file="${NOVNC_PASSWORD_FILE:-}"
+novnc_allow_no_password="${NOVNC_ALLOW_NO_PASSWORD:-0}"
 
 # Internal browser-runtime transport contract. Host/reverse-proxy exposure belongs
 # to Compose or the application boundary instead of a second container port config.
 vnc_port="5900"
 novnc_port="6080"
-vnc_password_file="${runtime_dir}/vnc.pass"
+vnc_runtime_password_file="${runtime_dir}/novnc-password"
 
 display_number="${display#:}"
 x_socket="/tmp/.X11-unix/X${display_number}"
 
 mkdir -p "${profile_dir}" "${runtime_dir}"
 chown -R browser:browser "${profile_dir}"
-rm -f "${runtime_dir}"/*.pid "${vnc_password_file}"
+rm -f "${runtime_dir}"/*.pid "${vnc_runtime_password_file}"
 
 xvfb_pid=""
 chromium_pid=""
@@ -54,7 +54,7 @@ cleanup() {
     fi
   done
 
-  rm -f "${runtime_dir}"/*.pid "${vnc_password_file}"
+  rm -f "${runtime_dir}"/*.pid "${vnc_runtime_password_file}"
 }
 
 shutdown() {
@@ -109,7 +109,25 @@ gosu browser socat \
 cdp_proxy_pid=$!
 record_pid cdp-proxy "${cdp_proxy_pid}"
 
-if [ "${novnc_bind_address}" = "127.0.0.1" ] || [ "${novnc_bind_address}" = "localhost" ]; then
+if [ -n "${novnc_password_file}" ]; then
+  if [ ! -r "${novnc_password_file}" ]; then
+    echo "NOVNC_PASSWORD_FILE is not readable: ${novnc_password_file}" >&2
+    exit 1
+  fi
+
+  cp "${novnc_password_file}" "${vnc_runtime_password_file}"
+  chown browser:browser "${vnc_runtime_password_file}"
+  chmod 600 "${vnc_runtime_password_file}"
+
+  gosu browser x11vnc \
+    -display "${display}" \
+    -rfbport "${vnc_port}" \
+    -localhost \
+    -forever \
+    -shared \
+    -passwdfile "${vnc_runtime_password_file}" \
+    -xkb &
+elif [ "${novnc_allow_no_password}" = "1" ]; then
   gosu browser x11vnc \
     -display "${display}" \
     -rfbport "${vnc_port}" \
@@ -119,23 +137,8 @@ if [ "${novnc_bind_address}" = "127.0.0.1" ] || [ "${novnc_bind_address}" = "loc
     -nopw \
     -xkb &
 else
-  if [ -z "${novnc_password}" ]; then
-    echo "NOVNC_PASSWORD is required when NOVNC_BIND_ADDRESS is not loopback" >&2
-    exit 1
-  fi
-
-  x11vnc -storepasswd "${novnc_password}" "${vnc_password_file}" >/dev/null 2>&1
-  chown browser:browser "${vnc_password_file}"
-  chmod 600 "${vnc_password_file}"
-
-  gosu browser x11vnc \
-    -display "${display}" \
-    -rfbport "${vnc_port}" \
-    -localhost \
-    -forever \
-    -shared \
-    -rfbauth "${vnc_password_file}" \
-    -xkb &
+  echo "NOVNC_PASSWORD_FILE is required unless NOVNC_ALLOW_NO_PASSWORD=1 is explicitly set" >&2
+  exit 1
 fi
 x11vnc_pid=$!
 record_pid x11vnc "${x11vnc_pid}"
