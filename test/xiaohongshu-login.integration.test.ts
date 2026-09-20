@@ -12,6 +12,7 @@ import {
   type XiaohongshuEntryState,
 } from "../src/platforms/xiaohongshu/login-entry.js";
 import {
+  XiaohongshuLoginFlowInvariantError,
   XiaohongshuLoginService,
   XiaohongshuUnexpectedEntryStateError,
 } from "../src/platforms/xiaohongshu/login-service.js";
@@ -51,10 +52,10 @@ function createPreparingPublishJob(jobs: JobRepository, jobId: string): void {
   });
 }
 
-function fakeSession(): BrowserSession {
+function fakeSession(profileRef = "profile-xhs"): BrowserSession {
   return {
     id: "session-xhs",
-    profileRef: "profile-xhs",
+    profileRef,
     page: {} as BrowserSession["page"],
   };
 }
@@ -324,6 +325,56 @@ describe("XiaohongshuLoginService", () => {
     }
   });
 
+  test("human takeover refuses to resume on a different persistent browser profile", async () => {
+    const temp = makeTempDb();
+    cleanupRoots.push(temp.root);
+    const db = openDatabase({ databasePath: temp.databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    createPreparingPublishJob(jobs, "job-profile-mismatch");
+
+    let inspectCalls = 0;
+    const service = makeService(db, jobs, actions, {
+      openEntry: async () => ({ kind: "login_required" }),
+      inspectEntry: async () => {
+        inspectCalls += 1;
+        return { kind: "authenticated" };
+      },
+    });
+
+    try {
+      const waiting = await service.ensureLogin({
+        jobId: "job-profile-mismatch",
+        session: fakeSession("profile-original"),
+      });
+      if (waiting.kind !== "human_takeover") {
+        throw new Error("expected human takeover");
+      }
+
+      await expect(
+        service.ensureLogin({
+          jobId: "job-profile-mismatch",
+          session: fakeSession("profile-other"),
+        }),
+      ).rejects.toBeInstanceOf(XiaohongshuLoginFlowInvariantError);
+
+      expect(inspectCalls).toBe(0);
+      expect(actions.getById(waiting.action.id)).toMatchObject({
+        id: waiting.action.id,
+        type: "login_required",
+        status: "open",
+      });
+      expect(jobs.getById("job-profile-mismatch")).toMatchObject({
+        status: "waiting_for_login",
+        checkpoint: {
+          actionRequestId: waiting.action.id,
+        },
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   test("successful human login resolves the existing action and returns to deterministic publishing without a second request", async () => {
     const temp = makeTempDb();
     cleanupRoots.push(temp.root);
@@ -449,6 +500,7 @@ describe("XiaohongshuLoginService", () => {
         "refresh_token",
         "qr_artifact",
         "qrcode_data",
+        "profile-xhs",
       ]) {
         expect(serialized).not.toContain(forbidden);
       }
