@@ -72,6 +72,18 @@ export interface CompleteLoginInput {
   readonly step: CheckpointStep;
 }
 
+export interface InvalidateApprovalForClarificationInput {
+  readonly jobId: string;
+  readonly approvalRequestId: string;
+  readonly cancellationResolution?: JsonValue | null;
+  readonly checkpoint: CheckpointData;
+  readonly step: CheckpointStep;
+  readonly action: {
+    readonly id: string;
+    readonly payload?: JsonValue | null;
+  };
+}
+
 export class ApprovalNotGrantedError extends Error {
   constructor(readonly jobId: string, reason: string) {
     super(`Cannot enter publishing for job ${jobId}: ${reason}`);
@@ -207,6 +219,67 @@ export class JobControlService {
         checkpoint: input.checkpoint,
         step: input.step,
       });
+    });
+  }
+
+  invalidateApprovalForClarification(
+    input: InvalidateApprovalForClarificationInput,
+  ): EnterWaitingResult {
+    return this.#runInTransaction(() => {
+      const currentJob = this.#jobs.getById(input.jobId);
+      if (!currentJob) {
+        throw new JobNotFoundError(input.jobId);
+      }
+      if (currentJob.status !== "waiting_for_approval") {
+        throw new ApprovalNotGrantedError(
+          input.jobId,
+          `job is ${currentJob.status}, not waiting_for_approval`,
+        );
+      }
+
+      const checkpoint = this.#jobs.loadLastCheckpoint(input.jobId);
+      const boundActionId = checkpoint
+        ? getCheckpointActionRequestId(checkpoint.checkpoint)
+        : null;
+      if (!checkpoint || boundActionId !== input.approvalRequestId) {
+        throw new ApprovalNotGrantedError(
+          input.jobId,
+          "durable checkpoint is not bound to the requested approval action",
+        );
+      }
+
+      const approval = this.#actionRequests.getById(input.approvalRequestId);
+      if (
+        !approval ||
+        approval.jobId !== input.jobId ||
+        approval.type !== "approval_required" ||
+        approval.status !== "open"
+      ) {
+        throw new ApprovalNotGrantedError(
+          input.jobId,
+          "checkpoint action is not an open approval_required action for this job",
+        );
+      }
+
+      this.#actionRequests.cancel(
+        approval.id,
+        input.cancellationResolution ?? { reason: "prepared_state_changed" },
+      );
+
+      const job = this.#jobs.commitCheckpoint(input.jobId, {
+        status: "preparing_publish",
+        checkpoint: this.#bindAction(input.checkpoint, input.action.id),
+        step: input.step,
+      });
+
+      const action = this.#actionRequests.open({
+        id: input.action.id,
+        jobId: input.jobId,
+        type: "clarification_required",
+        payload: input.action.payload ?? null,
+      });
+
+      return { job, action };
     });
   }
 
