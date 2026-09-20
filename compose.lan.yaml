@@ -1,0 +1,11 @@
+services:
+  browser-runtime:
+    environment:
+      NOVNC_ALLOW_NO_PASSWORD: "0"
+      NOVNC_PASSWORD_FILE: /run/secrets/novnc_password
+    ports:
+      # Explicit trusted-LAN opt-in. Keep this bound to the concrete LAN address,
+      # not 0.0.0.0, and provide the password file path via the host environment.
+      - "${NOVNC_BIND_ADDRESS:?Set NOVNC_BIND_ADDRESS to the trusted LAN address}:6080:6080"
+    volumes:
+      - "${NOVNC_PASSWORD_FILE:?Set NOVNC_PASSWORD_FILE to a local password file}:/run/secrets/novnc_password:ro"
