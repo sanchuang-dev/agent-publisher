@@ -231,10 +231,15 @@ CreativeBrief
     ↓
 MaterialPlan
     ↓
-TextProvider
-ImageProvider
-DesignProvider
-VideoProvider
+material preparation
+    ├─ TextProvider / copy path
+    ├─ ImageProvider            optional source imagery
+    ├─ DesignProvider
+    │    ├─ Builtin renderer    REQUIRED MVP baseline
+    │    └─ Canva / external    optional enhancement
+    └─ VideoProvider            optional enhancement
+    ↓
+Publisher-owned AssetStore
     ↓
 MaterialPack
     ↓
@@ -244,19 +249,57 @@ Platform Adapter
 Provider responsibilities:
 
 - **TextProvider** — title, body, tags, script/copy.
-- **ImageProvider** — original visual assets.
-- **DesignProvider** — template/layout/cover composition such as Canva or another renderer.
-- **VideoProvider** — generated video such as an external video model.
+- **ImageProvider** — optional original/source visual assets.
+- **DesignProvider** — turns resolved content into platform-publishable cover/images.
+- **VideoProvider** — generated video through an external capability when configured.
+- **AssetStore** — owns durable Publisher asset identity and bytes; platform adapters must not depend on expiring provider URLs.
 
-Canva, image models, and video models are provider implementations, not core product dependencies.
+### Builtin material is an MVP requirement
 
-Concrete vendor selection is intentionally deferred for the MVP. Keep provider slots for `TextProvider`, `ImageProvider`, `DesignProvider`, and `VideoProvider`. Unconfigured providers should report capability unavailable instead of forcing early vendor lock-in.
+The image-text MVP must remain usable with Canva unconfigured and video capability unavailable.
+
+The dependable baseline is:
+
+```text
+brief
+  ↓
+Content Secretary
+  ↓
+MaterialPlan
+  ↓
+Builtin image-text material generation
+  ↓
+Publisher-owned assets
+  ↓
+MaterialPack
+  ↓
+Xiaohongshu prepare / approval / publish
+```
+
+A valid MVP result therefore requires real uploadable image assets. A fake provider, a design-source reference without exported images, or a flow that only works when Canva succeeds does not satisfy the baseline.
+
+Canva, external image models, and video models are enhancement providers, not core product dependencies.
+
+### Builtin design safety boundary
+
+The Builtin renderer consumes a Publisher-owned bounded static layout contract rather than arbitrary model-generated HTML/JavaScript.
+
+The layout contract must:
+
+- remain independent from the selected rendering library;
+- reject executable/browser/network-capable content;
+- use controlled image/font resources;
+- produce deterministic image bytes without using the authenticated publishing browser.
+
+The concrete renderer is an implementation choice validated by engineering evidence. The current research compares Takumi as the primary candidate with Satori/resvg as a mature reference rather than making either library part of the product contract.
 
 ### Graceful degradation
 
 Video is an enhancement, not a hard dependency for the MVP.
 
 If video generation fails while text and images are ready, the job may continue as a usable image/text package when the selected task allows that fallback.
+
+Canva or another external design provider failing must not remove the Builtin image-text path.
 
 Material items should be independently retryable rather than forcing whole-pack regeneration.
 
