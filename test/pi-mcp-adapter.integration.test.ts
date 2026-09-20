@@ -202,6 +202,7 @@ describe("Publisher Pi MCP adapter", () => {
         );
       },
       (context) => {
+        expect((context.tools ?? []).map((tool) => tool.name)).toEqual(["mcp"]);
         const serialized = JSON.stringify(context.messages);
         expect(serialized).toContain("allowed_echo");
         expect(serialized).not.toContain("denied_secret");
