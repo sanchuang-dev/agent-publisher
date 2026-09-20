@@ -52,7 +52,7 @@ const definition: AgentDefinition = {
 };
 
 describe("PiAgentHost", () => {
-  test("creates isolated job/role sessions from one reusable definition", async () => {
+  test("keeps transcript/context isolated across sessions from one definition", async () => {
     const faux = fauxProvider({ provider: "publisher-agent-host-isolation" });
     const modelRuntime = await createFauxRuntime(faux);
     const loaderInputs: Array<{
@@ -81,12 +81,10 @@ describe("PiAgentHost", () => {
     const sessionA = await host.createSession({
       definition,
       scope: { jobId: "job-a", role: "content" },
-      context: "JOB_A_CONTEXT_SECRET",
     });
     const sessionB = await host.createSession({
       definition,
       scope: { jobId: "job-b", role: "content" },
-      context: "JOB_B_CONTEXT",
     });
 
     faux.setResponses([
@@ -95,31 +93,46 @@ describe("PiAgentHost", () => {
         return fauxAssistantMessage(
           fauxText(
             serialized.includes("JOB_A_CONTEXT_SECRET")
-              ? "A_CONTEXT_VISIBLE"
+              ? "A_CONTEXT_STORED"
               : "A_CONTEXT_MISSING",
           ),
         );
       },
       (context) => {
         const serialized = JSON.stringify(context);
-        const leaked =
-          serialized.includes("JOB_A_CONTEXT_SECRET") ||
-          serialized.includes("JOB_A_PROMPT_SECRET");
         return fauxAssistantMessage(
-          fauxText(leaked ? "JOB_A_LEAKED" : "JOB_B_ISOLATED"),
+          fauxText(
+            serialized.includes("JOB_A_CONTEXT_SECRET")
+              ? "JOB_A_LEAKED"
+              : "JOB_B_ISOLATED",
+          ),
+        );
+      },
+      (context) => {
+        const serialized = JSON.stringify(context);
+        return fauxAssistantMessage(
+          fauxText(
+            serialized.includes("JOB_A_CONTEXT_SECRET")
+              ? "A_CONTEXT_RETAINED"
+              : "A_CONTEXT_LOST",
+          ),
         );
       },
     ]);
 
-    const resultA = await sessionA.run({
-      prompt: "JOB_A_PROMPT_SECRET",
+    const firstA = await sessionA.run({
+      prompt: "Remember this session-only context: JOB_A_CONTEXT_SECRET",
     });
     const resultB = await sessionB.run({
-      prompt: "Check only your own session.",
+      prompt: "Check only your own session transcript.",
+    });
+    const secondA = await sessionA.run({
+      prompt: "Check whether your earlier session context is still present.",
     });
 
-    expect(resultA.finalText).toBe("A_CONTEXT_VISIBLE");
+    expect(firstA.finalText).toBe("A_CONTEXT_STORED");
     expect(resultB.finalText).toBe("JOB_B_ISOLATED");
+    expect(secondA.finalText).toBe("A_CONTEXT_RETAINED");
     expect(sessionA.ref).not.toBe(sessionB.ref);
     expect(sessionA.definition).toBe(definition);
     expect(sessionB.definition).toBe(definition);
@@ -129,14 +142,12 @@ describe("PiAgentHost", () => {
       {
         jobId: "job-a",
         role: "content",
-        systemPrompt:
-          "You are a bounded Publisher content worker.\n\nSession context:\nJOB_A_CONTEXT_SECRET",
+        systemPrompt: "You are a bounded Publisher content worker.",
       },
       {
         jobId: "job-b",
         role: "content",
-        systemPrompt:
-          "You are a bounded Publisher content worker.\n\nSession context:\nJOB_B_CONTEXT",
+        systemPrompt: "You are a bounded Publisher content worker.",
       },
     ]);
 
@@ -201,7 +212,9 @@ describe("PiAgentHost", () => {
     for (const path of contractFiles) {
       const source = await readFile(path, "utf8");
       expect(source).not.toContain("@earendil-works/");
-      expect(source).not.toMatch(/\b(?:PiAgentSession|ResourceLoader|CreateAgentSessionOptions)\b/);
+      expect(source).not.toMatch(
+        /\b(?:PiAgentSession|ResourceLoader|CreateAgentSessionOptions)\b/,
+      );
     }
   });
 });

@@ -11,7 +11,6 @@ export interface AgentSessionScope {
 export interface CreatePublisherAgentSessionInput {
   readonly definition: AgentDefinition;
   readonly scope: AgentSessionScope;
-  readonly context?: string;
 }
 
 export interface AgentTaskInput {

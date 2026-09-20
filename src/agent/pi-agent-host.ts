@@ -85,25 +85,13 @@ function assertPositiveFinite(value: number, label: string): void {
   }
 }
 
-function assertNonEmpty(value: string, label: string): void {
+function assertSessionConfigNonEmpty(value: string, label: string): void {
   if (value.trim().length === 0) {
     throw new AgentSessionError(
       "AGENT_SESSION_INITIALIZATION_FAILED",
       `${label} must not be empty`,
     );
   }
-}
-
-function buildSystemPrompt(
-  definition: AgentDefinition,
-  context: string | undefined,
-): string {
-  const basePrompt = definition.systemPrompt.trim();
-  if (!context || context.trim().length === 0) {
-    return basePrompt;
-  }
-
-  return `${basePrompt}\n\nSession context:\n${context.trim()}`;
 }
 
 async function withDeadline<T>(
@@ -179,7 +167,13 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       );
     }
 
-    assertNonEmpty(input.prompt, "Agent task prompt");
+    if (input.prompt.trim().length === 0) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RUN_FAILED",
+        "Agent task prompt must not be empty",
+        { runStopped: true },
+      );
+    }
 
     const timeoutMs = input.timeoutMs ?? this.defaultRunTimeoutMs;
     const abortTimeoutMs =
@@ -332,19 +326,19 @@ export class PiAgentHost implements AgentHost {
   async createSession(
     input: CreatePublisherAgentSessionInput,
   ): Promise<PublisherAgentSession> {
-    assertNonEmpty(input.definition.id, "Agent definition id");
-    assertNonEmpty(input.definition.systemPrompt, "Agent system prompt");
-    assertNonEmpty(input.scope.jobId, "Agent session job id");
-    assertNonEmpty(input.scope.role, "Agent session role");
+    assertSessionConfigNonEmpty(input.definition.id, "Agent definition id");
+    assertSessionConfigNonEmpty(
+      input.definition.systemPrompt,
+      "Agent system prompt",
+    );
+    assertSessionConfigNonEmpty(input.scope.jobId, "Agent session job id");
+    assertSessionConfigNonEmpty(input.scope.role, "Agent session role");
 
     const cwd = this.#options.cwd ?? process.cwd();
     const resourceLoader = this.#options.createResourceLoader({
       definition: input.definition,
       scope: input.scope,
-      systemPrompt: buildSystemPrompt(
-        input.definition,
-        input.context,
-      ),
+      systemPrompt: input.definition.systemPrompt.trim(),
     });
 
     const creation = createAgentSession({
