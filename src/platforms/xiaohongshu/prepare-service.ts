@@ -709,10 +709,57 @@ export class XiaohongshuPrepareService {
       );
     }
 
-    await this.#verifyPreparedPage({
-      page: session.page,
-      materialPack,
-    });
+    try {
+      await this.#verifyPreparedPage({
+        page: session.page,
+        materialPack,
+      });
+    } catch (error) {
+      const code = failureCode(error);
+      const attempt = this.#nextAttempt(job.id);
+      const result = this.#jobControl.invalidateApprovalForClarification({
+        jobId: job.id,
+        approvalRequestId: approval.id,
+        cancellationResolution: {
+          reason: "prepared_state_changed",
+          failureCode: code,
+        },
+        checkpoint: {
+          phase: "xhs_prepare_recovery_required",
+          contentFingerprint: expectedFingerprint,
+          browserProfileFingerprint: browserProfileFingerprint(session),
+          failureCode: code,
+          attempt,
+        },
+        step: {
+          id: this.#createId("step"),
+          stepKey: "verify_prepared",
+          status: "failed",
+          attempt,
+          errorCode: code,
+          errorMessage: safeFailureMessage(error),
+        },
+        action: {
+          id: this.#createId("action"),
+          payload: {
+            platform: "xiaohongshu",
+            mode: "image_text",
+            planId: materialPack.planId,
+            reason: "prepared_state_changed",
+            failureCode: code,
+            contentFingerprint: expectedFingerprint,
+            guidance:
+              "The prepared page no longer matches the approval target. Inspect the composer; keep matching content unchanged or reset it before retrying.",
+          },
+        },
+      });
+
+      throw new XiaohongshuPrepareRecoveryRequiredError(
+        result.action.id,
+        code,
+        { cause: error },
+      );
+    }
 
     return {
       prepared,
