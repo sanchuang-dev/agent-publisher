@@ -109,10 +109,14 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
 
   const auth = server.transport.auth;
   const hasCredentials = auth !== undefined && auth.kind !== "none";
+  const normalizedHost = url.hostname
+    .replace(/^\[/, "")
+    .replace(/\]$/, "")
+    .toLowerCase();
   const isLoopback =
-    url.hostname === "127.0.0.1" ||
-    url.hostname === "::1" ||
-    url.hostname === "localhost";
+    normalizedHost === "127.0.0.1" ||
+    normalizedHost === "::1" ||
+    normalizedHost === "localhost";
   if (hasCredentials && url.protocol !== "https:" && !isLoopback) {
     throw new Error(
       `MCP server "${server.name}" authenticated HTTP endpoints must use https or loopback`,
