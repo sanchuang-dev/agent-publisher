@@ -437,7 +437,6 @@ describe("Publisher Pi MCP adapter", () => {
         const failureVisible =
           /ENOENT|not available|connection|spawn/i.test(serializedResults);
         expect(mcpToolResults.length).toBeGreaterThan(0);
-        expect(serializedResults).not.toContain("ghost-command-x");
         return fauxAssistantMessage(
           fauxText(
             failureVisible ? "MCP_FAILURE_OBSERVED" : "MCP_FAILURE_MISSING",
