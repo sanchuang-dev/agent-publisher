@@ -9,7 +9,11 @@ import {
   type PublicationEvidenceKind,
   type PublicationEvidenceMetadata,
 } from "../contracts/evidence.js";
-import { JobNotFoundError, type JsonValue } from "../contracts/job.js";
+import { JobNotFoundError } from "../contracts/job.js";
+import {
+  publishPlatforms,
+  type PublishPlatform,
+} from "../contracts/publish-job.js";
 
 interface RunResult {
   readonly changes: number;
@@ -55,56 +59,28 @@ interface NormalizedEvidenceInput {
 
 const MAX_ID_LENGTH = 200;
 const MAX_URI_LENGTH = 4096;
-const MAX_VALUE_LENGTH = 4096;
-const MAX_METADATA_BYTES = 16 * 1024;
-const MAX_METADATA_DEPTH = 8;
+const MAX_REFERENCE_LENGTH = 512;
+const MAX_METADATA_BYTES = 4 * 1024;
 
-const forbiddenKeyNames = new Set([
-  "apikey",
-  "authorization",
-  "bearer",
-  "clientsecret",
-  "cookie",
-  "cookies",
-  "idtoken",
-  "localstorage",
-  "password",
-  "passwd",
-  "pwd",
-  "qrcode",
-  "qrartifact",
-  "refreshtoken",
-  "secret",
-  "sessionstorage",
-  "setcookie",
-  "storagestate",
-  "token",
-  "accesstoken",
+const allowedMetadataKeys = new Set<keyof PublicationEvidenceMetadata>([
+  "platform",
+  "verifiedBy",
+  "mimeType",
+  "purpose",
+  "capturedAt",
+  "sha256",
 ]);
 
-const forbiddenStringPatterns = [
-  /\bauthorization\s*:\s*bearer\b/i,
-  /\b(?:access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|client[-_]?secret|password|passwd|cookie|set-cookie)\s*=/i,
-  /\b(?:storage[-_]?state|local[-_]?storage|session[-_]?storage)\s*[:=]/i,
-];
-
-const forbiddenUriQueryKeys = new Set([
-  "accesstoken",
-  "apikey",
-  "authorization",
-  "clientsecret",
-  "cookie",
-  "idtoken",
-  "password",
-  "refreshtoken",
-  "token",
+const sensitiveExactKeyNames = new Set([
+  "sid",
+  "sessionid",
+  "jsessionid",
+  "phpsessid",
+  "csrftoken",
+  "xsrftoken",
 ]);
 
-function normalizeKeyName(key: string): string {
-  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-const forbiddenKeyMarkers = [
+const sensitiveKeyMarkers = [
   "token",
   "secret",
   "password",
@@ -123,12 +99,62 @@ const forbiddenKeyMarkers = [
   "qrartifact",
 ] as const;
 
-function isForbiddenKeyName(key: string): boolean {
+const sensitiveStringPatterns = [
+  /\bauthorization\s*:\s*(?:bearer|basic)\s+\S+/i,
+  /\bbearer\s+\S+/i,
+  /\b(?:access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|client[-_]?secret|password|passwd|cookie|set-cookie|session[-_]?id|jsessionid|phpsessid|sid|csrf[-_]?token|xsrf[-_]?token)\s*=/i,
+  /\b(?:storage[-_]?state|local[-_]?storage|session[-_]?storage)\s*[:=]/i,
+  /\b(?:cookie|set-cookie)\s*:/i,
+];
+
+const jwtLikePattern =
+  /(?:^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:$|[^A-Za-z0-9_-])/;
+
+const safeReferencePattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+const safeMetadataIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+const mimeTypePattern =
+  /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$/;
+const sha256Pattern = /^[A-Fa-f0-9]{64}$/;
+
+function normalizeKeyName(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isSensitiveKeyName(key: string): boolean {
   const normalized = normalizeKeyName(key);
   return (
-    forbiddenKeyNames.has(normalized) ||
-    forbiddenKeyMarkers.some((marker) => normalized.includes(marker))
+    sensitiveExactKeyNames.has(normalized) ||
+    sensitiveKeyMarkers.some((marker) => normalized.includes(marker))
   );
+}
+
+function decodeRepeated(value: string): string {
+  let decoded = value;
+
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) {
+        break;
+      }
+      decoded = next;
+    } catch {
+      break;
+    }
+  }
+
+  return decoded;
+}
+
+function assertNoSensitiveString(value: string, fieldPath: string): void {
+  const decoded = decodeRepeated(value);
+
+  if (
+    sensitiveStringPatterns.some((pattern) => pattern.test(decoded)) ||
+    jwtLikePattern.test(decoded)
+  ) {
+    throw new SensitivePublicationEvidenceError(fieldPath);
+  }
 }
 
 function assertBoundedIdentity(
@@ -147,48 +173,6 @@ function assertBoundedIdentity(
   }
 }
 
-function assertJsonSafe(
-  value: JsonValue,
-  path: string,
-  depth: number,
-): void {
-  if (depth > MAX_METADATA_DEPTH) {
-    throw new InvalidPublicationEvidenceError(
-      "metadata",
-      `nesting exceeds ${MAX_METADATA_DEPTH} levels at ${path}`,
-    );
-  }
-
-  if (typeof value === "string") {
-    if (forbiddenStringPatterns.some((pattern) => pattern.test(value))) {
-      throw new SensitivePublicationEvidenceError(path);
-    }
-    return;
-  }
-
-  if (
-    value === null ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return;
-  }
-
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      assertJsonSafe(item, `${path}[${index}]`, depth + 1);
-    });
-    return;
-  }
-
-  for (const [key, nestedValue] of Object.entries(value)) {
-    if (isForbiddenKeyName(key)) {
-      throw new SensitivePublicationEvidenceError(`${path}.${key}`);
-    }
-    assertJsonSafe(nestedValue, `${path}.${key}`, depth + 1);
-  }
-}
-
 function normalizeMetadata(
   metadata: PublicationEvidenceMetadata | null | undefined,
 ): PublicationEvidenceMetadata | null {
@@ -199,13 +183,106 @@ function normalizeMetadata(
   if (typeof metadata !== "object" || Array.isArray(metadata)) {
     throw new InvalidPublicationEvidenceError(
       "metadata",
-      "must be a JSON object",
+      "must be a flat metadata object",
     );
   }
 
-  assertJsonSafe(metadata, "metadata", 0);
+  const normalized: {
+    platform?: PublishPlatform;
+    verifiedBy?: string;
+    mimeType?: string;
+    purpose?: string;
+    capturedAt?: string;
+    sha256?: string;
+  } = {};
 
-  const json = JSON.stringify(metadata);
+  for (const [key, rawValue] of Object.entries(metadata)) {
+    if (isSensitiveKeyName(key)) {
+      throw new SensitivePublicationEvidenceError(`metadata.${key}`);
+    }
+
+    if (!allowedMetadataKeys.has(key as keyof PublicationEvidenceMetadata)) {
+      throw new InvalidPublicationEvidenceError(
+        "metadata",
+        `unsupported key: ${key}`,
+      );
+    }
+
+    if (typeof rawValue !== "string" || rawValue.trim().length === 0) {
+      throw new InvalidPublicationEvidenceError(
+        "metadata",
+        `${key} must be a non-empty string`,
+      );
+    }
+
+    const value = rawValue.trim();
+    assertNoSensitiveString(value, `metadata.${key}`);
+
+    switch (key) {
+      case "platform":
+        if (!publishPlatforms.includes(value as PublishPlatform)) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            `unsupported platform: ${value}`,
+          );
+        }
+        normalized.platform = value as PublishPlatform;
+        break;
+      case "verifiedBy":
+        if (
+          value.length > 128 ||
+          !safeMetadataIdentifierPattern.test(value)
+        ) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            "verifiedBy must be a bounded identifier",
+          );
+        }
+        normalized.verifiedBy = value;
+        break;
+      case "mimeType":
+        if (value.length > 128 || !mimeTypePattern.test(value)) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            "mimeType must be a valid bounded media type",
+          );
+        }
+        normalized.mimeType = value;
+        break;
+      case "purpose":
+        if (
+          value.length > 128 ||
+          !safeMetadataIdentifierPattern.test(value)
+        ) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            "purpose must be a bounded identifier",
+          );
+        }
+        normalized.purpose = value;
+        break;
+      case "capturedAt":
+        if (value.length > 64 || Number.isNaN(Date.parse(value))) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            "capturedAt must be a valid timestamp",
+          );
+        }
+        normalized.capturedAt = value;
+        break;
+      case "sha256":
+        if (!sha256Pattern.test(value)) {
+          throw new InvalidPublicationEvidenceError(
+            "metadata",
+            "sha256 must be a 64-character hexadecimal digest",
+          );
+        }
+        normalized.sha256 = value.toLowerCase();
+        break;
+    }
+  }
+
+  const json = JSON.stringify(normalized);
   if (Buffer.byteLength(json, "utf8") > MAX_METADATA_BYTES) {
     throw new InvalidPublicationEvidenceError(
       "metadata",
@@ -213,7 +290,7 @@ function normalizeMetadata(
     );
   }
 
-  return metadata;
+  return normalized;
 }
 
 function normalizeUri(
@@ -247,47 +324,38 @@ function normalizeUri(
     throw new SensitivePublicationEvidenceError("uri.credentials");
   }
 
-  for (const [key, queryValue] of parsed.searchParams.entries()) {
-    if (
-      forbiddenUriQueryKeys.has(normalizeKeyName(key)) ||
-      isForbiddenKeyName(key)
-    ) {
-      throw new SensitivePublicationEvidenceError(`uri.query.${key}`);
-    }
-
-    if (forbiddenStringPatterns.some((pattern) => pattern.test(queryValue))) {
-      throw new SensitivePublicationEvidenceError(`uri.query.${key}.value`);
-    }
-  }
-
-  let decodedPathAndFragment: string;
-  try {
-    decodedPathAndFragment = decodeURIComponent(`${parsed.pathname}${parsed.hash}`);
-  } catch {
-    decodedPathAndFragment = `${parsed.pathname}${parsed.hash}`;
-  }
-
   if (
-    forbiddenStringPatterns.some((pattern) =>
-      pattern.test(decodedPathAndFragment),
-    )
+    kind === "result_url" &&
+    parsed.protocol !== "https:" &&
+    parsed.protocol !== "http:"
   ) {
-    throw new SensitivePublicationEvidenceError("uri.path_or_fragment");
-  }
-
-  if (kind === "result_url" && parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new InvalidPublicationEvidenceError(
       "uri",
       "result_url must use http or https",
     );
   }
 
-  if (["data:", "javascript:", "vbscript:"].includes(parsed.protocol)) {
+  if (
+    kind === "artifact_uri" &&
+    !["file:", "https:", "http:"].includes(parsed.protocol)
+  ) {
     throw new InvalidPublicationEvidenceError(
       "uri",
-      `scheme ${parsed.protocol} is not allowed for evidence`,
+      "artifact_uri must use file, http, or https",
     );
   }
+
+  for (const [key, queryValue] of parsed.searchParams.entries()) {
+    if (isSensitiveKeyName(key)) {
+      throw new SensitivePublicationEvidenceError(`uri.query.${key}`);
+    }
+    assertNoSensitiveString(queryValue, `uri.query.${key}.value`);
+  }
+
+  assertNoSensitiveString(
+    `${parsed.pathname}${parsed.hash}`,
+    "uri.path_or_fragment",
+  );
 
   return normalized;
 }
@@ -307,15 +375,20 @@ function normalizeValue(
   }
 
   const normalized = value.trim();
-  if (normalized.length > MAX_VALUE_LENGTH) {
+  if (normalized.length > MAX_REFERENCE_LENGTH) {
     throw new InvalidPublicationEvidenceError(
       "value",
-      `must be at most ${MAX_VALUE_LENGTH} characters`,
+      `must be at most ${MAX_REFERENCE_LENGTH} characters`,
     );
   }
 
-  if (forbiddenStringPatterns.some((pattern) => pattern.test(normalized))) {
-    throw new SensitivePublicationEvidenceError("value");
+  assertNoSensitiveString(normalized, "value");
+
+  if (!safeReferencePattern.test(normalized)) {
+    throw new InvalidPublicationEvidenceError(
+      "value",
+      "must be a bounded reference identifier",
+    );
   }
 
   return normalized;
@@ -472,7 +545,9 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
       .get(evidenceId) as EvidenceRow | undefined;
 
     if (!row) {
-      throw new Error(`PublicationEvidence disappeared after append: ${evidenceId}`);
+      throw new Error(
+        `PublicationEvidence disappeared after append: ${evidenceId}`,
+      );
     }
 
     return mapEvidence(row);
