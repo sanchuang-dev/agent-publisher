@@ -16,8 +16,13 @@ export interface BindAgentSessionInput {
   readonly sessionRef: AgentSessionRef;
 }
 
+export interface ReplaceAgentSessionBindingInput extends BindAgentSessionInput {
+  readonly expectedSessionRef: AgentSessionRef;
+}
+
 export interface AgentSessionBindingRepository {
   bind(input: BindAgentSessionInput): AgentSessionBinding;
+  replace(input: ReplaceAgentSessionBindingInput): AgentSessionBinding;
   getForScope(scope: AgentSessionScope): AgentSessionBinding | null;
   getByRef(ref: AgentSessionRef): AgentSessionBinding | null;
 }
@@ -42,5 +47,14 @@ export class AgentSessionBindingMismatchError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "AgentSessionBindingMismatchError";
+  }
+}
+
+export class AgentSessionPersistenceRequiredError extends Error {
+  constructor() {
+    super(
+      "Durable Job/role AgentSession bindings require an AgentHost with process-restart resume support",
+    );
+    this.name = "AgentSessionPersistenceRequiredError";
   }
 }
