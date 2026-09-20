@@ -82,8 +82,8 @@ function compileServer(server: AgentMcpServerDefinition): ServerEntry {
         server.transport.command,
         `MCP server "${server.name}" command`,
       ),
-      args: server.transport.args ? [...server.transport.args] : undefined,
-      cwd: server.transport.cwd,
+      ...(server.transport.args ? { args: [...server.transport.args] } : {}),
+      ...(server.transport.cwd ? { cwd: server.transport.cwd } : {}),
       // Do not expose Publisher credentials to local MCP children by default.
       inheritEnv: false,
     };
@@ -135,7 +135,6 @@ export function compilePublisherMcpProfile(
     mcpServers,
     settings: {
       directTools: false,
-      namespaceProxyTools: false,
       scriptMode: false,
       hostConfigDiscovery: "off",
       notifyOnStartupConnect: false,
