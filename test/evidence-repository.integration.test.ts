@@ -267,6 +267,46 @@ describe("EvidenceRepository integration", () => {
     expect(evidence.getByJob("job-evidence")).toEqual([]);
   });
 
+  test("evidence and job identities cannot carry sensitive or free-form material", () => {
+    expect(() =>
+      evidence.append({
+        id: "access_token=redacted",
+        jobId: "job-evidence",
+        kind: "content_id",
+        value: "post-1",
+      }),
+    ).toThrow(SensitivePublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature123",
+        jobId: "job-evidence",
+        kind: "content_id",
+        value: "post-1",
+      }),
+    ).toThrow(SensitivePublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "evidence-safe",
+        jobId: "cookie: session=redacted",
+        kind: "content_id",
+        value: "post-1",
+      }),
+    ).toThrow(SensitivePublicationEvidenceError);
+
+    expect(() =>
+      evidence.append({
+        id: "evidence with spaces",
+        jobId: "job-evidence",
+        kind: "content_id",
+        value: "post-1",
+      }),
+    ).toThrow(InvalidPublicationEvidenceError);
+
+    expect(evidence.getByJob("job-evidence")).toEqual([]);
+  });
+
   test("metadata and reference fields are allowlisted and bounded", () => {
     expect(() =>
       evidence.append({
