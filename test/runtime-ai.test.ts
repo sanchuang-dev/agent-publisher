@@ -90,7 +90,7 @@ describe("Publisher runtime AI configuration", () => {
       PUBLISHER_AI_API_KEY_ENV,
       PUBLISHER_AI_MODEL_ENV,
     ]) {
-      const env = { ...base };
+      const env: NodeJS.ProcessEnv = { ...base };
       delete env[missing];
 
       expect(() => readPublisherAiConfig(env)).toThrowError(
