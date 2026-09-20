@@ -32,6 +32,12 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Export generated package lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-01-package-lock
+          path: package-lock.json
+
       - name: Check
         run: npm run check
 
