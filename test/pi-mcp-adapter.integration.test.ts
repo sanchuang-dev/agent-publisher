@@ -490,6 +490,40 @@ describe("Publisher Pi MCP adapter", () => {
     await session.dispose();
   });
 
+  test("rejects credentials embedded directly in an MCP URL", async () => {
+    const workspace = await createTempDir("publisher-mcp-url-credentials-");
+    await mkdir(workspace, { recursive: true });
+    const faux = fauxProvider({ provider: "publisher-mcp-url-credentials" });
+    const host = await createHost(workspace, faux);
+    const definition: AgentDefinition = {
+      id: "mcp-url-credentials-agent",
+      systemPrompt: "Use only the Publisher-provisioned MCP gateway.",
+      mcp: {
+        servers: [
+          {
+            name: "embedded-credentials",
+            transport: {
+              kind: "http",
+              url: "https://publisher-test:secret@example.com/mcp",
+              auth: { kind: "none" },
+            },
+            includeTools: ["allowed_echo"],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      host.createSession({
+        definition,
+        scope: { jobId: "job-mcp-url-credentials", role: "content" },
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_INITIALIZATION_FAILED",
+    });
+  });
+
   test("rejects authenticated remote MCP over plaintext HTTP", async () => {
     const workspace = await createTempDir("publisher-mcp-auth-http-");
     await mkdir(workspace, { recursive: true });
