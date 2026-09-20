@@ -245,7 +245,9 @@ function mapJobProjection(
   job: ApiJobProjection,
   briefHint?: string,
 ): TaskFixture {
-  const state = fixtureState(job.status);
+  const clarificationRequired =
+    job.humanAction?.type === "clarification_required";
+  const state = clarificationRequired ? "failed" : fixtureState(job.status);
   const agentRuntime =
     state === "preparing_publish"
       ? getLiveViewDescriptor(
@@ -281,7 +283,18 @@ function mapJobProjection(
       };
 
   const syntheticFailure =
-    job.status === "publishing"
+    clarificationRequired
+      ? {
+          step: job.currentStep ? stepLabel(job.currentStep) : "人工确认",
+          reason:
+            job.humanAction?.reason === "prepare_recovery_required"
+              ? "当前编辑器状态需要人工确认后才能继续。"
+              : "任务需要你确认当前状态后才能继续。",
+          recovery:
+            job.humanAction?.instruction ??
+            "请检查当前页面状态，并按提示确认后再继续。",
+        }
+      : job.status === "publishing"
       ? {
           step: "最终发布",
           reason: "任务已进入 F3-01 不拥有的最终发布阶段。",
@@ -301,12 +314,14 @@ function mapJobProjection(
     backendStatus: job.status,
     runtimeSource: "api",
     updatedAt: job.updatedAt,
-    statusLabel: statusLabel(job.status),
+    statusLabel: clarificationRequired ? "需要处理" : statusLabel(job.status),
     brief: briefHint?.trim() || fallbackBrief(job),
     platformLabel: "小红书",
     publishMode: "image_text",
     currentWorker: job.currentWorker,
-    currentStep: currentStepLabel(job),
+    currentStep: clarificationRequired
+      ? "等待你确认当前状态"
+      : currentStepLabel(job),
     needsHuman: job.needsHuman,
     timeline: job.timeline.map((step, index) => {
       const meta = stepMeta[step.stepKey];
