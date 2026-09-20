@@ -79,6 +79,17 @@ const DEFAULT_DISPOSE_TIMEOUT_MS = 2_000;
 
 class DeadlineExceededError extends Error {}
 
+class AgentSessionCleanupError extends Error {
+  constructor(
+    readonly phase: "extension-shutdown" | "dispose",
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+    this.name = "AgentSessionCleanupError";
+  }
+}
+
 function toMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -107,8 +118,28 @@ async function shutdownAndDispose(
     disposeError = error;
   }
 
-  if (shutdownError !== undefined) throw shutdownError;
-  if (disposeError !== undefined) throw disposeError;
+  if (disposeError !== undefined) {
+    const cause =
+      shutdownError === undefined
+        ? disposeError
+        : new AggregateError(
+            [shutdownError, disposeError],
+            "Extension shutdown and Pi session disposal both failed",
+          );
+    throw new AgentSessionCleanupError(
+      "dispose",
+      `Pi session disposal failed: ${toMessage(disposeError)}`,
+      { cause },
+    );
+  }
+
+  if (shutdownError !== undefined) {
+    throw new AgentSessionCleanupError(
+      "extension-shutdown",
+      `Extension shutdown failed: ${toMessage(shutdownError)}`,
+      { cause: shutdownError },
+    );
+  }
 }
 
 async function safeDispose(
@@ -244,9 +275,16 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       await this.#disposeTask;
     } catch (error) {
       if (reportFailure) {
+        const shutdownOnly =
+          error instanceof AgentSessionCleanupError &&
+          error.phase === "extension-shutdown";
         throw new AgentSessionError(
-          "AGENT_SESSION_DISPOSE_FAILED",
-          `Agent session disposal failed: ${toMessage(error)}`,
+          shutdownOnly
+            ? "AGENT_SESSION_SHUTDOWN_FAILED"
+            : "AGENT_SESSION_DISPOSE_FAILED",
+          shutdownOnly
+            ? `Agent session extension shutdown failed after Pi session disposal: ${toMessage(error)}`
+            : `Agent session disposal failed: ${toMessage(error)}`,
           { cause: error, runStopped: true },
         );
       }
