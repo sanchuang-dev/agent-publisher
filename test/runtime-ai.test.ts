@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import {
   mkdtempSync,
   readFileSync,
@@ -5,6 +6,8 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -176,6 +179,174 @@ describe("Publisher runtime AI configuration", () => {
 });
 
 describe("Publisher Content Secretary runtime composition", () => {
+  test("runs the configured OpenAI-compatible provider path through Content Secretary", async () => {
+    const root = makeRoot("agent-publisher-runtime-ai-http-");
+    const databasePath = join(root, "app.db");
+    const sessionDirectory = join(root, "pi-sessions");
+    const requests: Array<{
+      readonly url: string | undefined;
+      readonly authorization: string | undefined;
+      readonly body: {
+        readonly model?: string;
+        readonly stream?: boolean;
+      };
+    }> = [];
+
+    const expectedPlan = {
+      id: "plan-runtime-ai-http",
+      mode: "image_text",
+      brief: {
+        id: "brief-runtime-ai-http",
+        brief: "real provider seam",
+        platform: "xiaohongshu",
+        mode: "image_text",
+      },
+      imageCount: 2,
+      coverRequired: true,
+      design: "optional",
+    };
+
+    const server = http.createServer(async (req, res) => {
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404).end();
+        return;
+      }
+
+      let body = "";
+      for await (const chunk of req) {
+        body += chunk.toString();
+      }
+      requests.push({
+        url: req.url,
+        authorization: req.headers.authorization,
+        body: JSON.parse(body) as {
+          readonly model?: string;
+          readonly stream?: boolean;
+        },
+      });
+
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      });
+      res.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-runtime-ai-http",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "publisher-http-model",
+          choices: [
+            {
+              index: 0,
+              delta: {
+                role: "assistant",
+                content: JSON.stringify(expectedPlan),
+              },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-runtime-ai-http",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "publisher-http-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: 10,
+            completion_tokens: 10,
+            total_tokens: 20,
+          },
+        })}\n\n`,
+      );
+      res.end("data: [DONE]\n\n");
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+
+    let db: ReturnType<typeof openDatabase> | null = null;
+    try {
+      const { port } = server.address() as AddressInfo;
+      const runtime = await createPublisherAiRuntime({
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: "local-test-key",
+        model: "publisher-http-model",
+      });
+      const host = createPublisherContentSecretaryHost(runtime, {
+        cwd: root,
+        sessionDirectory,
+        defaultRunTimeoutMs: 2_000,
+      });
+
+      db = openDatabase({ databasePath });
+      const jobs = new JobRepository(db);
+      const bindings = new AgentSessionBindingRepository(db);
+      const sessions = new JobAgentSessionService({ jobs, bindings, host });
+      const secretary = new ContentSecretaryService({
+        jobs,
+        bindings,
+        sessions,
+      });
+
+      jobs.create({
+        id: "job-runtime-ai-http",
+        platform: "xiaohongshu",
+        publishMode: "image_text",
+        briefJson: JSON.stringify({ topic: "real provider seam" }),
+      });
+
+      await expect(
+        secretary.createMaterialPlan("job-runtime-ai-http"),
+      ).resolves.toMatchObject({
+        plan: expectedPlan,
+        job: {
+          status: "preparing_materials",
+          checkpoint: {
+            phase: "material_plan_ready",
+            materialPlanId: expectedPlan.id,
+          },
+        },
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        url: "/v1/chat/completions",
+        authorization: "Bearer local-test-key",
+        body: {
+          model: "publisher-http-model",
+          stream: true,
+        },
+      });
+
+      db.close();
+      db = null;
+
+      const verificationDb = openDatabase({ databasePath });
+      try {
+        expect(
+          new JobRepository(verificationDb).getById("job-runtime-ai-http"),
+        ).toMatchObject({
+          status: "preparing_materials",
+          currentStep: "material_plan",
+          checkpoint: {
+            phase: "material_plan_ready",
+            materialPlanId: expectedPlan.id,
+          },
+        });
+      } finally {
+        verificationDb.close();
+      }
+    } finally {
+      if (db?.open) db.close();
+      server.close();
+      await once(server, "close");
+    }
+  });
+
   test("reuses the production host seam with a controlled Pi provider", async () => {
     const root = makeRoot("agent-publisher-runtime-ai-faux-");
     const db = openDatabase({ databasePath: join(root, "app.db") });
