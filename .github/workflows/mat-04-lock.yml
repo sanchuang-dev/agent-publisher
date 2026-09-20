@@ -1,0 +1,45 @@
+name: MAT-04 Dependency Lock
+
+on:
+  push:
+    branches:
+      - feat/mat-04-safe-layout-renderer
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Generate exact lock
+        run: |
+          npm install --package-lock-only --no-audit --no-fund
+          node - <<'NODE' > mat-04-package-info.txt
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const req = require("node:module").createRequire(process.cwd() + "/probe.cjs");
+          for (const name of ["@takumi-rs/core", "@fontsource-variable/noto-sans-sc"]) {
+            const pkgPath = req.resolve(name + "/package.json");
+            console.log("PACKAGE " + name + " " + pkgPath);
+            console.log(fs.readFileSync(pkgPath, "utf8"));
+          }
+          const fontPkg = req.resolve("@fontsource-variable/noto-sans-sc/package.json");
+          const fontRoot = path.dirname(fontPkg);
+          for (const file of fs.readdirSync(path.join(fontRoot, "files"))) {
+            if (file.endsWith(".woff2") && file.includes("chinese-simplified")) {
+              console.log("FONT " + file);
+            }
+          }
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mat-04-lock
+          path: |
+            package-lock.json
+            mat-04-package-info.txt
