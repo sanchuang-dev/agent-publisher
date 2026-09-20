@@ -258,6 +258,13 @@ describe("JobControlService waiting atomicity", () => {
   });
 
   test("stale approval replacement rolls back if clarification creation fails", () => {
+    const occupied = actions.open({
+      id: "clarification-collision",
+      jobId: "job-control",
+      type: "clarification_required",
+    });
+    actions.resolve(occupied.id, { answered: true });
+
     const waiting = control.enterWaiting({
       jobId: "job-control",
       status: "waiting_for_approval",
@@ -273,13 +280,6 @@ describe("JobControlService waiting atomicity", () => {
         payload: { summaryVersion: 1 },
       },
     });
-
-    const occupied = actions.open({
-      id: "clarification-collision",
-      jobId: "job-control",
-      type: "clarification_required",
-    });
-    actions.resolve(occupied.id, { answered: true });
 
     expect(() =>
       control.invalidateApprovalForClarification({
