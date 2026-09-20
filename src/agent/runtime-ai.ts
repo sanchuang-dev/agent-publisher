@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 import {
   InMemoryCredentialStore,
   type Api,
@@ -67,13 +69,20 @@ function requiredEnvironmentValue(
 
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
-  return (
-    normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "::1" ||
-    normalized === "[::1]" ||
-    normalized.startsWith("127.")
-  );
+  if (normalized === "localhost" || normalized.endsWith(".localhost")) {
+    return true;
+  }
+
+  const address = normalized.startsWith("[") && normalized.endsWith("]")
+    ? normalized.slice(1, -1)
+    : normalized;
+  const family = isIP(address);
+
+  if (family === 4) {
+    return address.split(".", 1)[0] === "127";
+  }
+
+  return family === 6 && address === "::1";
 }
 
 function normalizeBaseUrl(raw: string): string {
