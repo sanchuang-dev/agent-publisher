@@ -158,7 +158,7 @@ interface ValidationState {
 }
 
 const colorPattern = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
-const resourceIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const resourceIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 function fail(path: string, message: string): never {
   throw new SafeRichLayoutValidationError(path, message);
