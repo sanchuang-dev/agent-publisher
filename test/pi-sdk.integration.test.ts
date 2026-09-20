@@ -12,7 +12,7 @@ import {
   defineTool,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 
 import {
   PiSdkSessionError,
@@ -148,7 +148,7 @@ describe("Pi SDK in-memory session baseline", () => {
           thinkingLevel: "off",
         },
       }),
-    ).rejects.toMatchObject<PiSdkSessionError>({
+    ).rejects.toMatchObject({
       name: "PiSdkSessionError",
       code: "PI_SESSION_TIMEOUT",
     });
