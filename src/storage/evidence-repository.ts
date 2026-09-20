@@ -116,7 +116,7 @@ function assertBoundedIdentity(
   if (value.length > MAX_ID_LENGTH) {
     throw new InvalidPublicationEvidenceError(
       field,
-      \`must be at most \${MAX_ID_LENGTH} characters\`,
+      `must be at most ${MAX_ID_LENGTH} characters`,
     );
   }
 }
@@ -129,7 +129,7 @@ function assertJsonSafe(
   if (depth > MAX_METADATA_DEPTH) {
     throw new InvalidPublicationEvidenceError(
       "metadata",
-      \`nesting exceeds \${MAX_METADATA_DEPTH} levels at \${path}\`,
+      `nesting exceeds ${MAX_METADATA_DEPTH} levels at ${path}`,
     );
   }
 
@@ -150,16 +150,16 @@ function assertJsonSafe(
 
   if (Array.isArray(value)) {
     value.forEach((item, index) => {
-      assertJsonSafe(item, \`\${path}[\${index}]\`, depth + 1);
+      assertJsonSafe(item, `${path}[${index}]`, depth + 1);
     });
     return;
   }
 
   for (const [key, nestedValue] of Object.entries(value)) {
     if (forbiddenKeyNames.has(normalizeKeyName(key))) {
-      throw new SensitivePublicationEvidenceError(\`\${path}.\${key}\`);
+      throw new SensitivePublicationEvidenceError(`${path}.${key}`);
     }
-    assertJsonSafe(nestedValue, \`\${path}.\${key}\`, depth + 1);
+    assertJsonSafe(nestedValue, `${path}.${key}`, depth + 1);
   }
 }
 
@@ -183,7 +183,7 @@ function normalizeMetadata(
   if (Buffer.byteLength(json, "utf8") > MAX_METADATA_BYTES) {
     throw new InvalidPublicationEvidenceError(
       "metadata",
-      \`must serialize to at most \${MAX_METADATA_BYTES} bytes\`,
+      `must serialize to at most ${MAX_METADATA_BYTES} bytes`,
     );
   }
 
@@ -206,7 +206,7 @@ function normalizeUri(
   if (normalized.length > MAX_URI_LENGTH) {
     throw new InvalidPublicationEvidenceError(
       "uri",
-      \`must be at most \${MAX_URI_LENGTH} characters\`,
+      `must be at most ${MAX_URI_LENGTH} characters`,
     );
   }
 
@@ -223,7 +223,7 @@ function normalizeUri(
 
   for (const key of parsed.searchParams.keys()) {
     if (forbiddenUriQueryKeys.has(key.toLowerCase())) {
-      throw new SensitivePublicationEvidenceError(\`uri.query.\${key}\`);
+      throw new SensitivePublicationEvidenceError(`uri.query.${key}`);
     }
   }
 
@@ -237,7 +237,7 @@ function normalizeUri(
   if (["data:", "javascript:", "vbscript:"].includes(parsed.protocol)) {
     throw new InvalidPublicationEvidenceError(
       "uri",
-      \`scheme \${parsed.protocol} is not allowed for evidence\`,
+      `scheme ${parsed.protocol} is not allowed for evidence`,
     );
   }
 
@@ -262,7 +262,7 @@ function normalizeValue(
   if (normalized.length > MAX_VALUE_LENGTH) {
     throw new InvalidPublicationEvidenceError(
       "value",
-      \`must be at most \${MAX_VALUE_LENGTH} characters\`,
+      `must be at most ${MAX_VALUE_LENGTH} characters`,
     );
   }
 
@@ -287,26 +287,26 @@ function normalizeInput(
     if (uri === null) {
       throw new InvalidPublicationEvidenceError(
         "uri",
-        \`\${input.kind} requires uri\`,
+        `${input.kind} requires uri`,
       );
     }
     if (value !== null) {
       throw new InvalidPublicationEvidenceError(
         "value",
-        \`\${input.kind} does not accept value\`,
+        `${input.kind} does not accept value`,
       );
     }
   } else {
     if (value === null) {
       throw new InvalidPublicationEvidenceError(
         "value",
-        \`\${input.kind} requires value\`,
+        `${input.kind} requires value`,
       );
     }
     if (uri !== null) {
       throw new InvalidPublicationEvidenceError(
         "uri",
-        \`\${input.kind} does not accept uri\`,
+        `${input.kind} does not accept uri`,
       );
     }
   }
@@ -364,9 +364,9 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
 
       this.#db
         .prepare(
-          \`INSERT INTO evidence (
+          `INSERT INTO evidence (
             id, job_id, kind, uri, value, metadata_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)\`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           normalized.id,
@@ -391,10 +391,10 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
     return (
       this.#db
         .prepare(
-          \`SELECT id, job_id, kind, uri, value, metadata_json, created_at
+          `SELECT id, job_id, kind, uri, value, metadata_json, created_at
            FROM evidence
            WHERE job_id = ?
-           ORDER BY created_at ASC, rowid ASC\`,
+           ORDER BY created_at ASC, rowid ASC`,
         )
         .all(jobId) as EvidenceRow[]
     ).map(mapEvidence);
@@ -413,14 +413,14 @@ export class EvidenceRepository implements EvidenceRepositoryContract {
   #requireEvidence(evidenceId: string): PublicationEvidence {
     const row = this.#db
       .prepare(
-        \`SELECT id, job_id, kind, uri, value, metadata_json, created_at
+        `SELECT id, job_id, kind, uri, value, metadata_json, created_at
          FROM evidence
-         WHERE id = ?\`,
+         WHERE id = ?`,
       )
       .get(evidenceId) as EvidenceRow | undefined;
 
     if (!row) {
-      throw new Error(\`PublicationEvidence disappeared after append: \${evidenceId}\`);
+      throw new Error(`PublicationEvidence disappeared after append: ${evidenceId}`);
     }
 
     return mapEvidence(row);
