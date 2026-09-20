@@ -257,6 +257,81 @@ describe("JobControlService waiting atomicity", () => {
     );
   });
 
+  test("stale approval replacement rolls back if clarification creation fails", () => {
+    const waiting = control.enterWaiting({
+      jobId: "job-control",
+      status: "waiting_for_approval",
+      checkpoint: { phase: "prepared", summaryVersion: 1 },
+      step: {
+        id: "step-approval-rollback",
+        stepKey: "verify_prepared",
+        status: "succeeded",
+        attempt: 1,
+      },
+      action: {
+        id: "approval-rollback",
+        payload: { summaryVersion: 1 },
+      },
+    });
+
+    const occupied = actions.open({
+      id: "clarification-collision",
+      jobId: "job-control",
+      type: "clarification_required",
+    });
+    actions.resolve(occupied.id, { answered: true });
+
+    expect(() =>
+      control.invalidateApprovalForClarification({
+        jobId: "job-control",
+        approvalRequestId: waiting.action.id,
+        cancellationResolution: {
+          reason: "prepared_state_changed",
+        },
+        checkpoint: {
+          phase: "xhs_prepare_recovery_required",
+        },
+        step: {
+          id: "step-approval-rollback-failed",
+          stepKey: "verify_prepared",
+          status: "failed",
+          attempt: 2,
+          errorCode: "PREPARED_VALIDATION_FAILED",
+        },
+        action: {
+          id: "clarification-collision",
+          payload: { reason: "prepared_state_changed" },
+        },
+      }),
+    ).toThrow();
+
+    expect(actions.getById(waiting.action.id)).toMatchObject({
+      id: waiting.action.id,
+      type: "approval_required",
+      status: "open",
+      resolution: null,
+    });
+    expect(actions.getCurrentOpenForJob("job-control")).toMatchObject({
+      id: waiting.action.id,
+      type: "approval_required",
+      status: "open",
+    });
+    expect(jobs.getById("job-control")).toMatchObject({
+      status: "waiting_for_approval",
+      currentStep: "verify_prepared",
+      checkpoint: {
+        phase: "prepared",
+        summaryVersion: 1,
+        actionRequestId: waiting.action.id,
+      },
+    });
+    expect(
+      jobs
+        .getStepsForJob("job-control")
+        .filter((step) => step.stepKey === "verify_prepared"),
+    ).toHaveLength(1);
+  });
+
   test("an ActionRequest insert failure rolls back the waiting checkpoint and step", () => {
     const occupied = actions.open({
       id: "action-collision",
