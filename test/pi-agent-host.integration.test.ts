@@ -2,13 +2,16 @@ import { readFile } from "node:fs/promises";
 
 import {
   InMemoryCredentialStore,
+  Type,
   fauxAssistantMessage,
   fauxProvider,
   fauxText,
+  fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
   ModelRuntime,
   createExtensionRuntime,
+  defineTool,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
@@ -64,6 +67,7 @@ describe("PiAgentHost", () => {
     const host = new PiAgentHost({
       model: faux.getModel(),
       modelRuntime,
+      defaultRunTimeoutMs: 2_000,
       tools: [],
       sessionOptions: {
         thinkingLevel: "off",
@@ -161,6 +165,7 @@ describe("PiAgentHost", () => {
     const host = new PiAgentHost({
       model: faux.getModel(),
       modelRuntime,
+      defaultRunTimeoutMs: 2_000,
       tools: [],
       sessionOptions: {
         thinkingLevel: "off",
@@ -208,6 +213,7 @@ describe("PiAgentHost", () => {
     const host = new PiAgentHost({
       model: faux.getModel(),
       modelRuntime,
+      defaultRunTimeoutMs: 2_000,
       tools: [],
       sessionOptions: {
         thinkingLevel: "off",
@@ -275,6 +281,7 @@ describe("PiAgentHost", () => {
     const host = new PiAgentHost({
       model: faux.getModel(),
       modelRuntime,
+      defaultRunTimeoutMs: 2_000,
       tools: [],
       sessionOptions: {
         thinkingLevel: "off",
@@ -311,6 +318,129 @@ describe("PiAgentHost", () => {
       code: "AGENT_SESSION_DISPOSED",
       runStopped: true,
     });
+  });
+
+  test("preserves completed tool evidence when a later turn exceeds the deadline", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-partial-evidence" });
+    const modelRuntime = await createFauxRuntime(faux);
+    const sideEffectProbe = defineTool({
+      name: "side_effect_probe",
+      label: "Side Effect Probe",
+      description: "Records deterministic completion before a later stalled turn.",
+      parameters: Type.Object({
+        value: Type.String(),
+      }),
+      async execute(_toolCallId, params) {
+        return {
+          content: [{ type: "text", text: `completed:${params.value}` }],
+          details: { value: params.value },
+        };
+      },
+    });
+
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      defaultRunTimeoutMs: 2_000,
+      tools: ["side_effect_probe"],
+      sessionOptions: {
+        customTools: [sideEffectProbe],
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-partial-evidence", role: "content" },
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "side_effect_probe",
+          { value: "done-before-timeout" },
+          { id: "side-effect-call" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      async () => await new Promise<never>(() => undefined),
+    ]);
+
+    let caught: unknown;
+    try {
+      await session.run({
+        prompt: "Run the probe, then continue.",
+        timeoutMs: 50,
+        abortTimeoutMs: 30,
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_ABORT_UNCONFIRMED",
+      runStopped: false,
+      partialResult: {
+        toolExecutions: [
+          {
+            toolCallId: "side-effect-call",
+            toolName: "side_effect_probe",
+            args: { value: "done-before-timeout" },
+            completed: true,
+            isError: false,
+          },
+        ],
+      },
+    });
+
+    await expect(
+      session.run({ prompt: "A failed timed-out session must not be reused." }),
+    ).rejects.toMatchObject({
+      code: "AGENT_SESSION_DISPOSED",
+    });
+  });
+
+  test("returns success when a delayed prompt actually fulfills during timeout reconciliation", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-timeout-race" });
+    const modelRuntime = await createFauxRuntime(faux);
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      defaultRunTimeoutMs: 2_000,
+      tools: [],
+      sessionOptions: {
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-timeout-race", role: "content" },
+    });
+
+    faux.setResponses([
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return fauxAssistantMessage(fauxText("COMPLETED_DURING_RECONCILIATION"));
+      },
+    ]);
+
+    await expect(
+      session.run({
+        prompt: "Complete shortly after the first deadline.",
+        timeoutMs: 10,
+        abortTimeoutMs: 200,
+      }),
+    ).resolves.toMatchObject({
+      finalText: "COMPLETED_DURING_RECONCILIATION",
+    });
+
+    await session.dispose();
   });
 
   test("keeps Pi framework types out of Publisher-facing contract modules", async () => {

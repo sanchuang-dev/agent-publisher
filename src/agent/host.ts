@@ -16,12 +16,18 @@ export type AgentSessionErrorCode =
   | "AGENT_SESSION_DISPOSED";
 
 interface AgentSessionErrorOptions extends ErrorOptions {
+  /**
+   * Whether the local Pi prompt promise is known to have settled.
+   * This never asserts that an external tool side effect did not occur.
+   */
   readonly runStopped?: boolean | null;
+  readonly partialResult?: AgentTaskResult | null;
 }
 
 export class AgentSessionError extends Error {
   readonly code: AgentSessionErrorCode;
   readonly runStopped: boolean | null;
+  readonly partialResult: AgentTaskResult | null;
 
   constructor(
     code: AgentSessionErrorCode,
@@ -32,6 +38,7 @@ export class AgentSessionError extends Error {
     this.name = "AgentSessionError";
     this.code = code;
     this.runStopped = options.runStopped ?? null;
+    this.partialResult = options.partialResult ?? null;
   }
 }
 

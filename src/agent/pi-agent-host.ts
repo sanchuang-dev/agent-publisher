@@ -54,12 +54,11 @@ export interface PiAgentHostOptions {
   readonly sessionOptions?: PiHostSessionOptions;
   readonly cwd?: string;
   readonly initializationTimeoutMs?: number;
-  readonly defaultRunTimeoutMs?: number;
+  readonly defaultRunTimeoutMs: number;
   readonly defaultAbortTimeoutMs?: number;
 }
 
 const DEFAULT_INITIALIZATION_TIMEOUT_MS = 10_000;
-const DEFAULT_RUN_TIMEOUT_MS = 10_000;
 const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
 
 class DeadlineExceededError extends Error {}
@@ -118,24 +117,29 @@ async function withDeadline<T>(
   }
 }
 
-async function stopTimedOutRun(
+type PromptSettlement =
+  | { readonly status: "fulfilled" }
+  | { readonly status: "rejected"; readonly reason: unknown };
+
+async function settleTimedOutRun(
   promptTask: Promise<void>,
   session: PiAgentSession,
   abortTimeoutMs: number,
-): Promise<boolean> {
-  const promptSettled = promptTask.then(
-    () => undefined,
-    () => undefined,
+): Promise<PromptSettlement | null> {
+  const settlement = promptTask.then<PromptSettlement>(
+    () => ({ status: "fulfilled" }),
+    (reason: unknown) => ({ status: "rejected", reason }),
   );
 
+  // Abort is a best-effort request. The prompt promise settling is the
+  // evidence that local execution stopped; neither signal proves that an
+  // already-completed external side effect did not occur.
+  void session.abort().catch(() => undefined);
+
   try {
-    await withDeadline(
-      Promise.all([session.abort(), promptSettled]).then(() => undefined),
-      abortTimeoutMs,
-    );
-    return true;
+    return await withDeadline(settlement, abortTimeoutMs);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -216,6 +220,12 @@ class PiPublisherAgentSession implements PublisherAgentSession {
     const toolExecutions = new Map<string, AgentToolExecutionEvidence>();
     let finalText = "";
 
+    const snapshotResult = (): AgentTaskResult => ({
+      finalText,
+      eventTypes: [...eventTypes],
+      toolExecutions: [...toolExecutions.values()],
+    });
+
     const unsubscribe = this.session.subscribe((event) => {
       eventTypes.push(event.type);
 
@@ -262,25 +272,35 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         await withDeadline(promptTask, timeoutMs);
       } catch (error) {
         if (error instanceof DeadlineExceededError) {
-          const runStopped = await stopTimedOutRun(
+          const settlement = await settleTimedOutRun(
             promptTask,
             this.session,
             abortTimeoutMs,
           );
 
-          if (!runStopped) {
-            this.#invalidate();
+          if (settlement?.status === "fulfilled") {
+            return snapshotResult();
+          }
+
+          const partialResult = snapshotResult();
+          this.#invalidate();
+
+          if (!settlement) {
             throw new AgentSessionError(
               "AGENT_SESSION_ABORT_UNCONFIRMED",
-              `Agent session exceeded the ${timeoutMs}ms run deadline and did not confirm stop within ${abortTimeoutMs}ms`,
-              { cause: error, runStopped: false },
+              `Agent session exceeded the ${timeoutMs}ms run deadline and did not confirm local prompt settlement within ${abortTimeoutMs}ms`,
+              { cause: error, runStopped: false, partialResult },
             );
           }
 
           throw new AgentSessionError(
             "AGENT_SESSION_TIMEOUT",
-            `Agent session exceeded the ${timeoutMs}ms run deadline and was stopped`,
-            { cause: error, runStopped: true },
+            `Agent session exceeded the ${timeoutMs}ms run deadline and local prompt settlement was confirmed`,
+            {
+              cause: settlement.reason,
+              runStopped: true,
+              partialResult,
+            },
           );
         }
 
@@ -288,18 +308,16 @@ class PiPublisherAgentSession implements PublisherAgentSession {
           throw error;
         }
 
+        const partialResult = snapshotResult();
+        this.#invalidate();
         throw new AgentSessionError(
           "AGENT_SESSION_RUN_FAILED",
           `Agent session run failed: ${toMessage(error)}`,
-          { cause: error, runStopped: null },
+          { cause: error, runStopped: null, partialResult },
         );
       }
 
-      return {
-        finalText,
-        eventTypes: [...eventTypes],
-        toolExecutions: [...toolExecutions.values()],
-      };
+      return snapshotResult();
     } finally {
       this.#running = false;
       unsubscribe();
@@ -317,8 +335,7 @@ export class PiAgentHost implements AgentHost {
   constructor(options: PiAgentHostOptions) {
     const initializationTimeoutMs =
       options.initializationTimeoutMs ?? DEFAULT_INITIALIZATION_TIMEOUT_MS;
-    const defaultRunTimeoutMs =
-      options.defaultRunTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    const defaultRunTimeoutMs = options.defaultRunTimeoutMs;
     const defaultAbortTimeoutMs =
       options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
 
@@ -395,7 +412,7 @@ export class PiAgentHost implements AgentHost {
       created.session,
       input.definition,
       input.scope,
-      this.#options.defaultRunTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+      this.#options.defaultRunTimeoutMs,
       this.#options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS,
     );
   }
