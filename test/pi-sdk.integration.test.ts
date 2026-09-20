@@ -1,4 +1,5 @@
 import {
+  InMemoryCredentialStore,
   Type,
   fauxAssistantMessage,
   fauxProvider,
@@ -38,6 +39,7 @@ function createNoDiscoveryResourceLoader(): ResourceLoader {
 
 async function createFauxRuntime(provider: ReturnType<typeof fauxProvider>) {
   const modelRuntime = await ModelRuntime.create({
+    credentials: new InMemoryCredentialStore(),
     modelsPath: null,
     refreshOnCreate: false,
   });
