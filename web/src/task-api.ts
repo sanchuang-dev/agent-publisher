@@ -378,6 +378,28 @@ export class ApiTaskError extends Error {
   }
 }
 
+export function shouldAutoContinueTask(task: TaskFixture): boolean {
+  const status = task.backendStatus;
+
+  if (task.failure) {
+    return false;
+  }
+
+  if (status === "waiting_for_login") {
+    return task.needsHuman;
+  }
+
+  if (task.needsHuman) {
+    return false;
+  }
+
+  return (
+    status === "created" ||
+    status === "preparing_materials" ||
+    status === "preparing_publish"
+  );
+}
+
 export class ApiTaskRepository implements TaskRepository {
   readonly #fetch: typeof fetch;
   readonly #eventSourceFactory: (url: string) => EventSourceLike;
