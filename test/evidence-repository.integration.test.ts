@@ -202,6 +202,29 @@ describe("EvidenceRepository integration", () => {
         kind: "result_url" as const,
         uri: "https://example.test/result#refreshToken=redacted",
       },
+      {
+        id: "evidence-auth-token-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: { authToken: "redacted" },
+      },
+      {
+        id: "evidence-session-token-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: { sessionToken: "redacted" },
+      },
+      {
+        id: "evidence-secret-key",
+        kind: "confirmation_ref" as const,
+        value: "confirmed",
+        metadata: { secretKey: "redacted" },
+      },
+      {
+        id: "evidence-query-value-token",
+        kind: "result_url" as const,
+        uri: "https://example.test/result?state=access_token%3Dredacted",
+      },
     ];
 
     for (const input of forbiddenInputs) {
