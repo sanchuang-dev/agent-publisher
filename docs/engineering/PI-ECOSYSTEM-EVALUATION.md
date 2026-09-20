@@ -234,9 +234,9 @@ Publisher pins `pi-mcp-adapter@2.34.0` and constructs it only through
 `createMcpAdapter({ config })`. `AgentDefinition.mcp` is compiled per
 AgentSession, while ambient `.mcp.json`, `~/.pi`, and host MCP imports stay
 disabled. Direct tools and script mode are disabled in adapter config; the
-Publisher Pi active-tool allowlist exposes only the `mcp` gateway, so namespace
-proxy tools are not model-visible even though the pinned adapter's public
-`McpSettings` type does not expose a namespace-proxy toggle.
+Publisher Pi active-tool allowlist exposes only the `mcp` gateway. Adapter
+`namespaceProxyTools` is explicitly disabled alongside direct tools and script
+mode, so per-server `mcp__<server>` wrappers are not model-visible.
 
 Every server requires a non-empty `includeTools` allowlist and may narrow it
 with `excludeTools`. Stdio children use adapter platform defaults without
