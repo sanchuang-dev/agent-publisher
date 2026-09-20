@@ -42,6 +42,8 @@ export interface PiResourceLoaderFactoryInput {
   readonly definition: AgentDefinition;
   readonly scope: AgentSessionScope;
   readonly systemPrompt: string;
+  readonly cwd: string;
+  readonly allowedTools: readonly string[];
 }
 
 export interface PiAgentHostOptions {
@@ -49,7 +51,7 @@ export interface PiAgentHostOptions {
   readonly modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
   readonly createResourceLoader: (
     input: PiResourceLoaderFactoryInput,
-  ) => ResourceLoader;
+  ) => ResourceLoader | Promise<ResourceLoader>;
   readonly tools?: readonly string[];
   readonly sessionOptions?: PiHostSessionOptions;
   readonly cwd?: string;
@@ -400,22 +402,27 @@ export class PiAgentHost implements AgentHost {
     assertSessionConfigNonEmpty(input.scope.role, "Agent session role");
 
     const cwd = this.#options.cwd ?? process.cwd();
-    const resourceLoader = this.#options.createResourceLoader({
-      definition: input.definition,
-      scope: input.scope,
-      systemPrompt: input.definition.systemPrompt.trim(),
-    });
+    const allowedTools = [...(this.#options.tools ?? [])];
+    const creation = (async () => {
+      const resourceLoader = await this.#options.createResourceLoader({
+        definition: input.definition,
+        scope: input.scope,
+        systemPrompt: input.definition.systemPrompt.trim(),
+        cwd,
+        allowedTools,
+      });
 
-    const creation = createAgentSession({
-      ...this.#options.sessionOptions,
-      cwd,
-      model: this.#options.model,
-      modelRuntime: this.#options.modelRuntime,
-      resourceLoader,
-      tools: [...(this.#options.tools ?? [])],
-      sessionManager: SessionManager.inMemory(cwd),
-      settingsManager: SettingsManager.inMemory(),
-    });
+      return createAgentSession({
+        ...this.#options.sessionOptions,
+        cwd,
+        model: this.#options.model,
+        modelRuntime: this.#options.modelRuntime,
+        resourceLoader,
+        tools: allowedTools,
+        sessionManager: SessionManager.inMemory(cwd),
+        settingsManager: SettingsManager.inMemory(),
+      });
+    })();
 
     let created: Awaited<ReturnType<typeof createAgentSession>>;
     try {
