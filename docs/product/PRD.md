@@ -53,9 +53,11 @@ Responsible for:
 - publishing after approval;
 - collecting result evidence.
 
-These are product roles, not a requirement for two independent agent runtimes.
+These are product roles, not a requirement for two independent autonomous agent runtimes.
 
-The MVP architecture uses **one Orchestrator with two role sessions** rather than two isolated agent systems.
+The MVP keeps **one Publisher Orchestrator** as the business control owner. It may create isolated agent sessions for the Content Secretary, Publishing Secretary, or a bounded helper such as browser recovery when reasoning is actually needed. Those sessions are execution resources owned by the Orchestrator, not autonomous peers that delegate the Publish Job among themselves.
+
+Reusable agent configuration and per-job agent state are separate concerns: an agent definition may be reused across many jobs, while task conversation/context must remain isolated by job/role (or a narrower helper-task scope).
 
 ## 3. MVP user outcome
 
@@ -277,24 +279,49 @@ ready_with_degradation
 
 ## 8. Agent orchestration
 
-### Runtime abstraction
+### Harness baseline
 
-Business code should depend on an internal `AgentRuntime` contract rather than one framework's API.
+The MVP uses the **Pi ecosystem as the preferred embedded agent harness**. The first implementation should evaluate the embeddable `@earendil-works/pi-coding-agent` SDK before Publisher builds harness features around the lower-level Agent Core alone.
 
-The MVP framework preference is:
+Publisher should reuse mature Pi capabilities for session execution, tools, skills, resource loading, model/runtime integration, events, and context compaction where they satisfy the product boundary.
 
-1. **PiAgent / AgentHarness** — primary MVP candidate for stability and fast integration.
-2. **DeepSeek Harness (DSH)** — active alternative and future candidate.
+DeepSeek Harness remains an experimental/future migration candidate rather than a parallel MVP baseline.
 
-Framework choice must remain replaceable behind the runtime adapter.
+### Reusable definitions, isolated sessions
+
+Publisher should represent a class of agent work as a reusable definition containing the relevant model policy, system instructions, skills, tools, MCP profile, context policy, and session policy.
+
+A definition may create many independent sessions:
+
+```text
+Content Secretary definition
+├─ session for Job A
+├─ session for Job B
+└─ session for Job C
+```
+
+The reusable definition is not a singleton conversation. Job-specific transcript, dynamic context, temporary tool grants, and observations must not leak across unrelated jobs.
+
+Pi session history supports agent continuity; **Publisher SQLite remains the source of truth for Job state, checkpoints, human actions, approvals, publication side effects, and evidence.**
+
+### Skills, tools, MCP, and context
+
+- Skills should use the existing Agent Skills / Pi skill mechanism instead of a Publisher-specific skill format.
+- Tools should use Pi's tool registration/selection/interception mechanisms. Each session receives only the tools appropriate to its role and current task.
+- MCP is an external capability source and should be integrated through a mature Pi-compatible adapter/extension before considering a custom MCP runtime.
+- Publisher owns which MCP servers/tools are configured and allowed; the service must not inherit arbitrary developer-machine MCP configuration.
+- Stable role instructions belong in controlled system resources/skills. Job brief/material/browser observations are dynamic session context or tool results.
+- Irreversible publication is not exposed as a generic model tool. Approval and publish-once remain deterministic Publisher-owned workflow steps.
 
 ### Orchestration model
 
 Use:
 
-> one Orchestrator + Content Secretary role session + Publishing Secretary role session
+> one Publisher Orchestrator + orchestrator-owned agent sessions created only when reasoning is useful
 
-Do not build a multi-agent organization merely because the product exposes two worker roles.
+The product still exposes Content Secretary and Publishing Secretary as its two worker roles. An implementation may use additional bounded helper sessions, such as browser recovery, without becoming an autonomous multi-agent organization.
+
+Agent sessions do not own phase transitions, checkpoints, approval gates, retry authority for irreversible side effects, or Job completion.
 
 ### Deterministic first
 
@@ -526,7 +553,9 @@ The result must be verified on the real platform. A passing unit test, browser s
 - Reuse before rebuild.
 - Stability before maximum autonomy.
 - Deterministic automation before unnecessary model reasoning.
-- AI employees are a product interaction model, not an excuse for unnecessary multi-agent complexity.
+- AI employees are a product interaction model, not an excuse for unnecessary autonomous multi-agent complexity.
+- Reuse mature agent-harness capabilities before inventing Publisher-specific registries, session managers, or protocol runtimes.
+- Reuse agent definitions across jobs, but isolate task sessions and keep business truth outside model conversation state.
 - Human identity proof is a first-class interaction, not an exception to hide.
 - Explicit approval belongs at irreversible boundaries, not on every browser click.
 - Material generation and platform execution remain separate concerns.
