@@ -120,16 +120,26 @@ describe("Publisher runtime AI configuration", () => {
       model: "model-a",
     });
 
-    expect(
-      readPublisherAiConfig({
-        [PUBLISHER_AI_BASE_URL_ENV]: "http://127.0.0.1:8080/v1",
-        [PUBLISHER_AI_API_KEY_ENV]: "secret-key",
-        [PUBLISHER_AI_MODEL_ENV]: "model-a",
-      }).baseUrl,
-    ).toBe("http://127.0.0.1:8080/v1");
+    for (const baseUrl of [
+      "http://127.0.0.1:8080/v1",
+      "http://127.42.0.1:8080/v1",
+      "http://localhost:8080/v1",
+      "http://publisher.localhost:8080/v1",
+      "http://[::1]:8080/v1",
+    ]) {
+      expect(
+        readPublisherAiConfig({
+          [PUBLISHER_AI_BASE_URL_ENV]: baseUrl,
+          [PUBLISHER_AI_API_KEY_ENV]: "secret-key",
+          [PUBLISHER_AI_MODEL_ENV]: "model-a",
+        }).baseUrl,
+      ).toBe(baseUrl);
+    }
 
     for (const baseUrl of [
       "http://gateway.example.test/v1",
+      "http://127.example.com/v1",
+      "http://127.0.0.1.example.com/v1",
       "https://user:password@gateway.example.test/v1",
       "https://gateway.example.test/v1?key=secret",
       "ftp://gateway.example.test/v1",
