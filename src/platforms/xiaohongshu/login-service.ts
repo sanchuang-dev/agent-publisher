@@ -236,18 +236,12 @@ export class XiaohongshuLoginService {
     }
 
     if (state.kind === "authenticated") {
-      if (action.status === "open") {
-        this.#actionRequests.resolve(action.id, {
-          loginDetected: true,
-          platform: "xiaohongshu",
-        });
-      }
-
       return {
         kind: "ready",
-        job: this.#recordAuthenticated(
+        job: this.#completeHumanLogin(
           input.jobId,
           input.session,
+          action,
           this.#currentEnsureLoginAttempt(input.jobId),
         ),
         state,
@@ -323,6 +317,37 @@ export class XiaohongshuLoginService {
     const now = this.#now().toISOString();
     return this.#jobs.commitCheckpoint(jobId, {
       status: "preparing_publish",
+      checkpoint: {
+        platform: "xiaohongshu",
+        phase: "ensure_login",
+        entryState: "authenticated",
+        browserProfileFingerprint: browserProfileFingerprint(session),
+      },
+      step: {
+        id: this.#createId(),
+        stepKey: "ensure_login",
+        status: "succeeded",
+        attempt,
+        outputJson: JSON.stringify({ entryState: "authenticated" }),
+        finishedAt: now,
+      },
+    });
+  }
+
+  #completeHumanLogin(
+    jobId: string,
+    session: BrowserSession,
+    action: ActionRequest,
+    attempt: number,
+  ): Job {
+    const now = this.#now().toISOString();
+    return this.#control.completeLogin({
+      jobId,
+      actionRequestId: action.id,
+      resolution: {
+        loginDetected: true,
+        platform: "xiaohongshu",
+      },
       checkpoint: {
         platform: "xiaohongshu",
         phase: "ensure_login",
