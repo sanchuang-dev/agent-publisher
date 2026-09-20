@@ -31,9 +31,17 @@ git checkout dev
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:6080` on the Docker host, or `http://<HOST-LAN-IP>:6080` from another device on the same trusted local network.
+Open `http://127.0.0.1:6080` on the Docker host.
 
-The noVNC surface currently has no password. Keep port `6080` on a trusted LAN only and never expose it directly to the public Internet.
+To access Live View securely from another machine, create an SSH tunnel to the Docker host:
+
+```bash
+ssh -N -L 6080:127.0.0.1:6080 <user>@<HOST-LAN-IP>
+```
+
+Then open `http://127.0.0.1:6080` on the client machine.
+
+The noVNC surface currently has no application-level password, so the default Compose mapping keeps port `6080` bound to loopback. Do not change it to a wildcard/public bind unless an authenticated proxy or equivalent access control is added.
 
 The current Compose setup containerizes the browser runtime only. Run the Web UI on the host when needed:
 
