@@ -134,7 +134,7 @@ export function compilePublisherMcpProfile(
     return { extensionFactories: [], toolNames: [] };
   }
 
-  const mcpServers: Record<string, ServerEntry> = {};
+  const mcpServers: Record<string, ServerEntry> = Object.create(null);
   for (const server of profile.servers) {
     const name = assertNonEmpty(server.name, "MCP server name");
     if (Object.hasOwn(mcpServers, name)) {
