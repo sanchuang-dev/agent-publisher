@@ -140,7 +140,6 @@ function createExecutionGuardExtension(
         return {
           block: true,
           reason: `Publisher execution guard blocked tool "${event.toolName}" before execution`,
-          terminate: true,
         };
       });
     },

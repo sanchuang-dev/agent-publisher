@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -117,7 +117,9 @@ describe("controlled Pi resources", () => {
     await mkdir(outside, { recursive: true });
 
     const outsideSecret = join(outside, "secret.txt");
+    const linkedSecret = join(workspace, "linked-secret.txt");
     await writeFile(outsideSecret, "OUTSIDE_SECRET_MUST_NOT_LEAK", "utf8");
+    await symlink(outsideSecret, linkedSecret);
 
     const skillPath = resolve("skills/publisher-safety/SKILL.md");
     const faux = fauxProvider({ provider: "publisher-controlled-read" });
@@ -126,12 +128,14 @@ describe("controlled Pi resources", () => {
     let observedTools: string[] = [];
     let observedSystemPrompt = "";
 
+    let hiddenProbeExecutions = 0;
     const hiddenProbe = defineTool({
       name: "hidden_probe",
       label: "Hidden Probe",
       description: "Must not be visible in this session.",
       parameters: Type.Object({}),
       async execute() {
+        hiddenProbeExecutions += 1;
         return {
           content: [{ type: "text", text: "HIDDEN_PROBE_EXECUTED" }],
           details: {},
@@ -170,7 +174,7 @@ describe("controlled Pi resources", () => {
 
     faux.setResponses([
       (context) => {
-        observedTools = context.tools.map((tool) => tool.name);
+        observedTools = (context.tools ?? []).map((tool) => tool.name);
         observedSystemPrompt = context.systemPrompt;
         return fauxAssistantMessage(
           fauxToolCall("read", { path: skillPath }, { id: "read-skill" }),
@@ -210,7 +214,7 @@ describe("controlled Pi resources", () => {
 
     faux.setResponses([
       fauxAssistantMessage(
-        fauxToolCall("read", { path: outsideSecret }, { id: "read-outside" }),
+        fauxToolCall("read", { path: linkedSecret }, { id: "read-outside" }),
         { stopReason: "toolUse" },
       ),
       (context) => {
@@ -240,7 +244,49 @@ describe("controlled Pi resources", () => {
       }),
     ]);
 
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("hidden_probe", {}, { id: "hidden-call" }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const unavailable = JSON.stringify(context.messages).includes(
+          "Tool hidden_probe not found",
+        );
+        return fauxAssistantMessage(
+          fauxText(unavailable ? "HIDDEN_TOOL_BLOCKED" : "HIDDEN_TOOL_USABLE"),
+        );
+      },
+    ]);
+
+    const hiddenResult = await session.run({
+      prompt: "Attempt a tool that is not in the visible allowlist.",
+    });
+
+    expect(hiddenResult.finalText).toBe("HIDDEN_TOOL_BLOCKED");
+    expect(hiddenProbeExecutions).toBe(0);
+
     await session.dispose();
+  });
+
+  test("rejects unrestricted mutating or shell built-ins from the Publisher profile", async () => {
+    const root = await createTempDir("publisher-forbidden-builtins-");
+    const workspace = join(root, "job-workspace");
+    await mkdir(workspace, { recursive: true });
+
+    await expect(
+      createControlledPiResourceLoader({
+        cwd: workspace,
+        systemPrompt: definition.systemPrompt,
+        allowedTools: ["bash"],
+        policy: {
+          skillPaths: [],
+          readRoots: [workspace],
+        },
+      }),
+    ).rejects.toThrow(
+      'Publisher controlled sessions must not enable unrestricted built-in tool "bash"',
+    );
   });
 
   test("execution guard blocks a visible but forbidden custom tool before side effect", async () => {
@@ -297,7 +343,7 @@ describe("controlled Pi resources", () => {
 
     faux.setResponses([
       (context) => {
-        expect(context.tools.map((tool) => tool.name)).toEqual(["unsafe_probe"]);
+        expect((context.tools ?? []).map((tool) => tool.name)).toEqual(["unsafe_probe"]);
         return fauxAssistantMessage(
           fauxToolCall("unsafe_probe", {}, { id: "unsafe-call" }),
           { stopReason: "toolUse" },
