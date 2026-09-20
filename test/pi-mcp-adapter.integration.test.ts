@@ -459,6 +459,40 @@ describe("Publisher Pi MCP adapter", () => {
     await session.dispose();
   });
 
+  test("rejects authenticated remote MCP over plaintext HTTP", async () => {
+    const workspace = await createTempDir("publisher-mcp-auth-http-");
+    await mkdir(workspace, { recursive: true });
+    const faux = fauxProvider({ provider: "publisher-mcp-auth-http" });
+    const host = await createHost(workspace, faux);
+    const definition: AgentDefinition = {
+      id: "mcp-auth-http-agent",
+      systemPrompt: "Use only the Publisher-provisioned MCP gateway.",
+      mcp: {
+        servers: [
+          {
+            name: "remote-auth",
+            transport: {
+              kind: "http",
+              url: "http://example.com/mcp",
+              auth: { kind: "bearer-env", env: "PUBLISHER_TEST_TOKEN" },
+            },
+            includeTools: ["allowed_echo"],
+          },
+        ],
+      },
+    };
+
+    await expect(
+      host.createSession({
+        definition,
+        scope: { jobId: "job-mcp-auth-http", role: "content" },
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_INITIALIZATION_FAILED",
+    });
+  });
+
   test("fails closed on an empty MCP includeTools policy", async () => {
     const workspace = await createTempDir("publisher-mcp-config-");
     await mkdir(workspace, { recursive: true });
