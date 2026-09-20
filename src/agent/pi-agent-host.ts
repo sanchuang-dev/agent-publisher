@@ -126,9 +126,12 @@ async function settleTimedOutRun(
   session: PiAgentSession,
   abortTimeoutMs: number,
 ): Promise<PromptSettlement | null> {
-  const settlement = promptTask.then<PromptSettlement>(
-    () => ({ status: "fulfilled" }),
-    (reason: unknown) => ({ status: "rejected", reason }),
+  const settlement: Promise<PromptSettlement> = promptTask.then(
+    (): PromptSettlement => ({ status: "fulfilled" }),
+    (reason: unknown): PromptSettlement => ({
+      status: "rejected",
+      reason,
+    }),
   );
 
   // Abort is a best-effort request. The prompt promise settling is the
