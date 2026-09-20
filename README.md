@@ -31,7 +31,9 @@ git checkout dev
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:6080` to access the noVNC view of the persistent Chromium runtime.
+Open `http://127.0.0.1:6080` on the Docker host, or `http://<HOST-LAN-IP>:6080` from another device on the same trusted local network.
+
+The noVNC surface currently has no password. Keep port `6080` on a trusted LAN only and never expose it directly to the public Internet.
 
 The current Compose setup containerizes the browser runtime only. Run the Web UI on the host when needed:
 

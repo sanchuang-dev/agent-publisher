@@ -19,7 +19,9 @@ services:
       - "6080"
       - "9222"
     ports:
-      - "127.0.0.1:6080:6080"
+      # noVNC is intentionally reachable from the trusted local network.
+      # Do not expose this unauthenticated browser surface to the public Internet.
+      - "0.0.0.0:6080:6080"
     volumes:
       - browser-profile:/data/profile
     restart: unless-stopped
