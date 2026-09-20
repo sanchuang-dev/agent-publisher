@@ -175,7 +175,7 @@ describe("controlled Pi resources", () => {
     faux.setResponses([
       (context) => {
         observedTools = (context.tools ?? []).map((tool) => tool.name);
-        observedSystemPrompt = context.systemPrompt;
+        observedSystemPrompt = context.systemPrompt ?? "";
         return fauxAssistantMessage(
           fauxToolCall("read", { path: skillPath }, { id: "read-skill" }),
           { stopReason: "toolUse" },
