@@ -147,9 +147,7 @@ export function compilePublisherMcpProfile(
   };
 
   return {
-    extensionFactories: [
-      createMcpAdapter({ config }) as unknown as InlineExtension,
-    ],
+    extensionFactories: [createMcpAdapter({ config })],
     toolNames: ["mcp"],
   };
 }
