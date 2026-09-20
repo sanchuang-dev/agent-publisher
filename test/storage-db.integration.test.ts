@@ -10,6 +10,7 @@ import { migrations, runMigrations } from "../src/storage/migrations/index.js";
 
 const expectedTables = [
   "action_requests",
+  "agent_session_bindings",
   "assets",
   "browser_profiles",
   "evidence",
@@ -20,6 +21,7 @@ const expectedTables = [
 
 const expectedIndexes = [
   "idx_action_requests_open",
+  "idx_agent_session_bindings_ref",
   "idx_action_requests_single_open",
   "idx_assets_job",
   "idx_evidence_job",
@@ -54,12 +56,12 @@ test("initializes an empty database and safely re-runs migrations", () => {
       expect(indexNames.includes(expectedIndex), `${expectedIndex} should exist`).toBe(true);
     }
 
-    expect(first.pragma("user_version", { simple: true })).toBe(3);
+    expect(first.pragma("user_version", { simple: true })).toBe(4);
     first.close();
 
     const second = openDatabase({ databasePath });
     expect(readNames(second, "table")).toEqual([...expectedTables]);
-    expect(second.pragma("user_version", { simple: true })).toBe(3);
+    expect(second.pragma("user_version", { simple: true })).toBe(4);
     second.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -100,7 +102,7 @@ test("upgrades a populated v1 database without losing the existing job", () => {
       checkpoint_json: string | null;
     };
 
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(3);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(4);
     expect(row).toEqual({
       id: "legacy-job",
       status: "created",
@@ -151,7 +153,7 @@ test("upgrades populated v2 action history and enforces one current open action 
     legacy.close();
 
     const upgraded = openDatabase({ databasePath });
-    expect(upgraded.pragma("user_version", { simple: true })).toBe(3);
+    expect(upgraded.pragma("user_version", { simple: true })).toBe(4);
     expect(
       upgraded
         .prepare("SELECT id, type, status FROM action_requests WHERE id = ?")
@@ -290,11 +292,11 @@ test("rejects a database schema newer than this build supports", () => {
 
   try {
     const db = openDatabase({ databasePath });
-    db.pragma("user_version = 4");
+    db.pragma("user_version = 5");
     db.close();
 
     expect(() => openDatabase({ databasePath })).toThrow(
-      /Database schema version 4 is newer than supported version 3/,
+      /Database schema version 5 is newer than supported version 4/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
