@@ -202,6 +202,71 @@ describe("PiAgentHost", () => {
     await sessionB.dispose();
   });
 
+  test("rejects overlapping runs on the same session while allowing sequential reuse", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-single-flight" });
+    const modelRuntime = await createFauxRuntime(faux);
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      tools: [],
+      sessionOptions: {
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-single-flight", role: "content" },
+    });
+
+    let releaseFirst!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    faux.setResponses([
+      async () => {
+        markStarted();
+        await released;
+        return fauxAssistantMessage(fauxText("FIRST_DONE"));
+      },
+    ]);
+
+    const firstRun = session.run({ prompt: "First task." });
+    await started;
+
+    await expect(
+      session.run({ prompt: "Overlapping task." }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionError",
+      code: "AGENT_SESSION_BUSY",
+      runStopped: false,
+    });
+
+    releaseFirst();
+    await expect(firstRun).resolves.toMatchObject({
+      finalText: "FIRST_DONE",
+    });
+
+    faux.setResponses([
+      fauxAssistantMessage(fauxText("SECOND_DONE")),
+    ]);
+
+    await expect(
+      session.run({ prompt: "Sequential task after first completion." }),
+    ).resolves.toMatchObject({
+      finalText: "SECOND_DONE",
+    });
+
+    await session.dispose();
+  });
+
   test("invalidates a session when a timed-out run cannot confirm abort", async () => {
     const faux = fauxProvider({
       provider: "publisher-agent-host-unconfirmed-abort",

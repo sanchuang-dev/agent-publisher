@@ -145,6 +145,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
   readonly scope: AgentSessionScope;
 
   #disposed = false;
+  #running = false;
 
   constructor(
     private readonly session: PiAgentSession,
@@ -173,6 +174,14 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         "AGENT_SESSION_DISPOSED",
         `Agent session ${this.ref} has already been disposed`,
         { runStopped: true },
+      );
+    }
+
+    if (this.#running) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_BUSY",
+        `Agent session ${this.ref} already has a run in progress`,
+        { runStopped: false },
       );
     }
 
@@ -244,6 +253,8 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       }
     });
 
+    this.#running = true;
+
     try {
       const promptTask = this.session.prompt(input.prompt);
 
@@ -290,6 +301,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
         toolExecutions: [...toolExecutions.values()],
       };
     } finally {
+      this.#running = false;
       unsubscribe();
     }
   }

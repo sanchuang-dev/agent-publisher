@@ -12,6 +12,7 @@ export type AgentSessionErrorCode =
   | "AGENT_SESSION_RUN_FAILED"
   | "AGENT_SESSION_TIMEOUT"
   | "AGENT_SESSION_ABORT_UNCONFIRMED"
+  | "AGENT_SESSION_BUSY"
   | "AGENT_SESSION_DISPOSED";
 
 interface AgentSessionErrorOptions extends ErrorOptions {
