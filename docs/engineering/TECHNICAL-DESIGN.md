@@ -31,7 +31,8 @@ Engineering priorities, in order:
 3. visible human takeover;
 4. no duplicate irreversible side effects;
 5. portability between local macOS and Docker;
-6. replaceable providers without speculative infrastructure.
+6. replaceable providers without speculative infrastructure;
+7. reuse mature application/agent infrastructure before creating Publisher-specific harness machinery.
 
 ## 2. Non-goals
 
@@ -46,7 +47,8 @@ Do not build these into the MVP:
 - CAPTCHA/MFA/risk-control bypass;
 - model/provider configuration UI;
 - self-hosted image/video models;
-- high-concurrency browser execution.
+- high-concurrency browser execution;
+- a Publisher-specific general agent framework, Skill registry, Tool registry, or MCP protocol runtime when mature Pi/MCP ecosystem components satisfy the boundary.
 
 The demo baseline is one operator and one active browser session.
 
@@ -60,8 +62,9 @@ Target: developer Mac.
 
 ```text
 Node app
-├─ API / Web UI
+├─ Fastify API / SSE + Web UI
 ├─ Orchestrator
+├─ PiAgentHost
 ├─ SQLite
 ├─ LocalAssetStore
 └─ LocalDevToolsBrowserProvider
@@ -82,10 +85,10 @@ Primary demo target: Intel MacBook Pro, 32 GB RAM.
 ```text
 Docker Compose
 ├─ app
-│  ├─ API
+│  ├─ Fastify API / SSE
 │  ├─ Web UI
 │  ├─ Orchestrator
-│  ├─ Agent runtime adapter
+│  ├─ PiAgentHost / Pi AgentSessions
 │  └─ SQLite
 │
 └─ browser-runtime
@@ -114,46 +117,86 @@ The MVP acceptance environment is the Intel 32 GB MacBook Pro. Other platforms a
 ## 4. Top-level architecture
 
 ```text
-┌───────────────────────────────────────────────────────────────┐
-│ Web UI                                                        │
-│ task / timeline / material / browser live view / approval     │
-└──────────────────────────────┬────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Web UI                                                           │
+│ task / timeline / material / browser live view / approval        │
+└──────────────────────────────┬───────────────────────────────────┘
                                │ HTTP + SSE
-┌──────────────────────────────▼────────────────────────────────┐
-│ Application                                                   │
-│                                                               │
-│  API                                                          │
-│   ↓                                                           │
-│  Job Service                                                  │
-│   ↓                                                           │
-│  Orchestrator                                                 │
-│   ├─ Content Secretary session                                │
-│   └─ Publishing Secretary session                             │
-│                                                               │
-│  Material Pipeline     Platform Publisher     Approval Gate    │
-│       │                        │                   │            │
-│       ▼                        ▼                   │            │
-│  Providers              BrowserProvider ◄────────┘            │
-│       │                        │                                │
-│       ▼                        ▼                                │
-│   AssetStore            Chromium / CDP                         │
-│                                                               │
-│  SQLite: jobs / checkpoints / actions / evidence              │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────────────────────▼───────────────────────────────────┐
+│ Fastify Application                                              │
+│                                                                  │
+│  API → Job/Application Services → Publisher Orchestrator         │
+│                                  │                               │
+│                 ┌────────────────┴───────────────┐               │
+│                 │ reasoning required             │ deterministic │
+│                 ▼                                ▼               │
+│             PiAgentHost                 Platform / Material      │
+│                 │                       / Browser execution       │
+│          AgentDefinition                          │               │
+│                 │                                 │               │
+│          create / resume                          │               │
+│                 ▼                                 │               │
+│            Pi AgentSession                        │               │
+│          /       |        \                       │               │
+│       Skills    Tools      MCP                    │               │
+│                 │                                 │               │
+│                 └──────── structured result ──────┘               │
+│                                  │                               │
+│                  SQLite Job / checkpoint / actions               │
+│                  approval / external_actions / evidence          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 The application remains one Node.js deployable for the MVP. Module boundaries are code boundaries, not service boundaries.
 
+### 4.1 Node application framework
+
+Use **Fastify 5** as the Node HTTP/SSE application framework.
+
+Fastify owns:
+
+- HTTP routing;
+- request/response schema validation;
+- SSE endpoint lifecycle;
+- application startup/shutdown hooks;
+- the outer server error boundary.
+
+Do not add NestJS or a general DI container. Application dependencies are composed explicitly in the bootstrap/composition root.
+
+Fastify is not an agent framework. Pi sessions run behind application/orchestration boundaries.
+
+### 4.2 Pi harness baseline
+
+The MVP agent harness baseline is the embeddable **`@earendil-works/pi-coding-agent` SDK**, subject to the in-project foundation work described in [PI-ECOSYSTEM-EVALUATION.md](./PI-ECOSYSTEM-EVALUATION.md).
+
+The package name does not make coding-agent CLI behavior part of the product. Publisher uses the SDK programmatically with explicit resources and tools.
+
+Prefer the SDK harness before rebuilding around `@earendil-works/pi-agent-core` alone because the SDK already composes:
+
+- AgentSession lifecycle;
+- model/runtime services;
+- ResourceLoader;
+- Skills;
+- extensions/custom tools;
+- tool selection/interception;
+- event streaming;
+- session/history management;
+- context compaction and settings.
+
+DeepSeek Harness remains an experimental/future migration candidate, not a parallel MVP implementation.
+
 ## 5. Module layout
 
-Target layout:
+Target layout as implementation reaches it:
 
 ```text
 src/
 ├─ app/
 │  ├─ config.ts
-│  └─ bootstrap.ts
+│  ├─ bootstrap.ts
+│  └─ composition.ts
 ├─ api/
+│  ├─ server.ts
 │  ├─ jobs.ts
 │  ├─ actions.ts
 │  ├─ profiles.ts
@@ -164,8 +207,13 @@ src/
 │  ├─ checkpoints.ts
 │  └─ recovery.ts
 ├─ agent/
-│  ├─ runtime.ts
-│  ├─ pi-agent-runtime.ts
+│  ├─ definition.ts
+│  ├─ host.ts
+│  ├─ session-ref.ts
+│  ├─ context.ts
+│  ├─ resources.ts
+│  ├─ extensions/
+│  │  └─ tool-guard.ts
 │  └─ roles/
 │     ├─ content-secretary.ts
 │     └─ publishing-secretary.ts
@@ -213,34 +261,128 @@ src/
    ├─ ids.ts
    └─ time.ts
 
+skills/
+├─ content-planning/
+├─ xiaohongshu-copy/
+└─ browser-recovery/
+
 web/
 docker/
-├─ browser-runtime/
-│  ├─ Dockerfile
-│  └─ entrypoint.sh
-└─ compose/
-   └─ docker-compose.yml
+└─ browser-runtime/
 ```
 
-Do not create all files merely to match the diagram. Add modules as the implementation reaches them.
+Do not create all files merely to match the diagram. Add modules only when an accepted implementation slice reaches them.
+
+In particular, do **not** pre-create generic `SkillRegistry`, `ToolRegistry`, `McpManager`, or `ContextManager` modules. Pi/MCP ecosystem facilities own those concerns unless project evidence proves a missing boundary.
 
 ## 6. Core contracts
 
-### 6.1 AgentRuntime
+### 6.1 AgentDefinition and AgentHost
 
-The product must not depend directly on one agent framework.
+The previous three-method `AgentRuntime.start/resume/cancel` abstraction is superseded by a definition/session model.
+
+A reusable agent definition describes a class of work:
 
 ```ts
-interface AgentRuntime {
-  start(input: AgentRunInput): Promise<AgentRunResult>;
-  resume(runId: string, input?: AgentResumeInput): Promise<AgentRunResult>;
-  cancel(runId: string): Promise<void>;
+interface AgentDefinition {
+  id: string;
+  model: ModelPolicy;
+  systemPrompt: SystemPromptProvider;
+  skills: SkillSource[];
+  tools: ToolProfile;
+  mcp?: McpProfile[];
+  context?: ContextProvider[];
+  settings?: AgentSettings;
+  session?: SessionPolicy;
 }
 ```
 
-The first adapter is `PiAgentRuntime`.
+This is Publisher configuration, not a reimplementation of Pi internals.
 
-DeepSeek Harness remains a future alternate adapter. Product-domain code must not import framework-specific session or tool types.
+A process-level host owns the Pi integration boundary:
+
+```ts
+interface AgentHost {
+  createSession(input: CreatePublisherAgentSessionInput): Promise<PublisherAgentSession>;
+  resumeSession(input: ResumePublisherAgentSessionInput): Promise<PublisherAgentSession>;
+}
+```
+
+A created session is job/role/helper scoped and exposes only the narrow operations the Orchestrator needs:
+
+```ts
+interface PublisherAgentSession {
+  ref: AgentSessionRef;
+  run(input: AgentTaskInput): Promise<AgentTaskResult>;
+  dispose(): Promise<void>;
+}
+```
+
+The first implementation is `PiAgentHost`.
+
+Pi-specific session/tool/resource types remain inside the agent integration module. Domain services consume `AgentDefinition`, `AgentSessionRef`, and structured task results.
+
+#### Reuse and isolation
+
+Reuse:
+
+- AgentDefinition;
+- safe process-level Pi runtime/model services;
+- controlled resource definitions;
+- tool factories;
+- skill resources;
+- MCP profiles.
+
+Isolate by job/role or narrower helper task:
+
+- transcript;
+- dynamic Job context;
+- browser observations;
+- temporary tool grants;
+- task-specific external capability state.
+
+Do not keep one role conversation alive across unrelated Publish Jobs.
+
+#### Controlled ResourceLoader
+
+Publisher must not rely on ambient Pi discovery from the service account's home directory or arbitrary project directories.
+
+Use an explicit/controlled ResourceLoader configuration. The application chooses:
+
+- system prompt;
+- context resources;
+- Skills;
+- extensions;
+- settings;
+- allowed workspace paths.
+
+No developer-local `~/.pi`, `.pi`, `.agents`, model config, extension, or MCP configuration is part of the production runtime unless Publisher explicitly provisions it.
+
+#### Skills
+
+Use Pi / Agent Skills rather than a Publisher-specific Skill registry or schema.
+
+Mandatory safety/workflow instructions may be host-loaded rather than relying entirely on optional progressive discovery.
+
+If Skill loading requires file reads, provide a restricted read capability limited to approved Skill and Job workspace roots. Do not enable arbitrary filesystem or shell access merely to support Skills.
+
+#### Tools
+
+Use Pi's custom-tool registration, tool selection, and tool-call interception.
+
+Each AgentDefinition/session has an explicit allowed tool profile. Prefer not exposing a dangerous tool at all; use an execution guard as a second boundary.
+
+The irreversible final publish action is **not** an Agent tool.
+
+#### MCP
+
+MCP is an optional external capability source.
+
+First evaluate a mature Pi-compatible MCP adapter/extension (currently `pi-mcp-adapter`) before implementing custom transport, discovery, OAuth, lifecycle, or catalog management.
+
+Publisher owns MCP server/profile configuration and tool allowlists. Do not inherit arbitrary machine-local MCP configuration.
+
+Treat the adapter as a third-party dependency whose behavior must be proven by repository tests before it becomes a locked baseline.
 
 ### 6.2 BrowserProvider
 
@@ -268,7 +410,7 @@ MVP implementations:
 - `LocalDevToolsBrowserProvider` — host browser through CDP.
 - `DockerCdpBrowserProvider` — headful Chromium inside `browser-runtime`.
 
-Platform skills receive a Playwright `Page`-level abstraction and do not issue raw CDP commands for normal work.
+Platform implementations receive a Playwright `Page`-level abstraction and do not issue raw CDP commands for normal work.
 
 ### 6.3 PlatformPublisher
 
@@ -305,6 +447,8 @@ interface VideoProvider {
 
 Concrete vendors are intentionally deferred. Provider unavailability must be explicit.
 
+A provider implementation must not create its own long-lived model/session harness when the same work belongs in an AgentDefinition / Pi AgentSession. Plain deterministic provider APIs may still call external media services directly when no agent reasoning is required.
+
 ### 6.5 AssetStore
 
 ```ts
@@ -321,15 +465,32 @@ Future implementations may use OSS or R2 without changing the material pipeline.
 
 ## 7. Orchestration model
 
-There is one Orchestrator and two role sessions.
+There is one Publisher Orchestrator and zero or more Orchestrator-owned AgentSessions active as the task requires.
 
 ```text
-Orchestrator
-├─ Content Secretary session
-└─ Publishing Secretary session
+Publisher Orchestrator
+├─ deterministic Job / platform / material steps
+├─ Content Secretary AgentSession        (when reasoning is needed)
+├─ Publishing Secretary AgentSession     (when reasoning is needed)
+└─ bounded Recovery AgentSession         (optional helper)
 ```
 
-The role sessions are not autonomous peers. The Orchestrator owns phase transitions, checkpoints, approval gates, and retry policy.
+Content Secretary and Publishing Secretary remain the two user-visible product roles. Additional helper sessions do not become independently visible employees unless a later product decision says so.
+
+This is **multiple agent instances under one business orchestrator**, not an autonomous multi-agent organization.
+
+The Orchestrator owns:
+
+- phase transitions;
+- checkpoints;
+- ActionRequests;
+- approval gates;
+- workflow retry policy;
+- control transfer between human and automation;
+- irreversible-side-effect authority;
+- Job completion.
+
+Pi AgentSessions own model-facing execution context and conversation continuity only.
 
 ### 7.1 Agent responsibilities
 
@@ -338,9 +499,10 @@ Agent/model reasoning is allowed for:
 - brief interpretation;
 - MaterialPlan creation;
 - copy generation/adaptation;
+- bounded external research through approved Tools/MCP;
 - bounded browser-state interpretation;
 - bounded recovery from an unexpected UI state;
-- deciding that human takeover is safer.
+- deciding that clarification or human takeover is safer.
 
 ### 7.2 Deterministic responsibilities
 
@@ -357,6 +519,21 @@ Normal browser execution is deterministic:
 - verify result.
 
 The normal path must not be implemented as a free-running instruction such as "publish this post".
+
+### 7.3 Pi session state vs Publisher business state
+
+Keep two persistence domains:
+
+```text
+Pi AgentSession
+= transcript / context continuity / model-facing history
+
+Publisher SQLite
+= Job / checkpoint / ActionRequest / approval /
+  external_actions / evidence
+```
+
+Restoring a Pi session never proves that a business side effect happened. Business transitions advance only from Publisher-owned evidence and state-machine rules.
 
 ## 8. Job state machine
 
@@ -886,8 +1063,17 @@ BROWSER
 - profile reference
 
 AGENT
-- runtime adapter
+- Pi harness/runtime settings
 - provider/model credentials by environment
+- controlled Skill/resource roots
+- AgentDefinition defaults
+- session persistence policy
+
+MCP
+- Publisher-owned server profiles
+- per-agent/server allowlists
+- adapter settings
+- secret references only; no plaintext credentials in repository config
 
 MATERIAL
 - text/image/design/video provider credentials
@@ -984,7 +1170,14 @@ Never log:
 - provider adapters with fake providers;
 - BrowserProvider contract;
 - Docker browser runtime health;
-- local asset storage.
+- local asset storage;
+- Pi SDK session creation/disposal;
+- AgentDefinition session isolation;
+- controlled ResourceLoader with no ambient discovery;
+- Skill loading under restricted file access;
+- tool allowlist + execution guard;
+- MCP adapter lifecycle/configuration when MCP is enabled;
+- Publisher Job resume together with an agent-session reference without treating the transcript as business truth.
 
 ### Browser smoke
 
@@ -1031,6 +1224,15 @@ This is implementation order, not a set of GitHub work items.
    - internal CDP;
    - live view visible in UI.
 
+2.5. **Pi harness foundation — start in parallel with browser/platform evidence work**
+   - embed `pi-coding-agent` SDK without CLI assumptions;
+   - establish AgentDefinition + PiAgentHost + isolated session lifecycle;
+   - prove controlled ResourceLoader / Skills / tool boundaries;
+   - prove Publisher-owned MCP configuration through a mature adapter before custom MCP infrastructure;
+   - prove session/context isolation and restart/resume compatibility.
+
+   This foundation must precede implementation of the obsolete thin `AgentRuntime.start/resume/cancel` shape, custom Skill/Tool/MCP registries, or model/session machinery embedded ad hoc in providers.
+
 3. **Xiaohongshu deterministic pre-publish path**
    - login detection;
    - QR/human takeover;
@@ -1039,19 +1241,26 @@ This is implementation order, not a set of GitHub work items.
    - prepared-form verification;
    - stop before publish.
 
-4. **Approval + publish-once + evidence**
+   This path does not wait for agent autonomy. It must remain usable without Pi for the normal deterministic flow.
+
+4. **Application/API + approval + publish-once + evidence**
+   - Fastify application/bootstrap;
+   - Job/action HTTP API and SSE;
    - approval action;
    - external action record;
    - one publish action;
    - verification.
 
-5. **Material providers / agent enhancement**
-   - real TextProvider/ImageProvider;
+5. **Agent-powered product features**
+   - Content Secretary vertical slice through AgentDefinition / Pi AgentSession;
+   - real TextProvider/ImageProvider integration where reasoning/provider boundaries require it;
    - optional video;
-   - bounded recovery;
-   - PiAgent adapter where it materially helps.
+   - bounded publishing/browser recovery through restricted inspect tools;
+   - no transfer of Job or irreversible-side-effect authority into Pi.
 
 The first demo should not wait for a sophisticated material-provider matrix. A controlled MaterialPack fixture is acceptable while proving the browser/publish risk.
+
+Agent infrastructure is intentionally brought forward; agent autonomy is not.
 
 ## 24. MVP technical acceptance
 
@@ -1073,6 +1282,9 @@ The technical baseline is proven when, on the agreed Docker demo machine:
 ## 25. Design principles
 
 - Stability before autonomy.
+- Reuse mature application/agent infrastructure before rebuilding it.
+- Reusable AgentDefinitions; job-scoped AgentSessions.
+- Explicit resources over ambient developer-machine discovery.
 - Deterministic path first; agent recovery second.
 - Checkpoint every meaningful boundary.
 - Human identity proof is part of the product.
@@ -1081,4 +1293,6 @@ The technical baseline is proven when, on the agreed Docker demo machine:
 - Local and Docker modes share the same product core.
 - Browser runtime is replaceable behind BrowserProvider.
 - Provider implementations are replaceable behind capability contracts.
+- Pi session history is context, never business truth.
+- Irreversible publish authority stays outside the model tool surface.
 - Do not generalize beyond evidence from the first working Xiaohongshu loop.
