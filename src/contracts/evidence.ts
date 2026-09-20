@@ -35,21 +35,21 @@ export class InvalidPublicationEvidenceError extends Error {
     readonly field: "id" | "jobId" | "kind" | "uri" | "value" | "metadata",
     message: string,
   ) {
-    super(\`Invalid publication evidence \${field}: \${message}\`);
+    super(`Invalid publication evidence ${field}: ${message}`);
     this.name = "InvalidPublicationEvidenceError";
   }
 }
 
 export class SensitivePublicationEvidenceError extends Error {
   constructor(readonly fieldPath: string) {
-    super(\`Publication evidence contains forbidden sensitive material at \${fieldPath}\`);
+    super(`Publication evidence contains forbidden sensitive material at ${fieldPath}`);
     this.name = "SensitivePublicationEvidenceError";
   }
 }
 
 export class PublicationEvidenceAlreadyExistsError extends Error {
   constructor(readonly evidenceId: string) {
-    super(\`PublicationEvidence already exists: \${evidenceId}\`);
+    super(`PublicationEvidence already exists: ${evidenceId}`);
     this.name = "PublicationEvidenceAlreadyExistsError";
   }
 }
