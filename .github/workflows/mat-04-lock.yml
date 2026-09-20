@@ -29,12 +29,25 @@ jobs:
             console.log(fs.readFileSync(pkgPath, "utf8"));
           }
           const fontRoot = path.join(process.cwd(), "node_modules", "@fontsource-variable", "noto-sans-sc");
-          for (const file of fs.readdirSync(path.join(fontRoot, "files"))) {
-            if (file.endsWith(".woff2") && file.includes("chinese-simplified")) {
+          for (const file of fs.readdirSync(path.join(fontRoot, "files")).sort()) {
+            if (file.endsWith(".woff2")) {
               console.log("FONT " + file);
             }
           }
           NODE
+          cat mat-04-package-info.txt
+      - name: Commit generated lock when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- package-lock.json; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "build: lock MAT-04 renderer dependencies"
+          git push origin HEAD:feat/mat-04-safe-layout-renderer
       - uses: actions/upload-artifact@v4
         with:
           name: mat-04-lock
