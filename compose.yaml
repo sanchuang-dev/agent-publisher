@@ -19,12 +19,11 @@ services:
       - "6080"
       - "9222"
     environment:
-      NOVNC_BIND_ADDRESS: "${NOVNC_BIND_ADDRESS:-127.0.0.1}"
-      NOVNC_PASSWORD: "${NOVNC_PASSWORD:-}"
+      # Passwordless VNC is permitted only because the default host mapping below
+      # is loopback-only. compose.lan.yaml overrides this to require a secret file.
+      NOVNC_ALLOW_NO_PASSWORD: "1"
     ports:
-      # Secure by default: noVNC is host-local unless an operator explicitly binds
-      # a trusted LAN interface. Non-loopback binding requires NOVNC_PASSWORD.
-      - "${NOVNC_BIND_ADDRESS:-127.0.0.1}:6080:6080"
+      - "127.0.0.1:6080:6080"
     volumes:
       - browser-profile:/data/profile
     restart: unless-stopped
