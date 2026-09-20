@@ -73,6 +73,33 @@ docker compose down
 
 The Chromium profile is stored in the `browser-profile` Docker volume, so normal restarts keep the browser session.
 
+## Live Content Secretary model smoke
+
+The default automated suite uses controlled Pi providers and does not require external model credentials. A real OpenAI-compatible Content Secretary smoke is an explicit manual check.
+
+The runtime reads only these product-owned variables:
+
+- `PUBLISHER_AI_BASE_URL`
+- `PUBLISHER_AI_API_KEY`
+- `PUBLISHER_AI_MODEL`
+
+The endpoint must use HTTPS, except for an explicit loopback development endpoint.
+
+On Windows PowerShell, set the values only in the current process and opt in to the external call:
+
+```powershell
+$env:PUBLISHER_LIVE_MODEL_SMOKE="1"
+$env:PUBLISHER_AI_BASE_URL="https://your-openai-compatible-gateway.example/v1"
+$env:PUBLISHER_AI_MODEL="your-model-id"
+$env:PUBLISHER_AI_API_KEY="your-key"
+
+npm run smoke:content-secretary-live
+
+Remove-Item Env:PUBLISHER_AI_API_KEY -ErrorAction SilentlyContinue
+```
+
+Do not commit the key, put it in `.env`, or paste it into Issue/PR evidence. The smoke prints only bounded provider/model/MaterialPlan/checkpoint evidence and uses a disposable local database/session directory.
+
 ## POC boundaries
 
 - This is not a general-purpose browser agent.
