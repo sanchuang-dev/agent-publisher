@@ -1,0 +1,391 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  SessionManager,
+  SettingsManager,
+  createAgentSession,
+  type CreateAgentSessionOptions,
+  type ResourceLoader,
+} from "@earendil-works/pi-coding-agent";
+
+import type {
+  AgentDefinition,
+  AgentSessionScope,
+  AgentTaskInput,
+  AgentTaskResult,
+  AgentToolExecutionEvidence,
+  CreatePublisherAgentSessionInput,
+} from "./definition.js";
+import {
+  AgentSessionError,
+  type AgentHost,
+  type PublisherAgentSession,
+} from "./host.js";
+import { asAgentSessionRef, type AgentSessionRef } from "./session-ref.js";
+
+type PiAgentSession = Awaited<
+  ReturnType<typeof createAgentSession>
+>["session"];
+
+type PiHostSessionOptions = Omit<
+  CreateAgentSessionOptions,
+  | "sessionManager"
+  | "settingsManager"
+  | "model"
+  | "modelRuntime"
+  | "resourceLoader"
+  | "tools"
+  | "cwd"
+>;
+
+export interface PiResourceLoaderFactoryInput {
+  readonly definition: AgentDefinition;
+  readonly scope: AgentSessionScope;
+  readonly systemPrompt: string;
+}
+
+export interface PiAgentHostOptions {
+  readonly model: NonNullable<CreateAgentSessionOptions["model"]>;
+  readonly modelRuntime: NonNullable<CreateAgentSessionOptions["modelRuntime"]>;
+  readonly createResourceLoader: (
+    input: PiResourceLoaderFactoryInput,
+  ) => ResourceLoader;
+  readonly tools?: readonly string[];
+  readonly sessionOptions?: PiHostSessionOptions;
+  readonly cwd?: string;
+  readonly initializationTimeoutMs?: number;
+  readonly defaultRunTimeoutMs?: number;
+  readonly defaultAbortTimeoutMs?: number;
+}
+
+const DEFAULT_INITIALIZATION_TIMEOUT_MS = 10_000;
+const DEFAULT_RUN_TIMEOUT_MS = 10_000;
+const DEFAULT_ABORT_TIMEOUT_MS = 1_000;
+
+class DeadlineExceededError extends Error {}
+
+function toMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function safeDispose(session: PiAgentSession): void {
+  try {
+    session.dispose();
+  } catch {
+    // Cleanup after a settled or abandoned session is best-effort.
+  }
+}
+
+function assertPositiveFinite(value: number, label: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new AgentSessionError(
+      "AGENT_SESSION_INITIALIZATION_FAILED",
+      `${label} must be a positive finite number`,
+    );
+  }
+}
+
+function assertNonEmpty(value: string, label: string): void {
+  if (value.trim().length === 0) {
+    throw new AgentSessionError(
+      "AGENT_SESSION_INITIALIZATION_FAILED",
+      `${label} must not be empty`,
+    );
+  }
+}
+
+function buildSystemPrompt(
+  definition: AgentDefinition,
+  context: string | undefined,
+): string {
+  const basePrompt = definition.systemPrompt.trim();
+  if (!context || context.trim().length === 0) {
+    return basePrompt;
+  }
+
+  return `${basePrompt}\n\nSession context:\n${context.trim()}`;
+}
+
+async function withDeadline<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  if (timeoutMs <= 0) {
+    throw new DeadlineExceededError("Agent session deadline exceeded");
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new DeadlineExceededError("Agent session deadline exceeded"));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+async function stopTimedOutRun(
+  promptTask: Promise<void>,
+  session: PiAgentSession,
+  abortTimeoutMs: number,
+): Promise<boolean> {
+  const promptSettled = promptTask.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  try {
+    await withDeadline(
+      Promise.all([session.abort(), promptSettled]).then(() => undefined),
+      abortTimeoutMs,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+class PiPublisherAgentSession implements PublisherAgentSession {
+  readonly ref: AgentSessionRef;
+  readonly definition: AgentDefinition;
+  readonly scope: AgentSessionScope;
+
+  #disposed = false;
+
+  constructor(
+    private readonly session: PiAgentSession,
+    definition: AgentDefinition,
+    scope: AgentSessionScope,
+    private readonly defaultRunTimeoutMs: number,
+    private readonly defaultAbortTimeoutMs: number,
+  ) {
+    this.ref = asAgentSessionRef(`agent-session:${randomUUID()}`);
+    this.definition = definition;
+    this.scope = scope;
+  }
+
+  async run(input: AgentTaskInput): Promise<AgentTaskResult> {
+    if (this.#disposed) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_DISPOSED",
+        `Agent session ${this.ref} has already been disposed`,
+        { runStopped: true },
+      );
+    }
+
+    assertNonEmpty(input.prompt, "Agent task prompt");
+
+    const timeoutMs = input.timeoutMs ?? this.defaultRunTimeoutMs;
+    const abortTimeoutMs =
+      input.abortTimeoutMs ?? this.defaultAbortTimeoutMs;
+
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RUN_FAILED",
+        "Agent task timeout must be a positive finite number",
+        { runStopped: true },
+      );
+    }
+    if (!Number.isFinite(abortTimeoutMs) || abortTimeoutMs <= 0) {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RUN_FAILED",
+        "Agent task abort timeout must be a positive finite number",
+        { runStopped: true },
+      );
+    }
+
+    const eventTypes: string[] = [];
+    const toolExecutions = new Map<string, AgentToolExecutionEvidence>();
+    let finalText = "";
+
+    const unsubscribe = this.session.subscribe((event) => {
+      eventTypes.push(event.type);
+
+      if (
+        event.type === "message_end" &&
+        event.message.role === "assistant"
+      ) {
+        finalText = event.message.content
+          .filter((block) => block.type === "text")
+          .map((block) => block.text)
+          .join("");
+        return;
+      }
+
+      if (event.type === "tool_execution_start") {
+        toolExecutions.set(event.toolCallId, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
+          completed: false,
+          isError: null,
+        });
+        return;
+      }
+
+      if (event.type === "tool_execution_end") {
+        const previous = toolExecutions.get(event.toolCallId);
+        toolExecutions.set(event.toolCallId, {
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: previous?.args,
+          completed: true,
+          isError: event.isError,
+        });
+      }
+    });
+
+    try {
+      const promptTask = this.session.prompt(input.prompt);
+
+      try {
+        await withDeadline(promptTask, timeoutMs);
+      } catch (error) {
+        if (error instanceof DeadlineExceededError) {
+          const runStopped = await stopTimedOutRun(
+            promptTask,
+            this.session,
+            abortTimeoutMs,
+          );
+
+          if (!runStopped) {
+            throw new AgentSessionError(
+              "AGENT_SESSION_ABORT_UNCONFIRMED",
+              `Agent session exceeded the ${timeoutMs}ms run deadline and did not confirm stop within ${abortTimeoutMs}ms`,
+              { cause: error, runStopped: false },
+            );
+          }
+
+          throw new AgentSessionError(
+            "AGENT_SESSION_TIMEOUT",
+            `Agent session exceeded the ${timeoutMs}ms run deadline and was stopped`,
+            { cause: error, runStopped: true },
+          );
+        }
+
+        if (error instanceof AgentSessionError) {
+          throw error;
+        }
+
+        throw new AgentSessionError(
+          "AGENT_SESSION_RUN_FAILED",
+          `Agent session run failed: ${toMessage(error)}`,
+          { cause: error, runStopped: true },
+        );
+      }
+
+      return {
+        finalText,
+        eventTypes: [...eventTypes],
+        toolExecutions: [...toolExecutions.values()],
+      };
+    } finally {
+      unsubscribe();
+    }
+  }
+
+  async dispose(): Promise<void> {
+    if (this.#disposed) {
+      return;
+    }
+
+    this.#disposed = true;
+    safeDispose(this.session);
+  }
+}
+
+export class PiAgentHost implements AgentHost {
+  readonly #options: PiAgentHostOptions;
+
+  constructor(options: PiAgentHostOptions) {
+    const initializationTimeoutMs =
+      options.initializationTimeoutMs ?? DEFAULT_INITIALIZATION_TIMEOUT_MS;
+    const defaultRunTimeoutMs =
+      options.defaultRunTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    const defaultAbortTimeoutMs =
+      options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS;
+
+    assertPositiveFinite(
+      initializationTimeoutMs,
+      "Agent session initialization timeout",
+    );
+    assertPositiveFinite(defaultRunTimeoutMs, "Agent session run timeout");
+    assertPositiveFinite(
+      defaultAbortTimeoutMs,
+      "Agent session abort timeout",
+    );
+
+    this.#options = {
+      ...options,
+      initializationTimeoutMs,
+      defaultRunTimeoutMs,
+      defaultAbortTimeoutMs,
+    };
+  }
+
+  async createSession(
+    input: CreatePublisherAgentSessionInput,
+  ): Promise<PublisherAgentSession> {
+    assertNonEmpty(input.definition.id, "Agent definition id");
+    assertNonEmpty(input.definition.systemPrompt, "Agent system prompt");
+    assertNonEmpty(input.scope.jobId, "Agent session job id");
+    assertNonEmpty(input.scope.role, "Agent session role");
+
+    const cwd = this.#options.cwd ?? process.cwd();
+    const resourceLoader = this.#options.createResourceLoader({
+      definition: input.definition,
+      scope: input.scope,
+      systemPrompt: buildSystemPrompt(
+        input.definition,
+        input.context,
+      ),
+    });
+
+    const creation = createAgentSession({
+      ...this.#options.sessionOptions,
+      cwd,
+      model: this.#options.model,
+      modelRuntime: this.#options.modelRuntime,
+      resourceLoader,
+      tools: [...(this.#options.tools ?? [])],
+      sessionManager: SessionManager.inMemory(cwd),
+      settingsManager: SettingsManager.inMemory(),
+    });
+
+    let created: Awaited<ReturnType<typeof createAgentSession>>;
+    try {
+      created = await withDeadline(
+        creation,
+        this.#options.initializationTimeoutMs ??
+          DEFAULT_INITIALIZATION_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (error instanceof DeadlineExceededError) {
+        void creation.then(
+          ({ session }) => safeDispose(session),
+          () => undefined,
+        );
+      }
+
+      throw new AgentSessionError(
+        "AGENT_SESSION_INITIALIZATION_FAILED",
+        `Agent session initialization failed: ${toMessage(error)}`,
+        { cause: error },
+      );
+    }
+
+    return new PiPublisherAgentSession(
+      created.session,
+      input.definition,
+      input.scope,
+      this.#options.defaultRunTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+      this.#options.defaultAbortTimeoutMs ?? DEFAULT_ABORT_TIMEOUT_MS,
+    );
+  }
+}
