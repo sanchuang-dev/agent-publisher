@@ -241,7 +241,9 @@ function TaskDetail({
       }
 
       const status = current.backendStatus;
-      const delay = status === "waiting_for_login" ? 2500 : 120;
+      const delay =
+        status === "waiting_for_login" || status === "publishing" ? 2500 : 120;
+      if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         void taskRepository
           .continue(taskId)
@@ -274,6 +276,7 @@ function TaskDetail({
             if (!cancelled) {
               setTask(next);
               setLoadError(null);
+              scheduleContinue(next);
             }
           });
           scheduleContinue(loaded);
