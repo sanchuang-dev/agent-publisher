@@ -286,6 +286,7 @@ function uploadInputCandidates(page: Page): Locator {
   return page.locator(
     [
       'input.upload-input[type="file"]',
+      'input[type="file"][multiple]',
       'input[type="file"][accept*="image"]',
       'input[type="file"][accept*=".jpg"]',
       'input[type="file"][accept*=".jpeg"]',
@@ -434,13 +435,12 @@ type TagEditorTarget =
       readonly locator: Locator;
     }
   | {
-      readonly kind: "inline_body";
-      readonly locator: Locator;
+      readonly kind: "none";
     };
 
 async function resolveTagEditorTarget(
   page: Page,
-  body: Locator,
+  expectedTags: readonly string[],
 ): Promise<TagEditorTarget> {
   const candidates = tagsCandidates(page);
   const count = await candidates.count();
@@ -455,48 +455,20 @@ async function resolveTagEditorTarget(
     return { kind: "dedicated", locator: candidates.first() };
   }
 
-  // Current Creator image-text pages can expose topics inline in the rich-text
-  // body instead of a separate tags input. Reuse the already-validated body
-  // editor rather than guessing at topic-picker internals.
-  return { kind: "inline_body", locator: body };
+  if (normalizeTags(expectedTags).length === 0) {
+    return { kind: "none" };
+  }
+
+  throw new XiaohongshuPageStateError(
+    "PLATFORM_UI_CHANGED",
+    "No verified Xiaohongshu tags editor is available for non-empty tags.",
+  );
 }
 
-function inlineTagSuffix(tags: readonly string[]): string {
+function tagInputValue(tags: readonly string[]): string {
   return normalizeTags(tags)
     .map((tag) => "#" + tag)
     .join(" ");
-}
-
-function bodyWithInlineTags(
-  body: string,
-  tags: readonly string[],
-): string {
-  const normalizedBody = normalizeText(body);
-  const suffix = inlineTagSuffix(tags);
-  return suffix ? normalizedBody + "\n\n" + suffix : normalizedBody;
-}
-
-function readInlineBodyAndTags(
-  rawBody: string,
-  expectedBody: string,
-): {
-  readonly body: string;
-  readonly tags: readonly string[];
-} {
-  const actual = normalizeText(rawBody);
-  const expected = normalizeText(expectedBody);
-  if (actual === expected) {
-    return { body: actual, tags: [] };
-  }
-
-  if (!actual.startsWith(expected)) {
-    return { body: actual, tags: [] };
-  }
-
-  return {
-    body: expected,
-    tags: parseTagInput(actual.slice(expected.length).trim()),
-  };
 }
 
 async function waitForUploadReady(
@@ -592,23 +564,17 @@ export async function verifyXiaohongshuPreparedPage(
     "body",
     timeoutMs,
   );
-  const tagsTarget = await resolveTagEditorTarget(page, body);
+  const tagsTarget = await resolveTagEditorTarget(page, pack.copy.tags);
 
   const actualTitle = normalizeText(await readEditable(title));
-  const rawBody = await readEditable(body);
+  const actualBody = normalizeText(await readEditable(body));
   const expectedTitle = normalizeText(pack.copy.title);
   const expectedBody = normalizeText(pack.copy.body);
   const expectedTags = normalizeTags(pack.copy.tags);
-
-  const inline =
-    tagsTarget.kind === "inline_body"
-      ? readInlineBodyAndTags(rawBody, expectedBody)
-      : null;
-  const actualBody = inline?.body ?? normalizeText(rawBody);
   const actualTags =
     tagsTarget.kind === "dedicated"
       ? parseTagInput(await readEditable(tagsTarget.locator))
-      : inline!.tags;
+      : [];
 
   const mismatches: PreparedField[] = [];
   if (actualTitle !== expectedTitle) mismatches.push("title");
@@ -701,8 +667,18 @@ export async function prepareXiaohongshuPublication(
     }
 
     await runInteractionStage(page, "upload", async () => {
-      await uploadInput.setInputFiles(assetPaths);
-      await waitForUploadReady(page, assets.length, timeoutMs);
+      let currentUploadInput = uploadInput;
+      for (let index = 0; index < assetPaths.length; index += 1) {
+        if (index > 0) {
+          currentUploadInput = uploadInputCandidates(page).first();
+          await currentUploadInput.waitFor({
+            state: "attached",
+            timeout: timeoutMs,
+          });
+        }
+        await currentUploadInput.setInputFiles(assetPaths[index]!);
+        await waitForUploadReady(page, index + 1, timeoutMs);
+      }
     });
 
     const title = await runInteractionStage(
@@ -718,7 +694,7 @@ export async function prepareXiaohongshuPublication(
     const tagsTarget = await runInteractionStage(
       page,
       "find_tags_editor",
-      () => resolveTagEditorTarget(page, body),
+      () => resolveTagEditorTarget(page, pack.copy.tags),
     );
 
     await runInteractionStage(page, "verify_fresh_composer", async () => {
@@ -734,11 +710,9 @@ export async function prepareXiaohongshuPublication(
 
     await runInteractionStage(page, "fill_fields", async () => {
       await title.fill(pack.copy.title);
+      await body.fill(pack.copy.body);
       if (tagsTarget.kind === "dedicated") {
-        await body.fill(pack.copy.body);
-        await tagsTarget.locator.fill(inlineTagSuffix(pack.copy.tags));
-      } else {
-        await body.fill(bodyWithInlineTags(pack.copy.body, pack.copy.tags));
+        await tagsTarget.locator.fill(tagInputValue(pack.copy.tags));
       }
     });
 
