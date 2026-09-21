@@ -71,7 +71,7 @@ export interface TaskFixture {
     warnings: string[];
   };
   evidence?: Array<{ label: string; value: string }>;
-  failure?: { step: string; reason: string; recovery: string };
+  failure?: { code?: string; step: string; reason: string; recovery: string };
 }
 
 export type WorkSurfaceKind =
