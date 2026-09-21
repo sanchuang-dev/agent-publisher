@@ -688,8 +688,10 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         timeoutMs: 250,
       }),
     (error) => {
-      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "upload");
       assert.equal(error.code, "PLATFORM_UPLOAD_TIMEOUT");
+      assert.equal(error.interactionErrorType, "page_state");
       return true;
     },
     "holding local input files without platform previews must not count as ready",
@@ -725,8 +727,10 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         timeoutMs: 250,
       }),
     (error) => {
-      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "upload");
       assert.equal(error.code, "PLATFORM_UPLOAD_FAILED");
+      assert.equal(error.interactionErrorType, "page_state");
       return true;
     },
     "explicit platform upload failure must fail closed",
@@ -846,8 +850,10 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         timeoutMs: 250,
       }),
     (error) => {
-      assert.ok(error instanceof XiaohongshuPageStateError);
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "verify_fresh_composer");
       assert.equal(error.code, "PLATFORM_EDITOR_STATE_CHANGED");
+      assert.equal(error.interactionErrorType, "page_state");
       return true;
     },
   );
