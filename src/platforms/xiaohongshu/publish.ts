@@ -174,7 +174,7 @@ export async function verifyXiaohongshuPublishResult(
     const resultUrl = sanitizedXiaohongshuResultUrl(input.page.url());
     const contentId = contentIdFromResultUrl(resultUrl);
     const successMarker = input.page.getByText(
-      /发布成功|笔记发布成功|发布完成|提交成功/,
+      /发布成功|笔记发布成功|发布完成/,
       { exact: false },
     );
 
