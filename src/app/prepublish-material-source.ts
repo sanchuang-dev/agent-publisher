@@ -34,6 +34,18 @@ export interface PrepublishMaterialSource {
   ): Promise<PrepublishMaterialResolution>;
 }
 
+export class PrepublishMaterialResolutionError extends Error {
+  constructor(
+    readonly code: string,
+    readonly retryable: boolean,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "PrepublishMaterialResolutionError";
+  }
+}
+
 export type ControlledMaterialFactory = (
   input: PrepublishMaterialSourceInput,
 ) => ImageTextMaterialPack | Promise<ImageTextMaterialPack>;
