@@ -104,6 +104,10 @@ async function createHarness(name: string): Promise<Harness> {
   });
 
   const builtin = createBuiltinMaterialProviderSlots({ assetStore: store });
+  const builtinDesign = builtin.design;
+  if (!builtinDesign) {
+    throw new Error("Builtin material providers must include design.");
+  }
   const calls = { text: 0, image: 0, design: 0 };
   const providers: MaterialProviderSlots = {
     text: {
@@ -120,15 +124,13 @@ async function createHarness(name: string): Promise<Harness> {
         return builtin.image.generate(plan);
       },
     },
-    design: builtin.design
-      ? {
-          slot: "design",
-          async render(input) {
-            calls.design += 1;
-            return builtin.design!.render(input);
-          },
-        }
-      : undefined,
+    design: {
+      slot: "design",
+      async render(input) {
+        calls.design += 1;
+        return builtinDesign.render(input);
+      },
+    },
   };
   const preparation = new MaterialPreparationService({
     jobs,
@@ -253,9 +255,8 @@ describe("MaterialPreparationService integration", () => {
       expect(harness.assets.getById(asset.assetId)).not.toBeNull();
       const path = await resolver(asset);
       expect(existsSync(path)).toBe(true);
-      await expect(harness.store.read(asset.assetId)).resolves.toSatisfy(
-        (bytes: Buffer) => bytes.byteLength > 10_000,
-      );
+      const bytes = await harness.store.read(asset.assetId);
+      expect(bytes.byteLength).toBeGreaterThan(10_000);
     }
 
     expect(
@@ -348,7 +349,12 @@ describe("MaterialPreparationService integration", () => {
     });
     seedPlanCheckpoint(harness.jobs, "job-required-design", plan);
 
-    const builtinDesign = harness.providers.design!;
+    const rawBuiltinDesign = createBuiltinMaterialProviderSlots({
+      assetStore: harness.store,
+    }).design;
+    if (!rawBuiltinDesign) {
+      throw new Error("Builtin material providers must include design.");
+    }
     let designAttempt = 0;
     const providers: MaterialProviderSlots = {
       text: harness.providers.text,
@@ -369,7 +375,7 @@ describe("MaterialPreparationService integration", () => {
               },
             };
           }
-          return builtinDesign.render(input);
+          return rawBuiltinDesign.render(input);
         },
       },
     };
@@ -401,7 +407,7 @@ describe("MaterialPreparationService integration", () => {
     ]);
     expect(harness.calls.text).toBe(1);
     expect(harness.calls.image).toBe(1);
-    expect(harness.calls.design).toBe(3);
+    expect(harness.calls.design).toBe(2);
 
     const designSteps = harness.jobs
       .getStepsForJob("job-required-design")
