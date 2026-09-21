@@ -23,6 +23,7 @@ import type { MaterialProviderSlots } from "./providers/index.js";
 
 export const MATERIAL_COPY_STEP_KEY = "material_copy" as const;
 export const MATERIAL_IMAGES_STEP_KEY = "material_images" as const;
+export const MATERIAL_COVER_STEP_KEY = "material_cover" as const;
 export const MATERIAL_DESIGN_STEP_KEY = "material_design" as const;
 export const MAX_IMAGE_TEXT_MATERIAL_IMAGES = 12 as const;
 
@@ -58,6 +59,14 @@ export interface MaterialPreparationResult {
   readonly reusedSteps: readonly string[];
 }
 
+export interface MaterialBaselineCoverProvider {
+  generate(input: {
+    readonly plan: ImageTextMaterialPlan;
+    readonly copy: TextMaterial;
+    readonly sourceImages: readonly ImageAssetReference[];
+  }): Promise<ProviderResult<ImageAssetReference>>;
+}
+
 export class MaterialPreparationStateError extends Error {
   readonly code = "MATERIAL_INVALID_REQUEST" as const;
 
@@ -78,11 +87,13 @@ export class MaterialPreparationCheckpointError extends Error {
 
 export class MaterialPreparationProviderError extends Error {
   readonly code: MaterialProviderFailure["code"];
+  readonly retryable: boolean;
 
   constructor(readonly failure: MaterialProviderFailure) {
     super(failure.message);
     this.name = "MaterialPreparationProviderError";
     this.code = failure.code;
+    this.retryable = failure.retryable;
   }
 }
 
@@ -293,6 +304,7 @@ export class MaterialPreparationService {
   readonly #jobs: MaterialPreparationJobs;
   readonly #providers: MaterialProviderSlots;
   readonly #assetStore: AssetStore;
+  readonly #baselineCover: MaterialBaselineCoverProvider;
   readonly #createId: () => string;
   readonly #now: () => Date;
 
@@ -300,12 +312,14 @@ export class MaterialPreparationService {
     readonly jobs: MaterialPreparationJobs;
     readonly providers: MaterialProviderSlots;
     readonly assetStore: AssetStore;
+    readonly baselineCover: MaterialBaselineCoverProvider;
     readonly createId?: () => string;
     readonly now?: () => Date;
   }) {
     this.#jobs = dependencies.jobs;
     this.#providers = dependencies.providers;
     this.#assetStore = dependencies.assetStore;
+    this.#baselineCover = dependencies.baselineCover;
     this.#createId = dependencies.createId ?? randomUUID;
     this.#now = dependencies.now ?? (() => new Date());
   }
@@ -328,9 +342,16 @@ export class MaterialPreparationService {
     const reusedSteps: string[] = [];
     const copy = await this.#resolveCopy(jobId, plan, reusedSteps);
     const images = await this.#resolveImages(jobId, plan, reusedSteps);
+    const cover = await this.#resolveCover(
+      jobId,
+      plan,
+      copy.value,
+      images.value,
+      reusedSteps,
+    );
     const baseline = {
       copy: copy.value,
-      cover: images.value[0]!,
+      cover: cover.value,
       images: images.value,
     };
 
@@ -567,6 +588,89 @@ export class MaterialPreparationService {
     return persisted;
   }
 
+  async #resolveCover(
+    jobId: string,
+    plan: ImageTextMaterialPlan,
+    copy: TextMaterial,
+    sourceImages: readonly ImageAssetReference[],
+    reusedSteps: string[],
+  ): Promise<PersistedProviderEnvelope<ImageAssetReference>> {
+    const steps = this.#jobs.getStepsForJob(jobId);
+    for (const step of latestSucceededOutput(steps, MATERIAL_COVER_STEP_KEY)) {
+      const persisted = parseProviderEnvelope(
+        MATERIAL_COVER_STEP_KEY,
+        step.outputJson!,
+        plan.id,
+        isImageAsset,
+      );
+      if (persisted) {
+        await this.#assertDurableImage(MATERIAL_COVER_STEP_KEY, persisted.value);
+        reusedSteps.push(MATERIAL_COVER_STEP_KEY);
+        return persisted;
+      }
+    }
+
+    const startedAt = this.#now().toISOString();
+    const result = await this.#baselineCover.generate({
+      plan,
+      copy,
+      sourceImages,
+    });
+    if (!result.ok) {
+      this.#recordProviderFailure(
+        jobId,
+        plan,
+        MATERIAL_COVER_STEP_KEY,
+        result.error,
+        startedAt,
+      );
+      throw new MaterialPreparationProviderError(result.error);
+    }
+
+    try {
+      if (!isWarningArray(result.warnings)) {
+        throw new MaterialPreparationCheckpointError(
+          MATERIAL_COVER_STEP_KEY,
+          "Baseline cover provider returned invalid warnings",
+        );
+      }
+      await this.#assertDurableImage(MATERIAL_COVER_STEP_KEY, result.value);
+    } catch (error) {
+      const failure: MaterialProviderFailure = {
+        slot: "image",
+        code: "MATERIAL_GENERATION_FAILED",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Baseline cover provider returned an invalid Publisher asset.",
+        retryable: false,
+      };
+      this.#recordProviderFailure(
+        jobId,
+        plan,
+        MATERIAL_COVER_STEP_KEY,
+        failure,
+        startedAt,
+      );
+      throw new MaterialPreparationProviderError(failure);
+    }
+
+    const persisted: PersistedProviderEnvelope<ImageAssetReference> = {
+      version: 1,
+      planId: plan.id,
+      warnings: result.warnings,
+      value: result.value,
+    };
+    this.#commitSuccess(
+      jobId,
+      plan,
+      MATERIAL_COVER_STEP_KEY,
+      persisted,
+      startedAt,
+    );
+    return persisted;
+  }
+
   async #resolveDesign(
     jobId: string,
     plan: ImageTextMaterialPlan,
@@ -682,6 +786,19 @@ export class MaterialPreparationService {
     return persisted;
   }
 
+  async #assertDurableImage(
+    stepKey: string,
+    image: ImageAssetReference,
+  ): Promise<void> {
+    if (!isImageAsset(image)) {
+      throw new MaterialPreparationCheckpointError(
+        stepKey,
+        "contains a non-canonical image asset reference",
+      );
+    }
+    await this.#assetStore.read(image.assetId);
+  }
+
   async #assertDurableImages(
     stepKey: string,
     images: readonly ImageAssetReference[],
@@ -695,13 +812,7 @@ export class MaterialPreparationService {
     }
 
     for (const image of images) {
-      if (!isImageAsset(image)) {
-        throw new MaterialPreparationCheckpointError(
-          stepKey,
-          "contains a non-canonical image asset reference",
-        );
-      }
-      await this.#assetStore.read(image.assetId);
+      await this.#assertDurableImage(stepKey, image);
     }
   }
 
