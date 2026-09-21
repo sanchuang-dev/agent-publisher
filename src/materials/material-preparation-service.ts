@@ -397,15 +397,20 @@ export class MaterialPreparationService {
       );
     }
 
+    const combinedWarnings: [
+      MaterialWarning,
+      ...MaterialWarning[],
+    ] = [
+      firstDegradationWarning,
+      ...copy.warnings,
+      ...images.warnings,
+      ...degradationWarnings.slice(1),
+    ];
+
     return {
       pack: {
         ...degraded.value,
-        warnings: [
-          ...copy.warnings,
-          ...images.warnings,
-          firstDegradationWarning,
-          ...degradationWarnings.slice(1),
-        ],
+        warnings: combinedWarnings,
       },
       reusedSteps,
     };
@@ -513,6 +518,12 @@ export class MaterialPreparationService {
     }
 
     try {
+      if (!isWarningArray(result.warnings)) {
+        throw new MaterialPreparationCheckpointError(
+          MATERIAL_IMAGES_STEP_KEY,
+          "ImageProvider returned invalid warnings",
+        );
+      }
       await this.#assertDurableImages(
         MATERIAL_IMAGES_STEP_KEY,
         result.value,
@@ -599,6 +610,12 @@ export class MaterialPreparationService {
 
     if (result.ok) {
       try {
+        if (!isWarningArray(result.warnings)) {
+          throw new MaterialPreparationCheckpointError(
+            MATERIAL_DESIGN_STEP_KEY,
+            "DesignProvider returned invalid warnings",
+          );
+        }
         await this.#assertDurableDesign(plan, result.value);
       } catch (error) {
         const failure: MaterialProviderFailure = {
