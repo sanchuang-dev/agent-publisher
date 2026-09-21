@@ -95,6 +95,16 @@ function materialPlanFailure(error: unknown): ProviderPipelineMaterialStageError
     return error;
   }
 
+  if (error instanceof PrepublishMaterialResolutionError) {
+    return new ProviderPipelineMaterialStageError(
+      "material_plan",
+      error.code,
+      error.retryable,
+      "Provider pipeline could not produce a valid MaterialPlan.",
+      { cause: error },
+    );
+  }
+
   return new ProviderPipelineMaterialStageError(
     "material_plan",
     "MATERIAL_GENERATION_FAILED",
