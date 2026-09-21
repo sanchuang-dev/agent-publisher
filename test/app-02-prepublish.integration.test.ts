@@ -789,6 +789,16 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
       );
 
       const approvalActionId = run.json().job.humanAction.id as string;
+      const negativeResolve = await application.server.inject({
+        method: "POST",
+        url: "/api/actions/" + approvalActionId + "/resolve",
+        payload: { approved: false },
+      });
+      expect(negativeResolve.statusCode).toBe(400);
+      expect(
+        application.runtime.actionRequests.getById(approvalActionId)?.status,
+      ).toBe("open");
+
       const resolve = await application.server.inject({
         method: "POST",
         url: "/api/actions/" + approvalActionId + "/resolve",
