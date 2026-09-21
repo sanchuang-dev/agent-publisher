@@ -1,5 +1,6 @@
 export const SAFE_LAYOUT_WIDTH = 1080 as const;
 export const SAFE_LAYOUT_HEIGHT = 1440 as const;
+export const SAFE_LAYOUT_OVERFLOW_POLICY = "clip" as const;
 
 export const SAFE_LAYOUT_LIMITS = {
   maxDepth: 8,
@@ -165,6 +166,36 @@ function requireRecord(value: unknown, path: string): Record<string, unknown> {
   return value;
 }
 
+const boxStyleKeys = [
+  "padding",
+  "gap",
+  "background",
+  "borderColor",
+  "borderWidth",
+  "radius",
+] as const;
+
+const textStyleKeys = [
+  "color",
+  "align",
+  "fontSize",
+  "lineHeight",
+  "maxLines",
+] as const;
+
+function assertAllowedKeys(
+  value: Record<string, unknown>,
+  path: string,
+  allowed: readonly string[],
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) {
+      fail(`${path}.${key}`, "is unsupported");
+    }
+  }
+}
+
 function assertOptionalEnum<T extends string>(
   value: unknown,
   path: string,
@@ -230,6 +261,7 @@ function assertBackground(value: unknown, path: string): void {
   }
 
   const background = requireRecord(value, path);
+  assertAllowedKeys(background, path, ["kind", "angle", "from", "to"]);
   if (background.kind !== "linear-gradient") {
     fail(path, "must be a bounded linear gradient");
   }
@@ -308,6 +340,14 @@ function validateNode(
 
   switch (node.type) {
     case "stack":
+      assertAllowedKeys(node, path, [
+        "type",
+        "direction",
+        "align",
+        "justify",
+        "children",
+        ...boxStyleKeys,
+      ]);
       validateBoxStyle(node, path);
       assertRequiredEnum(node.direction, `${path}.direction`, ["row", "column"] as const);
       assertOptionalEnum(node.align, `${path}.align`, ["start", "center", "end", "stretch"] as const);
@@ -319,6 +359,12 @@ function validateNode(
       validateChildren(node.children, `${path}.children`, depth, state);
       return;
     case "grid":
+      assertAllowedKeys(node, path, [
+        "type",
+        "columns",
+        "children",
+        ...boxStyleKeys,
+      ]);
       validateBoxStyle(node, path);
       if (![1, 2, 3].includes(node.columns as number)) {
         fail(`${path}.columns`, "must be 1, 2, or 3");
@@ -326,6 +372,13 @@ function validateNode(
       validateChildren(node.children, `${path}.children`, depth, state);
       return;
     case "heading":
+      assertAllowedKeys(node, path, [
+        "type",
+        "text",
+        "level",
+        "weight",
+        ...textStyleKeys,
+      ]);
       validateText(node.text, `${path}.text`, SAFE_LAYOUT_LIMITS.maxHeadingLength);
       validateTextStyle(node, path);
       if (![1, 2, 3].includes(node.level as number)) {
@@ -339,6 +392,12 @@ function validateNode(
       }
       return;
     case "text":
+      assertAllowedKeys(node, path, [
+        "type",
+        "text",
+        "weight",
+        ...textStyleKeys,
+      ]);
       validateText(node.text, `${path}.text`, SAFE_LAYOUT_LIMITS.maxTextLength);
       validateTextStyle(node, path);
       if (
@@ -349,6 +408,14 @@ function validateNode(
       }
       return;
     case "image":
+      assertAllowedKeys(node, path, [
+        "type",
+        "resourceId",
+        "width",
+        "height",
+        "fit",
+        "radius",
+      ]);
       if (
         typeof node.resourceId !== "string" ||
         node.resourceId.length === 0 ||
@@ -366,11 +433,24 @@ function validateNode(
       assertOptionalNumberInRange(node.radius, `${path}.radius`, 0, 96);
       return;
     case "badge":
+      assertAllowedKeys(node, path, [
+        "type",
+        "text",
+        "color",
+        "background",
+      ]);
       validateText(node.text, `${path}.text`, 80);
       assertColor(node.color, `${path}.color`);
       assertColor(node.background, `${path}.background`);
       return;
     case "quote":
+      assertAllowedKeys(node, path, [
+        "type",
+        "text",
+        "attribution",
+        ...boxStyleKeys,
+        ...textStyleKeys,
+      ]);
       validateText(node.text, `${path}.text`, 480);
       if (node.attribution !== undefined) {
         validateText(node.attribution, `${path}.attribution`, 120);
@@ -379,14 +459,21 @@ function validateNode(
       validateTextStyle(node, path);
       return;
     case "card":
+      assertAllowedKeys(node, path, [
+        "type",
+        "children",
+        ...boxStyleKeys,
+      ]);
       validateBoxStyle(node, path);
       validateChildren(node.children, `${path}.children`, depth, state);
       return;
     case "divider":
+      assertAllowedKeys(node, path, ["type", "color", "thickness"]);
       assertColor(node.color, `${path}.color`);
       assertOptionalNumberInRange(node.thickness, `${path}.thickness`, 1, 12);
       return;
     case "spacer":
+      assertAllowedKeys(node, path, ["type", "size"]);
       assertOptionalNumberInRange(node.size, `${path}.size`, 1, 240);
       if (node.size === undefined) {
         fail(`${path}.size`, "is required");
@@ -401,11 +488,19 @@ export function validateSafeRichLayout(
   value: unknown,
 ): asserts value is SafeRichLayout {
   const layout = requireRecord(value, "layout");
+  assertAllowedKeys(layout, "layout", ["version", "page"]);
   if (layout.version !== 1) {
     fail("version", "must equal 1");
   }
 
   const page = requireRecord(layout.page, "page");
+  assertAllowedKeys(page, "page", [
+    "type",
+    "width",
+    "height",
+    "children",
+    ...boxStyleKeys,
+  ]);
   if (page.type !== "page") {
     fail("page.type", "must equal page");
   }
