@@ -302,6 +302,95 @@ export class XiaohongshuPublishService {
     this.#now = dependencies.now ?? (() => new Date());
   }
 
+  authorizeAfterApproval(jobId: string): {
+    readonly job: Job;
+    readonly action: ExternalAction;
+    readonly approvalId: string;
+    readonly contentFingerprint: string;
+  } {
+    const current = this.#requireSupportedJob(jobId);
+
+    if (current.status === "publishing") {
+      const authorization = publishingCheckpoint(current);
+      const action = this.#externalActions.getByKey(
+        jobId,
+        XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
+      );
+      if (!action) {
+        throw new XiaohongshuPublishStateError(
+          "Publishing Job has no durable final-publish ExternalAction.",
+        );
+      }
+      return {
+        job: current,
+        action,
+        ...authorization,
+      };
+    }
+
+    if (current.status !== "waiting_for_approval") {
+      throw new XiaohongshuPublishStateError(
+        "Final publish authorization requires waiting_for_approval; found " +
+          current.status +
+          ".",
+      );
+    }
+
+    const authorization = requireAffirmativeApproval(
+      current,
+      this.#actionRequests,
+    );
+    const action = this.#externalActions.prepare({
+      id: this.#createId!("external_action"),
+      jobId,
+      actionType: PUBLISH_ACTION_TYPE,
+      actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
+    });
+
+    const latest = this.#requireSupportedJob(jobId);
+    if (latest.status === "publishing") {
+      const durable = publishingCheckpoint(latest);
+      return {
+        job: latest,
+        action,
+        ...durable,
+      };
+    }
+
+    const job = this.#jobControl.beginPublishingAfterApproval({
+      jobId,
+      checkpoint: {
+        phase: "publish_authorized",
+        platform: "xiaohongshu",
+        actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
+        externalActionId: action.id,
+        approvalRequestId: authorization.approvalId,
+        contentFingerprint: authorization.contentFingerprint,
+      },
+      step: {
+        id: this.#createId!("step"),
+        stepKey: XIAOHONGSHU_PUBLISH_STEP_KEY,
+        status: "pending",
+        attempt: nextAttempt(
+          this.#jobs,
+          jobId,
+          XIAOHONGSHU_PUBLISH_STEP_KEY,
+        ),
+        inputJson: JSON.stringify({
+          platform: "xiaohongshu",
+          approvalRequestId: authorization.approvalId,
+          contentFingerprint: authorization.contentFingerprint,
+        }),
+      },
+    });
+
+    return {
+      job,
+      action,
+      ...authorization,
+    };
+  }
+
   async publishAfterApproval(
     input: XiaohongshuPublishInput,
   ): Promise<XiaohongshuPublishResult> {
@@ -326,69 +415,8 @@ export class XiaohongshuPublishService {
       };
     }
 
-    let authorization:
-      | { readonly approvalId: string; readonly contentFingerprint: string }
-      | null = null;
-
-    let action = this.#externalActions.getByKey(
-      job.id,
-      XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
-    );
-
-    if (job.status === "waiting_for_approval") {
-      authorization = requireAffirmativeApproval(job, this.#actionRequests);
-      action = this.#externalActions.prepare({
-        id: this.#createId!("external_action"),
-        jobId: job.id,
-        actionType: PUBLISH_ACTION_TYPE,
-        actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
-      });
-
-      this.#jobControl.beginPublishingAfterApproval({
-        jobId: job.id,
-        checkpoint: {
-          phase: "publish_authorized",
-          platform: "xiaohongshu",
-          actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
-          externalActionId: action.id,
-          approvalRequestId: authorization.approvalId,
-          contentFingerprint: authorization.contentFingerprint,
-        },
-        step: {
-          id: this.#createId!("step"),
-          stepKey: XIAOHONGSHU_PUBLISH_STEP_KEY,
-          status: "pending",
-          attempt: nextAttempt(
-            this.#jobs,
-            job.id,
-            XIAOHONGSHU_PUBLISH_STEP_KEY,
-          ),
-          inputJson: JSON.stringify({
-            platform: "xiaohongshu",
-            approvalRequestId: authorization.approvalId,
-            contentFingerprint: authorization.contentFingerprint,
-          }),
-        },
-      });
-    } else if (job.status === "publishing") {
-      authorization = publishingCheckpoint(job);
-      if (!action) {
-        throw new XiaohongshuPublishStateError(
-          "Publishing Job has no durable final-publish ExternalAction.",
-        );
-      }
-    } else {
-      throw new XiaohongshuPublishStateError(
-        "Final publish requires waiting_for_approval or publishing; found " +
-          job.status +
-          ".",
-      );
-    }
-
-    action = this.#externalActions.getByKey(
-      job.id,
-      XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
-    )!;
+    const authorization = this.authorizeAfterApproval(job.id);
+    const action = authorization.action;
 
     if (action.status === "succeeded") {
       return this.#finalizeExistingSucceededAction(job.id, action);
@@ -422,8 +450,8 @@ export class XiaohongshuPublishService {
         platform: "xiaohongshu",
         actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
         externalActionId: started.id,
-        approvalRequestId: authorization!.approvalId,
-        contentFingerprint: authorization!.contentFingerprint,
+        approvalRequestId: authorization.approvalId,
+        contentFingerprint: authorization.contentFingerprint,
       },
       step: {
         id: this.#createId!("step"),
