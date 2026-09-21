@@ -318,7 +318,7 @@ test("real Web assignment reaches APP-02 waiting_for_approval without publish", 
   );
 
   const jobId = decodeURIComponent(
-    page.url().match(/#\\/task\\/([^/?#]+)/)?.[1] ?? "",
+    page.url().match(/#\/task\/([^/?#]+)/)?.[1] ?? "",
   );
   assert.notEqual(jobId, "");
   assert.equal(
