@@ -75,12 +75,50 @@ The Chromium profile is stored in the `browser-profile` Docker volume, so normal
 
 ### Run the APP-02 API runtime
 
-The real pre-publish API is an opt-in Compose profile so the Node application
-shares the private Compose network with `browser-runtime`; raw CDP `9222`
-remains unexposed to the host.
+The pre-publish API is an opt-in Compose profile so the Node application shares
+the private Compose network with `browser-runtime`; raw CDP `9222` remains
+unexposed to the host.
 
-APP-02 intentionally does not ship a test MaterialPack inside production code.
-Provide an explicit controlled material directory:
+The product runtime now defaults to the real built-in material pipeline:
+
+```text
+brief
+→ Content Secretary
+→ MaterialPlan
+→ Builtin Text / Image / Design providers
+→ SafeRichLayout / Takumi PNG
+→ LocalAssetStore (asset://...)
+→ MaterialPack
+→ Xiaohongshu prepare
+```
+
+Configure the existing Publisher AI runtime in the current shell before
+starting `app-runtime`:
+
+```bash
+export PUBLISHER_AI_BASE_URL="https://your-openai-compatible-gateway.example/v1"
+export PUBLISHER_AI_MODEL="your-model-id"
+export PUBLISHER_AI_API_KEY="your-key"
+
+docker compose --profile app up -d --build browser-runtime app-runtime
+```
+
+Generated assets, SQLite state, and Pi session files stay under the persistent
+`app-data` volume. The API is available on `http://127.0.0.1:3000`; Live
+View remains on `http://127.0.0.1:6080/vnc.html`. The API surface still stops
+at `waiting_for_approval` and exposes no final-publish route.
+
+If `browser-runtime` is already healthy and you only need to start/restart the
+application container, do not recycle the persistent browser profile:
+
+```bash
+docker compose --profile app up -d --build --no-deps app-runtime
+```
+
+#### Controlled material smoke mode
+
+Deterministic CI/runtime smoke can explicitly bypass AI/material generation with
+`APP_MATERIAL_SOURCE=controlled_smoke`. In that mode, provide:
 
 ```text
 data/controlled-material/
@@ -91,33 +129,16 @@ data/controlled-material/
     └── image-2.png
 ```
 
-`material.json` is the persisted image-text material envelope used by APP-02.
-It must declare `"source": "controlled_smoke"` and
+`material.json` must declare `"source": "controlled_smoke"` and
 `"generatedFromBrief": false`. Image files are resolved from `assetId` plus
-their MIME extension inside `assets/`; local paths are not taken from the
-JSON payload.
+their MIME extension inside `assets/`; local paths are not taken from the JSON
+payload.
 
-Start the application and browser together in one Compose operation:
-
-```bash
-docker compose --profile app up -d --build browser-runtime app-runtime
-```
-
-If `browser-runtime` is already healthy and you only need to start/restart the
-application container, do not recycle the persistent browser profile:
-
-```bash
-docker compose --profile app up -d --build --no-deps app-runtime
-```
-
-The API is available on `http://127.0.0.1:3000`; Live View remains on
-`http://127.0.0.1:6080/vnc.html`. The API surface stops at
-`waiting_for_approval` and exposes no final-publish route.
-
-For a non-Compose development environment, `npm run start:api` uses the same
-runtime contract. Configure `APP_CONTROLLED_MATERIAL_PATH`,
-`APP_CONTROLLED_ASSET_ROOT`, and a reachable `BROWSER_CDP_ENDPOINT`
-explicitly.
+For a non-Compose development environment, `npm run start:api` also defaults
+to `provider_pipeline`. Configure the three `PUBLISHER_AI_*` variables and a
+reachable `BROWSER_CDP_ENDPOINT`. To use a controlled fixture instead, set
+`APP_MATERIAL_SOURCE=controlled_smoke` plus
+`APP_CONTROLLED_MATERIAL_PATH` and `APP_CONTROLLED_ASSET_ROOT` explicitly.
 
 ### Run the real Xiaohongshu prepare smoke
 
