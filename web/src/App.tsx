@@ -751,7 +751,7 @@ function Approval({ task }: { task: TaskFixture }) {
                 ? "Fixture 不执行发布"
                 : submitting
                   ? "正在写入批准…"
-                  : "批准并发布一次"}
+                  : "批准发布"}
             </button>
           </div>
         </div>
