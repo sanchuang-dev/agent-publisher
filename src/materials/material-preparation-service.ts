@@ -605,6 +605,16 @@ export class MaterialPreparationService {
       );
       if (persisted) {
         await this.#assertDurableImage(MATERIAL_COVER_STEP_KEY, persisted.value);
+        if (
+          sourceImages.some(
+            (image) => image.assetId === persisted.value.assetId,
+          )
+        ) {
+          throw new MaterialPreparationCheckpointError(
+            MATERIAL_COVER_STEP_KEY,
+            "persisted baseline cover aliases a planned image asset",
+          );
+        }
         reusedSteps.push(MATERIAL_COVER_STEP_KEY);
         return persisted;
       }
