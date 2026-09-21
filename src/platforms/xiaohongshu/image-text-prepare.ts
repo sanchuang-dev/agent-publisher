@@ -578,48 +578,7 @@ function tagInputValue(tags: readonly string[]): string {
 }
 
 function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\type TagEditorTarget =
-  | {
-      readonly kind: "dedicated";
-      readonly locator: Locator;
-    }
-  | {
-      readonly kind: "none";
-    };
-
-async function resolveTagEditorTarget(
-  page: Page,
-  expectedTags: readonly string[],
-): Promise<TagEditorTarget> {
-  const candidates = tagsCandidates(page);
-  const count = await candidates.count();
-  if (count > 1) {
-    throw new XiaohongshuPageStateError(
-      "PLATFORM_EDITOR_STATE_CHANGED",
-      "Expected at most one visible tags editor, found " + count + ".",
-    );
-  }
-
-  if (count === 1) {
-    return { kind: "dedicated", locator: candidates.first() };
-  }
-
-  if (normalizeTags(expectedTags).length === 0) {
-    return { kind: "none" };
-  }
-
-  throw new XiaohongshuPageStateError(
-    "PLATFORM_UI_CHANGED",
-    "No verified Xiaohongshu tags editor is available for non-empty tags.",
-  );
-}
-
-function tagInputValue(tags: readonly string[]): string {
-  return normalizeTags(tags)
-    .map((tag) => "#" + tag)
-    .join(" ");
-}
-");
+  return value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\$&");
 }
 
 function compactTopicQuery(value: string): string {
