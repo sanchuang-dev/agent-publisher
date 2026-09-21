@@ -160,6 +160,15 @@ describe("APP-02 runtime configuration", () => {
     expect(compose).toMatch(
       /APP_MATERIAL_SOURCE: "\$\{APP_MATERIAL_SOURCE:-provider_pipeline\}"/,
     );
+    expect(compose).toMatch(
+      /PUBLISHER_AI_BASE_URL: "\$\{PUBLISHER_AI_BASE_URL:-\}"/,
+    );
+    expect(compose).toMatch(
+      /PUBLISHER_AI_MODEL: "\$\{PUBLISHER_AI_MODEL:-\}"/,
+    );
+    expect(compose).toMatch(
+      /PUBLISHER_AI_API_KEY: "\$\{PUBLISHER_AI_API_KEY:-\}"/,
+    );
     expect(compose).toMatch(/ASSET_STORE_PATH: "\/data\/assets"/);
     expect(compose).toMatch(
       /BROWSER_CDP_ENDPOINT: "http:\/\/browser-runtime:9222"/,
