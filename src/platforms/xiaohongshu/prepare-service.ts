@@ -551,7 +551,7 @@ export class XiaohongshuPrepareService {
 
         if (
           mutationStarted ||
-          (recoveryMode && error instanceof XiaohongshuComposerNotFreshError)
+          (recoveryMode && failureCode(error) === "COMPOSER_NOT_FRESH")
         ) {
           this.#raiseRecoveryPause(
             { jobId: input.jobId, materialPack: input.materialPack },
