@@ -37,7 +37,10 @@ import {
 
 type LoginServicePort = Pick<XiaohongshuLoginService, "ensureLogin">;
 type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
-type PublishServicePort = Pick<XiaohongshuPublishService, "publishAfterApproval">;
+type PublishServicePort = Pick<
+  XiaohongshuPublishService,
+  "authorizeAfterApproval" | "publishAfterApproval"
+>;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
 
@@ -300,7 +303,14 @@ export class XiaohongshuPrepublishOrchestrator {
       );
     }
 
-    this.#actionRequests.resolve(action.id, { approved });
+    if (!approved) {
+      throw new PrepublishApprovalActionError(
+        "PUB-02 accepts only affirmative publish approval.",
+      );
+    }
+
+    this.#actionRequests.resolve(action.id, { approved: true });
+    this.#publishService.authorizeAfterApproval(job.id);
     return this.#publish(job.id);
   }
 
@@ -350,6 +360,12 @@ export class XiaohongshuPrepublishOrchestrator {
         let session: BrowserSession | null = null;
 
         try {
+          if (job.status === "waiting_for_approval") {
+            this.#publishService.authorizeAfterApproval(jobId);
+            job = this.#jobs.getById(jobId)!;
+            this.#publish(jobId);
+          }
+
           try {
             session = await this.#browserProvider.acquire({});
           } catch (error) {
