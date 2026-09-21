@@ -40,8 +40,15 @@ class FakeLocator {
   }
 
   nth(index: number): FakeLocator {
-    const active = this.activeKinds();
-    return new FakeLocator(this.state, [active[index] ?? "none"]);
+    let offset = index;
+    for (const kind of this.kinds) {
+      const count = this.countFor(kind);
+      if (offset < count) {
+        return new FakeLocator(this.state, [kind]);
+      }
+      offset -= count;
+    }
+    return new FakeLocator(this.state, ["none"]);
   }
 
   async count(): Promise<number> {
