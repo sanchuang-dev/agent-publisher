@@ -14,6 +14,7 @@ import type {
   XiaohongshuEnsureLoginResult,
   XiaohongshuLoginService,
 } from "../platforms/xiaohongshu/login-service.js";
+import { XiaohongshuPrepareInteractionError } from "../platforms/xiaohongshu/image-text-prepare.js";
 import type {
   XiaohongshuPrepareForApprovalResult,
   XiaohongshuPrepareService,
@@ -158,6 +159,10 @@ function errorCode(error: unknown): string {
 }
 
 function safeErrorMessage(error: unknown): string {
+  if (error instanceof XiaohongshuPrepareInteractionError) {
+    return "The Xiaohongshu prepare interaction stopped safely at " + error.stage + ".";
+  }
+
   const code = errorCode(error);
 
   const messages: Readonly<Record<string, string>> = {
