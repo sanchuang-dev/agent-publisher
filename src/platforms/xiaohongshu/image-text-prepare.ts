@@ -10,6 +10,35 @@ import type {
 
 export type PreparedField = "title" | "body" | "tags";
 
+export const XIAOHONGSHU_PREPARE_INTERACTION_STAGES = [
+  "enter_image_text",
+  "find_title_editor",
+  "find_body_editor",
+  "find_tags_editor",
+  "find_upload_input",
+  "verify_fresh_composer",
+  "upload",
+  "fill_fields",
+  "readback",
+] as const;
+
+export type XiaohongshuPrepareInteractionStage =
+  (typeof XIAOHONGSHU_PREPARE_INTERACTION_STAGES)[number];
+
+export type XiaohongshuPrepareUrlCategory =
+  | "about_blank"
+  | "creator_publish"
+  | "creator_other"
+  | "other";
+
+export type XiaohongshuPrepareInteractionErrorType =
+  | "page_state"
+  | "composer_not_fresh"
+  | "prepared_validation"
+  | "checkpoint"
+  | "browser_interaction"
+  | "unknown";
+
 export interface PreparedImageTextPublication {
   readonly platform: "xiaohongshu";
   readonly mode: "image_text";
@@ -99,6 +128,91 @@ export class XiaohongshuPrepareCheckpointError extends Error {
   }
 }
 
+export class XiaohongshuPrepareInteractionError extends Error {
+  constructor(
+    readonly stage: XiaohongshuPrepareInteractionStage,
+    readonly urlCategory: XiaohongshuPrepareUrlCategory,
+    readonly interactionErrorType: XiaohongshuPrepareInteractionErrorType,
+    readonly code: string,
+    options?: ErrorOptions,
+  ) {
+    super("Xiaohongshu prepare interaction failed at " + stage + ".", options);
+    this.name = "XiaohongshuPrepareInteractionError";
+  }
+}
+
+function boundedPageUrlCategory(page: Page): XiaohongshuPrepareUrlCategory {
+  const rawUrl = page.url();
+  if (rawUrl === "about:blank") {
+    return "about_blank";
+  }
+
+  try {
+    const url = new URL(rawUrl);
+    if (url.hostname !== "creator.xiaohongshu.com") {
+      return "other";
+    }
+    return url.pathname.startsWith("/publish")
+      ? "creator_publish"
+      : "creator_other";
+  } catch {
+    return "other";
+  }
+}
+
+function boundedInteractionErrorCode(error: unknown): string {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { readonly code?: unknown }).code === "string"
+  ) {
+    const candidate = (error as { readonly code: string }).code;
+    if (/^[A-Z0-9_]{1,64}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "BROWSER_INTERACTION_FAILED";
+}
+
+function boundedInteractionErrorType(
+  error: unknown,
+): XiaohongshuPrepareInteractionErrorType {
+  if (error instanceof XiaohongshuPageStateError) return "page_state";
+  if (error instanceof XiaohongshuComposerNotFreshError) {
+    return "composer_not_fresh";
+  }
+  if (error instanceof XiaohongshuPreparedValidationError) {
+    return "prepared_validation";
+  }
+  if (error instanceof XiaohongshuPrepareCheckpointError) return "checkpoint";
+  if (error instanceof Error) return "browser_interaction";
+  return "unknown";
+}
+
+async function runInteractionStage<T>(
+  page: Page,
+  stage: XiaohongshuPrepareInteractionStage,
+  operation: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof XiaohongshuPrepareInteractionError) {
+      throw error;
+    }
+
+    throw new XiaohongshuPrepareInteractionError(
+      stage,
+      boundedPageUrlCategory(page),
+      boundedInteractionErrorType(error),
+      boundedInteractionErrorCode(error),
+      { cause: error },
+    );
+  }
+}
+
 function normalizeText(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
 }
@@ -149,6 +263,8 @@ function bodyCandidates(page: Page): Locator {
       'textarea[placeholder*="正文"]:visible',
       '[contenteditable="true"][data-placeholder*="正文"]:visible',
       '[contenteditable="true"][aria-label*="正文"]:visible',
+      '.tiptap.ProseMirror[contenteditable="true"]:visible',
+      '.ProseMirror[contenteditable="true"]:visible',
     ].join(", "),
   );
 }
@@ -162,6 +278,19 @@ function tagsCandidates(page: Page): Locator {
       'textarea[placeholder*="标签"]:visible',
       'input[aria-label*="话题"]:visible',
       'input[aria-label*="标签"]:visible',
+    ].join(", "),
+  );
+}
+
+function uploadInputCandidates(page: Page): Locator {
+  return page.locator(
+    [
+      'input.upload-input[type="file"]',
+      'input[type="file"][accept*="image"]',
+      'input[type="file"][accept*=".jpg"]',
+      'input[type="file"][accept*=".jpeg"]',
+      'input[type="file"][accept*=".png"]',
+      'input[type="file"][accept*=".webp"]',
     ].join(", "),
   );
 }
@@ -299,6 +428,77 @@ async function ensureFreshComposer(page: Page): Promise<void> {
   }
 }
 
+type TagEditorTarget =
+  | {
+      readonly kind: "dedicated";
+      readonly locator: Locator;
+    }
+  | {
+      readonly kind: "inline_body";
+      readonly locator: Locator;
+    };
+
+async function resolveTagEditorTarget(
+  page: Page,
+  body: Locator,
+): Promise<TagEditorTarget> {
+  const candidates = tagsCandidates(page);
+  const count = await candidates.count();
+  if (count > 1) {
+    throw new XiaohongshuPageStateError(
+      "PLATFORM_EDITOR_STATE_CHANGED",
+      "Expected at most one visible tags editor, found " + count + ".",
+    );
+  }
+
+  if (count === 1) {
+    return { kind: "dedicated", locator: candidates.first() };
+  }
+
+  // Current Creator image-text pages can expose topics inline in the rich-text
+  // body instead of a separate tags input. Reuse the already-validated body
+  // editor rather than guessing at topic-picker internals.
+  return { kind: "inline_body", locator: body };
+}
+
+function inlineTagSuffix(tags: readonly string[]): string {
+  return normalizeTags(tags)
+    .map((tag) => "#" + tag)
+    .join(" ");
+}
+
+function bodyWithInlineTags(
+  body: string,
+  tags: readonly string[],
+): string {
+  const normalizedBody = normalizeText(body);
+  const suffix = inlineTagSuffix(tags);
+  return suffix ? normalizedBody + "\n\n" + suffix : normalizedBody;
+}
+
+function readInlineBodyAndTags(
+  rawBody: string,
+  expectedBody: string,
+): {
+  readonly body: string;
+  readonly tags: readonly string[];
+} {
+  const actual = normalizeText(rawBody);
+  const expected = normalizeText(expectedBody);
+  if (actual === expected) {
+    return { body: actual, tags: [] };
+  }
+
+  if (!actual.startsWith(expected)) {
+    return { body: actual, tags: [] };
+  }
+
+  return {
+    body: expected,
+    tags: parseTagInput(actual.slice(expected.length).trim()),
+  };
+}
+
 async function waitForUploadReady(
   page: Page,
   expectedImageCount: number,
@@ -392,19 +592,23 @@ export async function verifyXiaohongshuPreparedPage(
     "body",
     timeoutMs,
   );
-  const tags = await requireSingleEditable(
-    tagsCandidates(page),
-    "tags",
-    timeoutMs,
-  );
+  const tagsTarget = await resolveTagEditorTarget(page, body);
 
   const actualTitle = normalizeText(await readEditable(title));
-  const actualBody = normalizeText(await readEditable(body));
-  const actualTags = parseTagInput(await readEditable(tags));
-
+  const rawBody = await readEditable(body);
   const expectedTitle = normalizeText(pack.copy.title);
   const expectedBody = normalizeText(pack.copy.body);
   const expectedTags = normalizeTags(pack.copy.tags);
+
+  const inline =
+    tagsTarget.kind === "inline_body"
+      ? readInlineBodyAndTags(rawBody, expectedBody)
+      : null;
+  const actualBody = inline?.body ?? normalizeText(rawBody);
+  const actualTags =
+    tagsTarget.kind === "dedicated"
+      ? parseTagInput(await readEditable(tagsTarget.locator))
+      : inline!.tags;
 
   const mismatches: PreparedField[] = [];
   if (actualTitle !== expectedTitle) mismatches.push("title");
@@ -448,43 +652,29 @@ export async function prepareXiaohongshuPublication(
   const imageTextEntry = page
     .getByRole("tab", { name: /图文/ })
     .or(page.getByRole("button", { name: /图文/ }))
+    .or(page.locator('div.creator-tab:has-text("上传图文")'))
     .or(page.getByText("上传图文", { exact: true }))
     .first();
 
   try {
-    await imageTextEntry.waitFor({ state: "visible", timeout: timeoutMs });
-    await imageTextEntry.click();
+    await runInteractionStage(page, "enter_image_text", async () => {
+      await imageTextEntry.waitFor({ state: "visible", timeout: timeoutMs });
+      await imageTextEntry.click();
+    });
 
-    const title = await requireSingleEditable(
-      titleCandidates(page),
-      "title",
-      timeoutMs,
-    );
-    const body = await requireSingleEditable(
-      bodyCandidates(page),
-      "body",
-      timeoutMs,
-    );
-    const tags = await requireSingleEditable(
-      tagsCandidates(page),
-      "tags",
-      timeoutMs,
+    const uploadInput = await runInteractionStage(
+      page,
+      "find_upload_input",
+      async () => {
+        const candidate = uploadInputCandidates(page).first();
+        await candidate.waitFor({ state: "attached", timeout: timeoutMs });
+        return candidate;
+      },
     );
 
-    const uploadInput = page
-      .locator('input[type="file"][accept*="image"]')
-      .first();
-    try {
-      await uploadInput.waitFor({ state: "attached", timeout: timeoutMs });
-    } catch (error) {
-      throw new XiaohongshuPageStateError(
-        "PLATFORM_UI_CHANGED",
-        "Xiaohongshu image upload input did not become available.",
-        { cause: error },
-      );
-    }
-
-    await ensureFreshComposer(page);
+    await runInteractionStage(page, "verify_fresh_composer", async () => {
+      await ensureFreshComposer(page);
+    });
 
     const assets = uniqueImageAssets(pack);
     let assetPaths: string[];
@@ -500,34 +690,65 @@ export async function prepareXiaohongshuPublication(
       );
     }
 
-    await ensureFreshComposer(page);
+    await runInteractionStage(page, "verify_fresh_composer", async () => {
+      await ensureFreshComposer(page);
+    });
+
     try {
       await input.onMutationStarted?.();
     } catch (error) {
       throw new XiaohongshuPrepareCheckpointError({ cause: error });
     }
-    await uploadInput.setInputFiles(assetPaths);
 
-    await waitForUploadReady(page, assets.length, timeoutMs);
-    await ensureEditorsEmpty([
-      ["title", title],
-      ["body", body],
-      ["tags", tags],
-    ]);
+    await runInteractionStage(page, "upload", async () => {
+      await uploadInput.setInputFiles(assetPaths);
+      await waitForUploadReady(page, assets.length, timeoutMs);
+    });
 
-    await title.fill(pack.copy.title);
-    await body.fill(pack.copy.body);
-    await tags.fill(
-      normalizeTags(pack.copy.tags)
-        .map((tag) => "#" + tag)
-        .join(" "),
+    const title = await runInteractionStage(
+      page,
+      "find_title_editor",
+      () => requireSingleEditable(titleCandidates(page), "title", timeoutMs),
+    );
+    const body = await runInteractionStage(
+      page,
+      "find_body_editor",
+      () => requireSingleEditable(bodyCandidates(page), "body", timeoutMs),
+    );
+    const tagsTarget = await runInteractionStage(
+      page,
+      "find_tags_editor",
+      () => resolveTagEditorTarget(page, body),
     );
 
-    const verified = await verifyXiaohongshuPreparedPage({
-      page,
-      materialPack: pack,
-      timeoutMs,
+    await runInteractionStage(page, "verify_fresh_composer", async () => {
+      const editors: Array<readonly [PreparedField, Locator]> = [
+        ["title", title],
+        ["body", body],
+      ];
+      if (tagsTarget.kind === "dedicated") {
+        editors.push(["tags", tagsTarget.locator]);
+      }
+      await ensureEditorsEmpty(editors);
     });
+
+    await runInteractionStage(page, "fill_fields", async () => {
+      await title.fill(pack.copy.title);
+      if (tagsTarget.kind === "dedicated") {
+        await body.fill(pack.copy.body);
+        await tagsTarget.locator.fill(inlineTagSuffix(pack.copy.tags));
+      } else {
+        await body.fill(bodyWithInlineTags(pack.copy.body, pack.copy.tags));
+      }
+    });
+
+    const verified = await runInteractionStage(page, "readback", () =>
+      verifyXiaohongshuPreparedPage({
+        page,
+        materialPack: pack,
+        timeoutMs,
+      }),
+    );
 
     return {
       platform: "xiaohongshu",
@@ -543,9 +764,8 @@ export async function prepareXiaohongshuPublication(
     };
   } catch (error) {
     if (
-      error instanceof XiaohongshuPreparedValidationError ||
+      error instanceof XiaohongshuPrepareInteractionError ||
       error instanceof XiaohongshuUnsupportedPublishModeError ||
-      error instanceof XiaohongshuComposerNotFreshError ||
       error instanceof XiaohongshuPageStateError ||
       error instanceof XiaohongshuPrepareCheckpointError
     ) {
@@ -554,9 +774,7 @@ export async function prepareXiaohongshuPublication(
 
     throw new XiaohongshuPageStateError(
       "BROWSER_INTERACTION_FAILED",
-      error instanceof Error
-        ? "Xiaohongshu prepare page interaction failed: " + error.message
-        : "Xiaohongshu prepare page interaction failed.",
+      "Xiaohongshu prepare page interaction failed.",
       { cause: error },
     );
   }
