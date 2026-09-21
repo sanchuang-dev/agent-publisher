@@ -208,7 +208,6 @@ async function runInteractionStage<T>(
       boundedPageUrlCategory(page),
       boundedInteractionErrorType(error),
       boundedInteractionErrorCode(error),
-      { cause: error },
     );
   }
 }
