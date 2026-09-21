@@ -199,6 +199,15 @@ jobs:
       - name: Build APP-02 app-runtime image
         run: docker compose --profile app build app-runtime
 
+      - name: Verify app-runtime contains mandatory Publisher Skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose --profile app run --rm --no-deps --entrypoint sh app-runtime -lc '
+            test -f /app/skills/publisher-safety/SKILL.md
+            grep -q "^# Publisher safety" /app/skills/publisher-safety/SKILL.md
+          '
+
       - name: Build and start browser-runtime
         run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" up -d --build browser-runtime
 
