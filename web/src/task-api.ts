@@ -401,12 +401,15 @@ function mapJobProjection(
     ...(job.failure
       ? {
           failure: {
+            code: job.failure.code ?? undefined,
             step: stepLabel(job.failure.step),
             reason: boundedFailureMessage(job.failure.code),
             recovery:
-              job.humanAction?.instruction ??
-              job.humanAction?.reason ??
-              "保留已提交状态，可检查当前任务后安全重试。",
+              job.failure.code === "PUBLISH_RESULT_UNKNOWN"
+                ? "只重新核验平台结果；不会自动再次点击发布。"
+                : job.humanAction?.instruction ??
+                  job.humanAction?.reason ??
+                  "保留已提交状态，可检查当前任务后安全重试。",
           },
         }
       : syntheticFailure
