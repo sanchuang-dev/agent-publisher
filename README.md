@@ -119,6 +119,56 @@ runtime contract. Configure `APP_CONTROLLED_MATERIAL_PATH`,
 `APP_CONTROLLED_ASSET_ROOT`, and a reachable `BROWSER_CDP_ENDPOINT`
 explicitly.
 
+### Run the real Xiaohongshu prepare smoke
+
+This smoke uses the production XHS-01 login boundary and XHS-02 image-text
+prepare path with an isolated smoke Job/database and a generated non-sensitive
+1080×1440 PNG. It can upload/fill/read back the real Creator form, but it has no
+final-publish step and must finish at `waiting_for_approval`.
+
+From the Docker host, run this as the exclusive application-side browser owner:
+
+```bash
+docker compose --profile app stop app-runtime && \
+docker compose --profile app run --rm --build -e XHS_REAL_ACCOUNT_SMOKE=1 app-runtime npm run smoke:xhs-prepare
+```
+
+The first command intentionally stops the long-running product API container.
+The MVP BrowserProvider lock is process-local, so the real-account smoke must
+not run beside another application process that could drive the same persistent
+Chromium profile. `browser-runtime` stays available for Live View and is
+started automatically by Compose when needed.
+
+If Xiaohongshu requires login, QR login, 2FA, or device verification, keep the
+command running and open `http://127.0.0.1:6080`. Complete the identity step
+yourself in Live View. The smoke only inspects the page while human takeover is
+active and automatically resumes when the accepted XHS-01 login state is
+detected on the same persistent browser profile.
+
+Expected final bounded evidence looks like:
+
+```json
+{"smoke":"xiaohongshu-prepare","phase":"waiting_for_approval","status":"waiting_for_approval","actionType":"approval_required"}
+```
+
+The exact evidence also includes the isolated smoke Job id plus controlled
+title/body-length/image-count fields. It does not print cookies, tokens, QR
+artifacts, browser-profile contents, or raw local asset paths.
+
+Safety behavior:
+
+- without `XHS_REAL_ACCOUNT_SMOKE=1`, the command refuses to acquire the browser;
+- an unrelated persistent browser page is not navigated away;
+- missing auth/profile mismatch fails before upload mutation;
+- a dirty/ambiguous composer fails closed instead of being overwritten;
+- a post-mutation uncertain state enters the existing recovery/clarification
+  boundary rather than uploading again;
+- the browser stays on the prepared Creator page for human inspection;
+- no approval resolution or final Publish action is available in this harness.
+
+The default login wait is 5 minutes. For a bounded local smoke you may set
+`XHS_SMOKE_LOGIN_WAIT_MS` to an integer from 0 to 900000 milliseconds.
+
 ### Run the Web MVP pre-publish smoke
 
 With `browser-runtime` and `app-runtime` healthy, start the existing Web shell
