@@ -242,7 +242,11 @@ function TaskDetail({
 
       const status = current.backendStatus;
       const delay =
-        status === "waiting_for_login" || status === "publishing" ? 2500 : 120;
+        status === "waiting_for_login" ||
+        status === "waiting_for_approval" ||
+        status === "publishing"
+          ? 2500
+          : 120;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         void taskRepository
