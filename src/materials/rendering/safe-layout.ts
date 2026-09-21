@@ -251,6 +251,12 @@ function assertColor(value: unknown, path: string): void {
   }
 }
 
+function assertRequiredColor(value: unknown, path: string): void {
+  if (typeof value !== "string" || !colorPattern.test(value)) {
+    fail(path, "must be a #RRGGBB or #RRGGBBAA color");
+  }
+}
+
 function assertBackground(value: unknown, path: string): void {
   if (value === undefined) {
     return;
@@ -268,8 +274,8 @@ function assertBackground(value: unknown, path: string): void {
   if (![0, 45, 90, 135].includes(background.angle as number)) {
     fail(`${path}.angle`, "must be 0, 45, 90, or 135");
   }
-  assertColor(background.from, `${path}.from`);
-  assertColor(background.to, `${path}.to`);
+  assertRequiredColor(background.from, `${path}.from`);
+  assertRequiredColor(background.to, `${path}.to`);
 }
 
 function validateBoxStyle(node: Record<string, unknown>, path: string): void {
