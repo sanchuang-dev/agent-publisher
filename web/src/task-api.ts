@@ -521,7 +521,7 @@ export class ApiTaskRepository implements TaskRepository {
       throw new ApiTaskError(409, "当前任务缺少可用的发布审批记录。");
     }
 
-    await this.#request<{ job: ApiJobProjection }>(
+    const payload = await this.#request<{ job: ApiJobProjection }>(
       "/actions/" + encodeURIComponent(actionId) + "/resolve",
       {
         method: "POST",
@@ -530,7 +530,7 @@ export class ApiTaskRepository implements TaskRepository {
       },
     );
 
-    return this.continue(jobId);
+    return mapJobProjection(payload.job, this.#brief(jobId));
   }
 
   subscribe(jobId: string, listener: (task: TaskFixture) => void): () => void {
