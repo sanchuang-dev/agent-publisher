@@ -536,7 +536,6 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
           });
           document.querySelector("#image-upload").addEventListener("change", (event) => {
             const previews = document.querySelector("#previews");
-            previews.replaceChildren();
             for (const file of event.currentTarget.files) {
               const preview = document.createElement("div");
               preview.dataset.testid = "uploaded-image";
