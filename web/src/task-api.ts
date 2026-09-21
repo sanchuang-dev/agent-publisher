@@ -436,6 +436,10 @@ export function shouldAutoContinueTask(task: TaskFixture): boolean {
     return task.needsHuman;
   }
 
+  if (status === "waiting_for_approval" && !task.needsHuman) {
+    return true;
+  }
+
   if (task.needsHuman) {
     return false;
   }
