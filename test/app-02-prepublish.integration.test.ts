@@ -115,6 +115,15 @@ function createTestApplication(input: {
         tags: prepared.tags,
         imageCount: prepared.imageCount,
       }),
+      publishPage: async ({ onMutationStarted }) => {
+        await onMutationStarted?.();
+      },
+      verifyPublishResult: async () => ({
+        kind: "published",
+        resultUrl: "https://www.xiaohongshu.com/explore/app02pub123",
+        contentId: "app02pub123",
+        confirmationRef: "xhs-result-page",
+      }),
     },
   });
 }
@@ -719,7 +728,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
     }
   });
 
-  test("API rejects unsupported modes and exposes no final-publish route", async () => {
+  test("API rejects unsupported modes, exposes no direct publish route, and binds approval to continue", async () => {
     const temp = makeTempDatabase();
     cleanupRoots.push(temp.root);
     const browser = new FakeBrowserProvider();
@@ -778,6 +787,36 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
       expect(application.runtime.jobs.getById(jobId)?.status).not.toBe(
         "publishing",
       );
+
+      const approvalActionId = run.json().job.humanAction.id as string;
+      const resolve = await application.server.inject({
+        method: "POST",
+        url: "/api/actions/" + approvalActionId + "/resolve",
+        payload: { approved: true },
+      });
+      expect(resolve.statusCode).toBe(200);
+      expect(resolve.json().job).toMatchObject({
+        status: "waiting_for_approval",
+        needsHuman: false,
+      });
+
+      const publishOnce = await application.server.inject({
+        method: "POST",
+        url: "/api/jobs/" + jobId + "/continue",
+      });
+      expect(publishOnce.statusCode).toBe(200);
+      expect(publishOnce.json().job).toMatchObject({
+        status: "succeeded",
+        needsHuman: false,
+      });
+      expect(publishOnce.json().job.evidence).toHaveLength(3);
+      expect(
+        application.runtime.externalActions.getByKey(
+          jobId,
+          "publish:xiaohongshu:final",
+        )?.status,
+      ).toBe("succeeded");
+      expect(application.runtime.evidence.getByJob(jobId)).toHaveLength(3);
     } finally {
       await application.stop();
     }
