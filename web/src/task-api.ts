@@ -64,7 +64,7 @@ export interface ApiJobProjection {
     readonly imageCount: number;
     readonly warningCodes: readonly string[];
   } | null;
-  readonly evidence: readonly {
+  readonly evidence?: readonly {
     readonly kind:
       | "result_url"
       | "content_id"
@@ -383,9 +383,9 @@ function mapJobProjection(
           },
         }
       : {}),
-    ...(job.evidence.length > 0
+    ...((job.evidence ?? []).length > 0
       ? {
-          evidence: job.evidence.map((item) => ({
+          evidence: (job.evidence ?? []).map((item) => ({
             label:
               item.kind === "result_url"
                 ? "结果地址"
