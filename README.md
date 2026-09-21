@@ -92,16 +92,32 @@ brief
 → Xiaohongshu prepare
 ```
 
-Configure the existing Publisher AI runtime in the current shell before
-starting `app-runtime`:
+Configure the existing Publisher AI runtime once in the repository-local
+`.env` file. Docker Compose automatically reads this file for variable
+interpolation, and the repository ignores `.env` so local secrets are not
+committed.
 
 ```bash
-export PUBLISHER_AI_BASE_URL="https://your-openai-compatible-gateway.example/v1"
-export PUBLISHER_AI_MODEL="your-model-id"
-export PUBLISHER_AI_API_KEY="your-key"
+cp .env.example .env
+```
 
+Then edit `.env` and set:
+
+```dotenv
+PUBLISHER_AI_BASE_URL=https://your-openai-compatible-gateway.example/v1
+PUBLISHER_AI_MODEL=your-model-id
+PUBLISHER_AI_API_KEY=your-key
+```
+
+Start the runtime normally:
+
+```bash
 docker compose --profile app up -d --build browser-runtime app-runtime
 ```
+
+Shell variables with the same names may still be used for one-off overrides;
+otherwise the repository-local `.env` values persist across terminals and
+normal Compose restarts.
 
 Generated assets, SQLite state, and Pi session files stay under the persistent
 `app-data` volume. The API is available on `http://127.0.0.1:3000`; Live
@@ -231,7 +247,7 @@ npm run smoke:content-secretary-live
 Remove-Item Env:PUBLISHER_AI_API_KEY -ErrorAction SilentlyContinue
 ```
 
-Do not commit the key, put it in `.env`, or paste it into Issue/PR evidence. The smoke prints only bounded provider/model/MaterialPlan/checkpoint evidence and uses a disposable local database/session directory.
+Do not commit the key or paste it into Issue/PR evidence. For local development and Compose, storing the three `PUBLISHER_AI_*` values in the repository-local ignored `.env` file is supported. The smoke prints only bounded provider/model/MaterialPlan/checkpoint evidence and uses a disposable local database/session directory.
 
 ## POC boundaries
 
