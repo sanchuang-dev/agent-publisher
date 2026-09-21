@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 
 import {
   prepareXiaohongshuPublication,
+  XiaohongshuPrepareInteractionError,
 } from "../src/platforms/xiaohongshu/image-text-prepare.js";
 import { createImageTextMaterialPackFixture } from "../src/materials/testing/fake-providers.js";
 
@@ -242,5 +243,31 @@ describe("XHS-04 current Creator image-text compatibility", () => {
       tags: pack.copy.tags,
       imageCount: 3,
     });
+  });
+
+  test("fails closed at tag discovery when non-empty topics have no verified editor", async () => {
+    const pack = createImageTextMaterialPackFixture();
+    const fake = new FakeCreatorPage();
+
+    await expect(
+      prepareXiaohongshuPublication({
+        page: fake as unknown as Page,
+        materialPack: pack,
+        resolveAssetPath: (asset) => "/fixtures/" + asset.assetId + ".png",
+        timeoutMs: 100,
+      }),
+    ).rejects.toMatchObject({
+      name: "XiaohongshuPrepareInteractionError",
+      stage: "find_tags_editor",
+      code: "PLATFORM_UI_CHANGED",
+      interactionErrorType: "page_state",
+    } satisfies Partial<XiaohongshuPrepareInteractionError>);
+
+    expect(fake.state.uploadedPaths).toHaveLength(3);
+    expect(fake.state.title).toBe("");
+    expect(fake.state.body).toBe("");
+    expect(fake.state.events).not.toContain("fill_title");
+    expect(fake.state.events).not.toContain("fill_body");
+    expect(fake.state.events).not.toContain("final_publish");
   });
 });
