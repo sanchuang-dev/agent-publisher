@@ -26,12 +26,20 @@ The first call includes renderer/font warm-up, so these timings are diagnostic o
 
 The production SafeRichLayout suite also verified deterministic repeated PNG bytes, actual 1080 × 1440 PNG dimensions, explicit CJK fonts, SVG diagnostics, missing-image fail-closed behavior, and rejection of malformed runtime input before renderer execution.
 
-Successful verify evidence from run 35542917263:
+Bake-off verify evidence from run 35542917263:
 
 - `test/safe-rich-layout.test.ts`: 11/11 passed;
-- bake-off evidence test: passed;
+- temporary bake-off evidence test: passed;
 - 33 test files / 296 tests passed before browser tests;
-- repository `verify` job passed.
+- the `verify` job passed while other jobs still exposed the then-stale lockfile.
+
+After committing the generated lockfile and removing temporary Satori/resvg dependencies and the temporary bake-off test, final branch CI run 35543177907 passed **all jobs**:
+
+- `verify`: passed;
+- `browser-runtime-smoke`: passed;
+- `browser-provider-smokes`: passed with `npm ci`;
+- `web-runtime-smoke`: passed;
+- production `test/safe-rich-layout.test.ts`: 11/11 passed.
 
 ## Satori + resvg reference
 
