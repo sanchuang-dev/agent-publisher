@@ -155,6 +155,39 @@ describe("SafeRichLayout policy", () => {
     ).toThrow(SafeLayoutValidationError);
   });
 
+
+  test("requires both bounded gradient color stops", () => {
+    const layout = representativeLayout();
+
+    expect(() =>
+      validateSafeRichLayout({
+        ...layout,
+        page: {
+          ...layout.page,
+          background: {
+            kind: "linear-gradient",
+            angle: 90,
+            to: "#FFFFFF",
+          },
+        },
+      }),
+    ).toThrow(SafeLayoutValidationError);
+
+    expect(() =>
+      validateSafeRichLayout({
+        ...layout,
+        page: {
+          ...layout.page,
+          background: {
+            kind: "linear-gradient",
+            angle: 90,
+            from: "#000000",
+          },
+        },
+      }),
+    ).toThrow(SafeLayoutValidationError);
+  });
+
   test("rejects malformed runtime JSON with bounded validation errors", () => {
     expect(() => validateSafeRichLayout(null)).toThrow(
       SafeLayoutValidationError,
