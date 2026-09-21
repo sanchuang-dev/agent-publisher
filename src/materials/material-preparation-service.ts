@@ -635,6 +635,14 @@ export class MaterialPreparationService {
         );
       }
       await this.#assertDurableImage(MATERIAL_COVER_STEP_KEY, result.value);
+      if (
+        sourceImages.some((image) => image.assetId === result.value.assetId)
+      ) {
+        throw new MaterialPreparationCheckpointError(
+          MATERIAL_COVER_STEP_KEY,
+          "baseline cover must be a distinct Publisher asset from planned images",
+        );
+      }
     } catch (error) {
       const failure: MaterialProviderFailure = {
         slot: "image",
@@ -827,6 +835,12 @@ export class MaterialPreparationService {
       );
     }
     await this.#assetStore.read(value.cover.assetId);
+    if (value.images.some((image) => image.assetId === value.cover.assetId)) {
+      throw new MaterialPreparationCheckpointError(
+        MATERIAL_DESIGN_STEP_KEY,
+        "design cover must be a distinct Publisher asset from final images",
+      );
+    }
     await this.#assertDurableImages(
       MATERIAL_DESIGN_STEP_KEY,
       value.images,
