@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import type { BrowserSession } from "../src/browser/provider.js";
 import { JobControlService } from "../src/jobs/job-control-service.js";
@@ -377,6 +377,62 @@ describe("XiaohongshuPublishService integration", () => {
       action: { status: "succeeded" },
     });
 
+    expect(publishCalls).toBe(1);
+  });
+
+  test("verified action success survives a Job-finalization write failure without becoming unknown or republishing", async () => {
+    seedApproval("job-finalize-retry", true);
+    let publishCalls = 0;
+
+    const service = createService({
+      publishPage: async ({ onMutationStarted }) => {
+        await onMutationStarted?.();
+        publishCalls += 1;
+      },
+    });
+
+    const originalCommit = jobs.commitCheckpoint.bind(jobs);
+    const commitSpy = vi
+      .spyOn(jobs, "commitCheckpoint")
+      .mockImplementation((jobId, input) => {
+        if (input.status === "succeeded") {
+          throw new Error("simulated Job finalization write failure");
+        }
+        return originalCommit(jobId, input);
+      });
+
+    await expect(
+      service.publishAfterApproval({
+        jobId: "job-finalize-retry",
+        session: fakeSession(),
+      }),
+    ).rejects.toMatchObject({
+      code: "PUBLISH_STATE_INVALID",
+    });
+
+    expect(publishCalls).toBe(1);
+    expect(
+      externalActions.getByKey(
+        "job-finalize-retry",
+        XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
+      )?.status,
+    ).toBe("succeeded");
+    expect(jobs.getById("job-finalize-retry")?.status).toBe("publishing");
+    expect(evidence.getByJob("job-finalize-retry")).toHaveLength(3);
+
+    commitSpy.mockRestore();
+
+    const resumed = await service.publishAfterApproval({
+      jobId: "job-finalize-retry",
+      session: fakeSession(),
+    });
+
+    expect(resumed).toMatchObject({
+      job: { status: "succeeded" },
+      action: { status: "succeeded" },
+      reused: true,
+      verifyFirst: true,
+    });
     expect(publishCalls).toBe(1);
   });
 
