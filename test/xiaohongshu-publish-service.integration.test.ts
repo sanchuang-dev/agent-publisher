@@ -316,6 +316,70 @@ describe("XiaohongshuPublishService integration", () => {
     ).toBe("succeeded");
   });
 
+  test("parallel callers cannot execute two publish interactions for one durable action", async () => {
+    seedApproval("job-parallel", true);
+    let publishCalls = 0;
+    let released = false;
+    let releasePublish!: () => void;
+    let mutationStarted!: () => void;
+    const publishGate = new Promise<void>((resolve) => {
+      releasePublish = resolve;
+    });
+    const mutationBoundary = new Promise<void>((resolve) => {
+      mutationStarted = resolve;
+    });
+
+    const service = createService({
+      publishPage: async ({ onMutationStarted }) => {
+        await onMutationStarted?.();
+        publishCalls += 1;
+        mutationStarted();
+        await publishGate;
+      },
+      verifyResult: async () => {
+        if (!released) {
+          throw new Error("result is not observable while first click is in flight");
+        }
+        return {
+          kind: "published" as const,
+          resultUrl: "https://www.xiaohongshu.com/explore/parallel123",
+          contentId: "parallel123",
+          confirmationRef: "xhs-result-page",
+        };
+      },
+    });
+
+    const first = service.publishAfterApproval({
+      jobId: "job-parallel",
+      session: fakeSession(),
+    });
+    await mutationBoundary;
+
+    await expect(
+      service.publishAfterApproval({
+        jobId: "job-parallel",
+        session: fakeSession(),
+      }),
+    ).rejects.toBeInstanceOf(XiaohongshuPublishUnknownError);
+
+    expect(publishCalls).toBe(1);
+    expect(
+      externalActions.getByKey(
+        "job-parallel",
+        XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
+      )?.status,
+    ).toBe("unknown");
+
+    released = true;
+    releasePublish();
+    await expect(first).resolves.toMatchObject({
+      job: { status: "succeeded" },
+      action: { status: "succeeded" },
+    });
+
+    expect(publishCalls).toBe(1);
+  });
+
   test("duplicate final-publish calls reuse the one durable action and never execute a second click", async () => {
     seedApproval("job-duplicate", true);
     let publishCalls = 0;
