@@ -17,6 +17,7 @@ import type {
   MaterialProviderSlots,
   TextProvider,
 } from "./providers/index.js";
+import type { MaterialBaselineCoverProvider } from "./material-preparation-service.js";
 import {
   SAFE_LAYOUT_HEIGHT,
   SAFE_LAYOUT_WIDTH,
@@ -270,6 +271,55 @@ export function createBuiltinImageProvider(options: {
           error instanceof Error
             ? `Builtin image generation failed: ${error.message}`
             : "Builtin image generation failed.",
+          true,
+        );
+      }
+    },
+  };
+}
+
+export function createBuiltinBaselineCoverProvider(options: {
+  readonly assetStore: AssetStore;
+  readonly renderer?: BuiltinLayoutRenderer;
+}): MaterialBaselineCoverProvider {
+  const renderer = options.renderer ?? createBuiltinLayoutRenderer();
+
+  return {
+    async generate(input) {
+      const source = input.sourceImages[0];
+      if (!source) {
+        return failure(
+          "image",
+          "MATERIAL_INVALID_REQUEST",
+          "Builtin baseline cover requires at least one source image.",
+        );
+      }
+
+      try {
+        if (source.uri !== `asset://${source.assetId}`) {
+          throw new Error(
+            `Source image ${source.assetId} is not a canonical Publisher asset.`,
+          );
+        }
+        const sourceBytes = await options.assetStore.read(source.assetId);
+        const resourceId = "source";
+        const rendered = await renderer.render(
+          designedLayout(input, -1, resourceId),
+          { [resourceId]: sourceBytes },
+        );
+        return success(
+          await persistRenderedImage(options.assetStore, rendered.bytes, {
+            role: "builtin_baseline_cover",
+            index: 0,
+          }),
+        );
+      } catch (error) {
+        return failure(
+          "image",
+          "MATERIAL_GENERATION_FAILED",
+          error instanceof Error
+            ? `Builtin baseline cover rendering failed: ${error.message}`
+            : "Builtin baseline cover rendering failed.",
           true,
         );
       }
