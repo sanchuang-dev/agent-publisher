@@ -1,10 +1,11 @@
+import type { MvpPrepublishApplication } from "../src/app/mvp-prepublish-application.js";
 import {
   createConfiguredMvpPrepublishApplication,
   resolveApplicationHost,
   resolveApplicationPort,
 } from "../src/app/runtime-config.js";
 
-const application = createConfiguredMvpPrepublishApplication(process.env);
+let application: MvpPrepublishApplication | null = null;
 let stopping = false;
 
 async function stop(signal: string): Promise<void> {
@@ -12,10 +13,11 @@ async function stop(signal: string): Promise<void> {
   stopping = true;
 
   process.stderr.write(`Agent Publisher API stopping after ${signal}.\n`);
-  await application.stop();
+  await application?.stop();
 }
 
 async function main(): Promise<void> {
+  application = await createConfiguredMvpPrepublishApplication(process.env);
   const host = resolveApplicationHost(process.env);
   const port = resolveApplicationPort(process.env);
   const origin = await application.start({ host, port });
@@ -46,7 +48,7 @@ void main().catch(async (error: unknown) => {
   );
 
   try {
-    await application.stop();
+    await application?.stop();
   } finally {
     process.exitCode = 1;
   }

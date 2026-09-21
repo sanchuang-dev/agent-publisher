@@ -14,6 +14,7 @@ import {
   createControlledAssetResolver,
   loadControlledRuntimeMaterial,
   resolveApplicationHost,
+  resolveApplicationMaterialSource,
   resolveApplicationPort,
 } from "../src/app/runtime-config.js";
 import {
@@ -97,6 +98,25 @@ describe("APP-02 runtime configuration", () => {
     ).toThrow(/mime type is unsupported/);
   });
 
+  test("defaults product runtime to provider pipeline while controlled smoke is explicit", () => {
+    expect(resolveApplicationMaterialSource({})).toBe("provider_pipeline");
+    expect(
+      resolveApplicationMaterialSource({
+        APP_MATERIAL_SOURCE: "controlled_smoke",
+      }),
+    ).toBe("controlled_smoke");
+    expect(
+      resolveApplicationMaterialSource({
+        APP_MATERIAL_SOURCE: " provider_pipeline ",
+      }),
+    ).toBe("provider_pipeline");
+    expect(() =>
+      resolveApplicationMaterialSource({
+        APP_MATERIAL_SOURCE: "fixture-magic",
+      }),
+    ).toThrow(/provider_pipeline or controlled_smoke/);
+  });
+
   test("uses bounded host and port defaults", () => {
     expect(resolveApplicationHost({})).toBe("127.0.0.1");
     expect(resolveApplicationPort({})).toBe(3000);
@@ -118,6 +138,10 @@ describe("APP-02 runtime configuration", () => {
     expect(compose).toMatch(/app-runtime:/);
     expect(compose).toMatch(/profiles:\n\s+- app/);
     expect(compose).toMatch(/127\.0\.0\.1:3000:3000/);
+    expect(compose).toMatch(
+      /APP_MATERIAL_SOURCE: "\$\{APP_MATERIAL_SOURCE:-provider_pipeline\}"/,
+    );
+    expect(compose).toMatch(/ASSET_STORE_PATH: "\/data\/assets"/);
     expect(compose).toMatch(
       /BROWSER_CDP_ENDPOINT: "http:\/\/browser-runtime:9222"/,
     );

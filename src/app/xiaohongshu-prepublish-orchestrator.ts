@@ -25,6 +25,7 @@ import {
 } from "./job-projection.js";
 import {
   PREPUBLISH_MATERIAL_STEP_KEY,
+  PrepublishMaterialResolutionError,
   findPersistedPrepublishMaterial,
   parsePrepublishMaterial,
   serializePrepublishMaterial,
@@ -475,7 +476,14 @@ export class XiaohongshuPrepublishOrchestrator {
         },
       });
     } catch (error) {
-      this.#recordMaterialSourceFailure(job.id);
+      const retryable =
+        error instanceof PrepublishMaterialResolutionError &&
+        error.retryable;
+
+      if (!retryable) {
+        this.#recordMaterialSourceFailure(job.id);
+      }
+
       throw new PrepublishMaterialSourceError({ cause: error });
     }
   }
