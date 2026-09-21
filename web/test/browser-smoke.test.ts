@@ -913,3 +913,142 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
     0,
   );
 });
+
+
+test("Xiaohongshu ProseMirror fixture commits real topic entities and never publishes", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "agent-publisher-xhs-topics-"));
+  const pack = createImageTextMaterialPackFixture();
+  const assetPaths = new Map<string, string>();
+
+  for (const asset of [pack.cover, ...pack.images]) {
+    const path = join(root, asset.assetId + ".png");
+    writeFileSync(path, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    assetPaths.set(asset.assetId, path);
+  }
+
+  const browser = await chromium.launch({
+    executablePath: findChrome(),
+    headless: true,
+    args: ["--no-sandbox"],
+  });
+
+  t.after(async () => {
+    await browser.close();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const page = await browser.newPage();
+  await page.setContent(`
+    <!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <button role="tab" id="image-text-tab">上传图文</button>
+        <input class="upload-input" type="file" accept="image/png" multiple />
+        <div id="previews"></div>
+        <input id="title" placeholder="填写标题" />
+        <div id="body" class="tiptap ProseMirror" contenteditable="true" data-placeholder="正文"></div>
+        <div id="suggestions"></div>
+        <button id="publish">发布</button>
+        <script>
+          window.__publishClicks = 0;
+
+          document.querySelector(".upload-input").addEventListener("change", (event) => {
+            const previews = document.querySelector("#previews");
+            for (const file of event.currentTarget.files) {
+              const preview = document.createElement("div");
+              preview.dataset.testid = "uploaded-image";
+              preview.textContent = file.name;
+              previews.append(preview);
+            }
+          });
+
+          const editor = document.querySelector("#body");
+          const suggestions = document.querySelector("#suggestions");
+
+          function removeTrailingQuery(tag) {
+            const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+            const nodes = [];
+            let node;
+            while ((node = walker.nextNode())) nodes.push(node);
+
+            const needle = "#" + tag;
+            for (let index = nodes.length - 1; index >= 0; index -= 1) {
+              const current = nodes[index];
+              const value = current.textContent || "";
+              const offset = value.lastIndexOf(needle);
+              if (offset < 0) continue;
+              current.textContent =
+                value.slice(0, offset).replace(/\\s+$/, "") +
+                " " +
+                value.slice(offset + needle.length);
+              return;
+            }
+          }
+
+          function renderSuggestion(tag) {
+            suggestions.replaceChildren();
+            const item = document.createElement("div");
+            item.className = "item";
+            const name = document.createElement("span");
+            name.className = "name";
+            name.textContent = "#" + tag;
+            item.append(name);
+            item.addEventListener("click", () => {
+              removeTrailingQuery(tag);
+              const topic = document.createElement("a");
+              topic.className = "tiptap-topic";
+              topic.dataset.topic = JSON.stringify({ name: tag });
+              topic.textContent = "#" + tag;
+              editor.append(topic);
+              suggestions.replaceChildren();
+            });
+            suggestions.append(item);
+          }
+
+          editor.addEventListener("input", () => {
+            const match = (editor.textContent || "").match(/#([^\\s#]+)$/);
+            if (match) renderSuggestion(match[1]);
+          });
+
+          document.querySelector("#publish").addEventListener("click", () => {
+            window.__publishClicks += 1;
+          });
+        </script>
+      </body>
+    </html>
+  `);
+
+  const prepared = await prepareXiaohongshuPublication({
+    page,
+    materialPack: pack,
+    resolveAssetPath: (asset) => {
+      const path = assetPaths.get(asset.assetId);
+      assert.ok(path, "fixture asset path must exist");
+      return path;
+    },
+    timeoutMs: 2_000,
+  });
+
+  assert.equal(
+    await page.locator('[data-testid="uploaded-image"]').count(),
+    3,
+  );
+  assert.equal(await page.locator("#title").inputValue(), pack.copy.title);
+  assert.equal(
+    (await page.locator("#body").textContent())?.includes(pack.copy.body),
+    true,
+  );
+  assert.deepEqual(
+    await page.locator("a.tiptap-topic").evaluateAll((elements) =>
+      elements.map((element) =>
+        JSON.parse(element.getAttribute("data-topic") || "{}").name,
+      ),
+    ),
+    pack.copy.tags,
+  );
+  assert.deepEqual(prepared.tags, pack.copy.tags);
+  assert.equal(
+    await page.evaluate(() => Reflect.get(window, "__publishClicks")),
+    0,
+  );
+});
