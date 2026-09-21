@@ -14,7 +14,10 @@ import {
   createMvpPrepublishApplication,
   type MvpPrepublishApplication,
 } from "../src/app/mvp-prepublish-application.js";
-import { createControlledMaterialSource } from "../src/app/prepublish-material-source.js";
+import {
+  PrepublishMaterialResolutionError,
+  createControlledMaterialSource,
+} from "../src/app/prepublish-material-source.js";
 import {
   fingerprintXiaohongshuImageTextMaterialPack,
   type PreparedImageTextPublication,
@@ -561,6 +564,94 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
         generatedFromBrief: false,
       });
       expect(application.runtime.jobs.getById(created.id)?.materialSummaryJson).toBeNull();
+    } finally {
+      await application.stop();
+    }
+  });
+
+  test("retryable material source failure stays resumable instead of terminally failing the Job", async () => {
+    const temp = makeTempDatabase();
+    cleanupRoots.push(temp.root);
+    const browser = new FakeBrowserProvider();
+    const state: { value: XiaohongshuEntryState } = {
+      value: { kind: "authenticated" },
+    };
+    const { pack, prepared } = preparedFixture();
+    let materialAttempts = 0;
+
+    const application = createMvpPrepublishApplication({
+      databasePath: temp.path,
+      browserProvider: browser,
+      browserLiveViewUrl: "http://127.0.0.1:6080",
+      materialSource: {
+        async resolve() {
+          materialAttempts += 1;
+          if (materialAttempts === 1) {
+            throw new PrepublishMaterialResolutionError(
+              "MATERIAL_PROVIDER_UNAVAILABLE",
+              true,
+              "fixture provider is temporarily unavailable",
+            );
+          }
+          return {
+            source: "provider_pipeline",
+            generatedFromBrief: true,
+            pack,
+          };
+        },
+      },
+      resolveAssetPath: (asset) =>
+        "/controlled-assets/" + asset.assetId + ".png",
+      xiaohongshu: {
+        openEntry: async () => state.value,
+        inspectEntry: async () => state.value,
+        preparePage: async (prepareInput) => {
+          await prepareInput.onMutationStarted?.();
+          return prepared;
+        },
+        verifyPreparedPage: async () => ({
+          title: prepared.title,
+          bodyLength: prepared.bodyLength,
+          tags: prepared.tags,
+          imageCount: prepared.imageCount,
+        }),
+      },
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "retryable material source",
+      });
+
+      const first = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(first).toMatchObject({
+        blocked: true,
+        error: { code: "MATERIAL_SOURCE_UNAVAILABLE" },
+        projection: {
+          status: "preparing_materials",
+        },
+      });
+      expect(application.runtime.jobs.getById(created.id)?.status).toBe(
+        "preparing_materials",
+      );
+
+      const second = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(second).toMatchObject({
+        blocked: true,
+        error: null,
+        projection: {
+          status: "waiting_for_approval",
+          material: {
+            source: "provider_pipeline",
+            generatedFromBrief: true,
+          },
+        },
+      });
+      expect(materialAttempts).toBe(2);
     } finally {
       await application.stop();
     }
