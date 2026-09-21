@@ -309,6 +309,24 @@ function uploadedImageItems(page: Page): Locator {
   );
 }
 
+async function readUploadCounter(page: Page): Promise<number | null> {
+  const counters = page.getByText(/\\b\\d+\\s*\\/\\s*18\\b/, {
+    exact: false,
+  });
+  const count = await counters.count();
+  let observed: number | null = null;
+  for (let index = 0; index < count; index += 1) {
+    const text = await counters.nth(index).textContent();
+    const match = text?.match(/\\b(\\d+)\\s*\\/\\s*18\\b/);
+    if (!match) continue;
+    const value = Number.parseInt(match[1]!, 10);
+    if (Number.isFinite(value)) {
+      observed = Math.max(observed ?? 0, value);
+    }
+  }
+  return observed;
+}
+
 function uploadFailure(page: Page): Locator {
   return page
     .getByText(/上传失败|上传错误|处理失败|图片[^\n]{0,12}失败/, {
@@ -345,6 +363,85 @@ async function readEditable(locator: Locator): Promise<string> {
 
     return element.textContent ?? "";
   });
+}
+
+async function isContentEditable(locator: Locator): Promise<boolean> {
+  return locator.evaluate(
+    (element) =>
+      element instanceof HTMLElement && element.isContentEditable,
+  );
+}
+
+async function fillBodyEditor(
+  locator: Locator,
+  value: string,
+): Promise<void> {
+  if (!(await isContentEditable(locator))) {
+    await locator.fill(value);
+    return;
+  }
+
+  await locator.evaluate((element, text) => {
+    if (!(element instanceof HTMLElement)) {
+      throw new Error("body editor is not an HTMLElement");
+    }
+
+    element.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.execCommand("delete", false);
+
+    const lines = text.replace(/\r\n/g, "\n").split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index]) {
+        document.execCommand("insertText", false, lines[index]);
+      }
+      if (index < lines.length - 1) {
+        document.execCommand("insertParagraph", false);
+      }
+    }
+  }, value);
+}
+
+async function readBodyWithoutTopicEntities(
+  locator: Locator,
+): Promise<string> {
+  return locator.evaluate((element) => {
+    const clone = element.cloneNode(true) as HTMLElement;
+    for (const topic of clone.querySelectorAll("a.tiptap-topic")) {
+      topic.remove();
+    }
+    return clone.textContent ?? "";
+  });
+}
+
+async function readTopicEntities(locator: Locator): Promise<readonly string[]> {
+  const raw = await locator.locator("a.tiptap-topic").evaluateAll((elements) =>
+    elements.map((element) => ({
+      dataTopic: element.getAttribute("data-topic"),
+      text: element.textContent ?? "",
+    })),
+  );
+
+  return raw
+    .map(({ dataTopic, text }) => {
+      if (dataTopic) {
+        try {
+          const parsed = JSON.parse(dataTopic) as { readonly name?: unknown };
+          if (typeof parsed.name === "string") {
+            return parsed.name;
+          }
+        } catch {
+          // Fall back to visible entity text.
+        }
+      }
+      return text;
+    })
+    .map(normalizeTag)
+    .filter((value) => value.length > 0);
 }
 
 async function requireSingleEditable(
@@ -435,6 +532,58 @@ type TagEditorTarget =
       readonly locator: Locator;
     }
   | {
+      readonly kind: "topic_entities";
+      readonly body: Locator;
+    }
+  | {
+      readonly kind: "none";
+    };
+
+async function resolveTagEditorTarget(
+  page: Page,
+  body: Locator,
+  expectedTags: readonly string[],
+): Promise<TagEditorTarget> {
+  const candidates = tagsCandidates(page);
+  const count = await candidates.count();
+  if (count > 1) {
+    throw new XiaohongshuPageStateError(
+      "PLATFORM_EDITOR_STATE_CHANGED",
+      "Expected at most one visible tags editor, found " + count + ".",
+    );
+  }
+
+  if (count === 1) {
+    return { kind: "dedicated", locator: candidates.first() };
+  }
+
+  if (normalizeTags(expectedTags).length === 0) {
+    return { kind: "none" };
+  }
+
+  if (await isContentEditable(body)) {
+    return { kind: "topic_entities", body };
+  }
+
+  throw new XiaohongshuPageStateError(
+    "PLATFORM_UI_CHANGED",
+    "No verified Xiaohongshu topic mechanism is available for non-empty tags.",
+  );
+}
+
+function tagInputValue(tags: readonly string[]): string {
+  return normalizeTags(tags)
+    .map((tag) => "#" + tag)
+    .join(" ");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^$\{\}()|[\]\\]/g, "\\type TagEditorTarget =
+  | {
+      readonly kind: "dedicated";
+      readonly locator: Locator;
+    }
+  | {
       readonly kind: "none";
     };
 
@@ -470,6 +619,88 @@ function tagInputValue(tags: readonly string[]): string {
     .map((tag) => "#" + tag)
     .join(" ");
 }
+");
+}
+
+function compactTopicQuery(value: string): string {
+  return normalizeTag(value).replace(/\s+/g, "");
+}
+
+async function appendTopicEntities(
+  page: Page,
+  body: Locator,
+  tags: readonly string[],
+  timeoutMs: number,
+): Promise<void> {
+  const expectedTags = normalizeTags(tags);
+  if (expectedTags.length === 0) return;
+
+  const deadline = Date.now() + timeoutMs;
+  for (let index = 0; index < expectedTags.length; index += 1) {
+    const readableTag = expectedTags[index]!;
+    const query = compactTopicQuery(readableTag);
+    if (!query) continue;
+
+    await body.evaluate((element, topicQuery) => {
+      if (!(element instanceof HTMLElement) || !element.isContentEditable) {
+        throw new Error("topic editor is not contenteditable");
+      }
+
+      element.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.execCommand("insertText", false, " #" + topicQuery);
+    }, query);
+
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new XiaohongshuPageStateError(
+        "PLATFORM_UI_CHANGED",
+        "Xiaohongshu topic suggestions did not become ready in time.",
+      );
+    }
+
+    const suggestion = page
+      .locator("div.item .name")
+      .filter({
+        hasText: new RegExp(
+          "^\\s*#?" + escapeRegExp(query) + "\\s*$",
+          "i",
+        ),
+      })
+      .first();
+
+    try {
+      await suggestion.waitFor({ state: "visible", timeout: remaining });
+      await suggestion.click();
+    } catch (error) {
+      throw new XiaohongshuPageStateError(
+        "PLATFORM_UI_CHANGED",
+        "Xiaohongshu topic suggestion did not become selectable.",
+        { cause: error },
+      );
+    }
+
+    const expectedCount = index + 1;
+    const committed = body.locator("a.tiptap-topic");
+    try {
+      await committed.nth(expectedCount - 1).waitFor({
+        state: "visible",
+        timeout: Math.max(1, deadline - Date.now()),
+      });
+    } catch (error) {
+      throw new XiaohongshuPageStateError(
+        "PLATFORM_UI_CHANGED",
+        "Xiaohongshu did not commit the selected topic entity.",
+        { cause: error },
+      );
+    }
+  }
+}
 
 async function waitForUploadReady(
   page: Page,
@@ -488,7 +719,9 @@ async function waitForUploadReady(
       );
     }
 
-    observedImageCount = await countVisible(uploadedImageItems(page));
+    const previewCount = await countVisible(uploadedImageItems(page));
+    const platformCount = await readUploadCounter(page);
+    observedImageCount = Math.max(previewCount, platformCount ?? 0);
     if (observedImageCount > expectedImageCount) {
       throw new XiaohongshuComposerNotFreshError(
         "platform shows more image attachments than this prepare requested",
@@ -564,17 +797,27 @@ export async function verifyXiaohongshuPreparedPage(
     "body",
     timeoutMs,
   );
-  const tagsTarget = await resolveTagEditorTarget(page, pack.copy.tags);
+  const tagsTarget = await resolveTagEditorTarget(
+    page,
+    body,
+    pack.copy.tags,
+  );
 
   const actualTitle = normalizeText(await readEditable(title));
-  const actualBody = normalizeText(await readEditable(body));
+  const actualBody = normalizeText(
+    tagsTarget.kind === "topic_entities"
+      ? await readBodyWithoutTopicEntities(body)
+      : await readEditable(body),
+  );
   const expectedTitle = normalizeText(pack.copy.title);
   const expectedBody = normalizeText(pack.copy.body);
   const expectedTags = normalizeTags(pack.copy.tags);
   const actualTags =
     tagsTarget.kind === "dedicated"
       ? parseTagInput(await readEditable(tagsTarget.locator))
-      : [];
+      : tagsTarget.kind === "topic_entities"
+        ? await readTopicEntities(body)
+        : [];
 
   const mismatches: PreparedField[] = [];
   if (actualTitle !== expectedTitle) mismatches.push("title");
@@ -694,7 +937,7 @@ export async function prepareXiaohongshuPublication(
     const tagsTarget = await runInteractionStage(
       page,
       "find_tags_editor",
-      () => resolveTagEditorTarget(page, pack.copy.tags),
+      () => resolveTagEditorTarget(page, body, pack.copy.tags),
     );
 
     await runInteractionStage(page, "verify_fresh_composer", async () => {
@@ -706,13 +949,28 @@ export async function prepareXiaohongshuPublication(
         editors.push(["tags", tagsTarget.locator]);
       }
       await ensureEditorsEmpty(editors);
+      if (
+        tagsTarget.kind === "topic_entities" &&
+        (await readTopicEntities(body)).length > 0
+      ) {
+        throw new XiaohongshuComposerNotFreshError(
+          "existing topic entities were detected",
+        );
+      }
     });
 
     await runInteractionStage(page, "fill_fields", async () => {
       await title.fill(pack.copy.title);
-      await body.fill(pack.copy.body);
+      await fillBodyEditor(body, pack.copy.body);
       if (tagsTarget.kind === "dedicated") {
         await tagsTarget.locator.fill(tagInputValue(pack.copy.tags));
+      } else if (tagsTarget.kind === "topic_entities") {
+        await appendTopicEntities(
+          page,
+          body,
+          pack.copy.tags,
+          timeoutMs,
+        );
       }
     });
 
