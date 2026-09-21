@@ -14,10 +14,9 @@ import type { BrowserProvider, BrowserSession } from "../../src/browser/provider
 import {
   fingerprintXiaohongshuImageTextMaterialPack,
   prepareXiaohongshuPublication,
-  XiaohongshuComposerNotFreshError,
   XiaohongshuPageStateError,
   XiaohongshuPrepareCheckpointError,
-  XiaohongshuPreparedValidationError,
+  XiaohongshuPrepareInteractionError,
 } from "../../src/platforms/xiaohongshu/image-text-prepare.js";
 import { createImageTextMaterialPackFixture } from "../../src/materials/testing/fake-providers.js";
 
@@ -627,8 +626,10 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         timeoutMs: 2_000,
       }),
     (error) => {
-      assert.ok(error instanceof XiaohongshuPreparedValidationError);
-      assert.deepEqual(error.mismatches, ["title"]);
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "readback");
+      assert.equal(error.code, "PREPARED_VALIDATION_FAILED");
+      assert.equal(error.interactionErrorType, "prepared_validation");
       return true;
     },
   );
@@ -644,8 +645,10 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         timeoutMs: 250,
       }),
     (error) => {
-      assert.ok(error instanceof XiaohongshuComposerNotFreshError);
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "verify_fresh_composer");
       assert.equal(error.code, "COMPOSER_NOT_FRESH");
+      assert.equal(error.interactionErrorType, "composer_not_fresh");
       return true;
     },
   );
@@ -884,7 +887,13 @@ test("Xiaohongshu image-text page fixture verifies platform previews and never p
         resolveAssetPath,
         timeoutMs: 1_000,
       }),
-    XiaohongshuComposerNotFreshError,
+    (error) => {
+      assert.ok(error instanceof XiaohongshuPrepareInteractionError);
+      assert.equal(error.stage, "verify_fresh_composer");
+      assert.equal(error.code, "COMPOSER_NOT_FRESH");
+      assert.equal(error.interactionErrorType, "composer_not_fresh");
+      return true;
+    },
     "draft content restored after tab activation must be observed before mutation",
   );
   assert.equal(await page.locator("#title").inputValue(), "已有草稿标题");
