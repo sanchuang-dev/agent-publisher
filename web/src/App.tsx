@@ -789,6 +789,27 @@ function Evidence({ task }: { task: TaskFixture }) {
 
 function Failure({ task }: { task: TaskFixture }) {
   const failure = task.failure!;
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const canVerifyPublish =
+    task.runtimeSource === "api" &&
+    failure.code === "PUBLISH_RESULT_UNKNOWN";
+
+  const verifyPublishResult = () => {
+    if (!canVerifyPublish || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    void taskRepository
+      .continue(task.id)
+      .catch((error: unknown) => {
+        setRetryError(
+          error instanceof Error
+            ? error.message
+            : "重新核验发布结果失败，请稍后重试。",
+        );
+      })
+      .finally(() => setRetrying(false));
+  };
 
   return (
     <aside className="work-surface">
@@ -813,8 +834,18 @@ function Failure({ task }: { task: TaskFixture }) {
             <dd>{failure.recovery}</dd>
           </div>
         </dl>
-        <button className="secondary-button" disabled>
-          从该步骤重试
+        {retryError && <div className="warning-box"><p>{retryError}</p></div>}
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!canVerifyPublish || retrying}
+          onClick={verifyPublishResult}
+        >
+          {canVerifyPublish
+            ? retrying
+              ? "正在核验…"
+              : "重新核验结果"
+            : "从该步骤重试"}
         </button>
       </Card>
     </aside>
