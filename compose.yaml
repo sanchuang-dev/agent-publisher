@@ -43,6 +43,7 @@ services:
       APP_CONTROLLED_ASSET_ROOT: "/controlled-material/assets"
       BROWSER_CDP_ENDPOINT: "http://browser-runtime:9222"
       DATABASE_SQLITE_PATH: "/data/app.db"
+      XHS_SMOKE_DATA_ROOT: "/data/smoke/xhs-prepare"
     ports:
       # Product API remains host-local for the POC. The browser's raw CDP port
       # stays Compose-internal and is never published to the host.
