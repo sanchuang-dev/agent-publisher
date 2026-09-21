@@ -309,14 +309,14 @@ function uploadedImageItems(page: Page): Locator {
 }
 
 async function readUploadCounter(page: Page): Promise<number | null> {
-  const counters = page.getByText(/\\b\\d+\\s*\\/\\s*18\\b/, {
+  const counters = page.getByText(/\b\d+\s*\/\s*18\b/, {
     exact: false,
   });
   const count = await counters.count();
   let observed: number | null = null;
   for (let index = 0; index < count; index += 1) {
     const text = await counters.nth(index).textContent();
-    const match = text?.match(/\\b(\\d+)\\s*\\/\\s*18\\b/);
+    const match = text?.match(/\b(\d+)\s*\/\s*18\b/);
     if (!match) continue;
     const value = Number.parseInt(match[1]!, 10);
     if (Number.isFinite(value)) {
