@@ -129,6 +129,25 @@ describe("APP-02 runtime configuration", () => {
     );
   });
 
+  test("repository-local dotenv template exposes only supported AI variable names and .env stays ignored", () => {
+    const envExample = readFileSync(
+      resolve(import.meta.dirname, "..", ".env.example"),
+      "utf8",
+    );
+    const gitignore = readFileSync(
+      resolve(import.meta.dirname, "..", ".gitignore"),
+      "utf8",
+    );
+
+    expect(envExample).toMatch(/^PUBLISHER_AI_BASE_URL=$/m);
+    expect(envExample).toMatch(/^PUBLISHER_AI_MODEL=$/m);
+    expect(envExample).toMatch(/^PUBLISHER_AI_API_KEY=$/m);
+    expect(envExample).not.toMatch(/(?:sk-|api[_-]?key\s*=\s*\S+)/i);
+    expect(gitignore).toMatch(/^\.env$/m);
+    expect(gitignore).toMatch(/^\.env\.\*$/m);
+    expect(gitignore).toMatch(/^!\.env\.example$/m);
+  });
+
   test("Compose keeps app HTTP local while CDP stays internal", () => {
     const compose = readFileSync(
       resolve(import.meta.dirname, "..", "compose.yaml"),
