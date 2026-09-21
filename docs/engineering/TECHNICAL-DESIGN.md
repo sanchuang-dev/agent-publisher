@@ -427,25 +427,61 @@ The first implementation is `XiaohongshuPublisher`.
 
 ### 6.4 Material providers
 
+The material domain keeps stable provider slots while allowing deterministic Builtin implementations and later external enhancements.
+
+Conceptually:
+
 ```ts
 interface TextProvider {
-  generate(plan: TextPlan): Promise<TextMaterial>;
+  generate(plan: MaterialPlan): Promise<ProviderResult<TextMaterial>>;
 }
 
 interface ImageProvider {
-  generate(plan: ImagePlan): Promise<ImageAsset[]>;
+  generate(
+    plan: MaterialPlan,
+  ): Promise<ProviderResult<readonly ImageAssetReference[]>>;
+}
+
+interface DesignRenderInput {
+  plan: ImageTextMaterialPlan;
+  copy: TextMaterial;
+  sourceImages: readonly ImageAssetReference[];
+}
+
+interface DesignRenderResult {
+  source: DesignAssetReference | null;
+  cover: ImageAssetReference;
+  images: readonly ImageAssetReference[];
 }
 
 interface DesignProvider {
-  render(plan: DesignPlan): Promise<Asset[]>;
-}
-
-interface VideoProvider {
-  generate(plan: VideoPlan): Promise<VideoAsset>;
+  render(
+    input: DesignRenderInput,
+  ): Promise<ProviderResult<DesignRenderResult>>;
 }
 ```
 
-Concrete vendors are intentionally deferred. Provider unavailability must be explicit.
+The invariant matters more than the exact TypeScript spelling: a design provider receives resolved content and returns **publishable image assets**. An editable/source design reference remains optional provenance and never replaces the publishable cover/images.
+
+The image-text MVP includes a Publisher-owned Builtin path:
+
+```text
+MaterialPlan + resolved copy + controlled source images
+  ↓
+SafeRichLayout
+  ↓
+schema / policy validation
+  ↓
+BuiltinLayoutRenderer (Takumi baseline)
+  ↓
+deterministic PNG bytes
+  ↓
+AssetStore
+```
+
+SafeRichLayout is the Publisher-owned domain/security boundary. It does not expose arbitrary renderer JSX/HTML/CSS, executable browser APIs, or renderer-controlled network fetches. The current renderer baseline uses controlled local font/image resources and does not use the authenticated publishing browser.
+
+External design providers such as Canva implement the same material outcome and remain optional enhancements.
 
 A provider implementation must not create its own long-lived model/session harness when the same work belongs in an AgentDefinition / Pi AgentSession. Plain deterministic provider APIs may still call external media services directly when no agent reasoning is required.
 
@@ -453,13 +489,15 @@ A provider implementation must not create its own long-lived model/session harne
 
 ```ts
 interface AssetStore {
-  put(input: AssetInput): Promise<Asset>;
-  resolve(assetId: string): Promise<ResolvedAsset>;
-  delete(assetId: string): Promise<void>;
+  put(input: AssetWriteInput): Promise<AssetRecord>;
+  read(assetId: string): Promise<Buffer>;
+  resolveLocalPath(asset: AssetReferencePointer): Promise<string>;
 }
 ```
 
-MVP implementation: local volume-backed store.
+MVP implementation: `LocalAssetStore`, backed by Publisher-controlled local bytes plus SQLite metadata/checksum state.
+
+Durable material references use canonical `asset://{assetId}` identity. Platform adapters resolve those references at the upload boundary rather than depending on expiring provider URLs or machine-specific absolute paths.
 
 Future implementations may use OSS or R2 without changing the material pipeline.
 
@@ -949,38 +987,41 @@ If recovery cannot confidently return to the deterministic path, create a human 
 
 ## 15. Material pipeline
 
+The configured product runtime now owns a real image-text vertical slice:
+
 ```text
 CreativeBrief
   ↓
+Content Secretary
+  ↓
 MaterialPlan
   ↓
-TextProvider ─────┐
-ImageProvider ────┼─→ MaterialPack
-DesignProvider ───┤
-VideoProvider ────┘
+MaterialPreparationService
+  ├─ material_copy
+  ├─ material_images
+  ├─ material_cover
+  └─ material_design
   ↓
-Platform Adapter
+LocalAssetStore
   ↓
-XiaohongshuPack
+MaterialPack
+  ↓
+Xiaohongshu prepare
 ```
+
+Each accepted material step is persisted independently and may be reused after retry/restart. A downstream failure must not unconditionally regenerate already accepted copy or assets.
+
+The Builtin baseline produces a cover as a distinct durable Publisher asset from `images[]`; the assembly layer rejects aliased cover/image identities.
+
+The configured application defaults to the real provider pipeline. `controlled_smoke` remains an explicit deterministic test/runtime mode rather than the normal product path.
 
 ### 15.1 Reliability rule
 
 For MVP:
 
-> video is additive; text + image is the dependable baseline.
+> Builtin image-text is the dependable baseline; video and external design services are additive.
 
-A provider failure is local to that material item whenever possible.
-
-Material item status:
-
-```text
-planned
-generating
-ready
-failed
-rejected
-```
+Provider failure remains local to the current material step whenever possible.
 
 Material pack status:
 
@@ -989,7 +1030,7 @@ ready
 ready_with_degradation
 ```
 
-The user-selected publish mode still governs whether a degraded pack is publishable. Do not silently convert a requested video publication into an image/text publication without surfacing that decision.
+Retryable provider failures keep the Job resumable. Optional design degradation remains visible and contract-valid. The user-selected publish mode still governs whether a degraded pack is publishable; do not silently convert a requested video publication into an image/text publication.
 
 ## 16. API surface
 
