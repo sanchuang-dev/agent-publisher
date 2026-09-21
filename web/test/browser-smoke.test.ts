@@ -354,7 +354,7 @@ test("real Web approval reaches deterministic publish evidence without relying o
 
   await assertThreeColumnLayout(page);
 
-  await page.getByRole("button", { name: "批准并发布一次" }).click();
+  await page.getByRole("button", { name: "批准发布" }).click();
   await page.getByText("发布已完成").waitFor({
     state: "visible",
     timeout: 10_000,
