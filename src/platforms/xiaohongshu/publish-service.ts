@@ -687,6 +687,19 @@ export class XiaohongshuPublishService {
     const job = this.#jobs.getById(jobId);
     if (!job || job.status !== "publishing") return;
 
+    const approvalRequestId = job.checkpoint?.approvalRequestId;
+    const contentFingerprint = job.checkpoint?.contentFingerprint;
+    if (
+      typeof approvalRequestId !== "string" ||
+      approvalRequestId.length === 0 ||
+      typeof contentFingerprint !== "string" ||
+      contentFingerprint.length === 0
+    ) {
+      throw new XiaohongshuPublishStateError(
+        "Cannot persist unknown publish state without its durable approval/content binding.",
+      );
+    }
+
     this.#jobs.commitCheckpoint(jobId, {
       status: "publishing",
       checkpoint: {
@@ -694,6 +707,8 @@ export class XiaohongshuPublishService {
         platform: "xiaohongshu",
         actionKey: XIAOHONGSHU_FINAL_PUBLISH_ACTION_KEY,
         externalActionId: action.id,
+        approvalRequestId,
+        contentFingerprint,
         verifyFirst: true,
       },
       step: {
