@@ -148,6 +148,27 @@ describe("APP-02 runtime configuration", () => {
     expect(gitignore).toMatch(/^!\.env\.example$/m);
   });
 
+  test("app-runtime image includes the mandatory Publisher safety Skill", () => {
+    const dockerfile = readFileSync(
+      resolve(import.meta.dirname, "..", "docker", "app-runtime", "Dockerfile"),
+      "utf8",
+    );
+
+    expect(dockerfile).toMatch(/^COPY skills \.\/skills$/m);
+    expect(
+      readFileSync(
+        resolve(
+          import.meta.dirname,
+          "..",
+          "skills",
+          "publisher-safety",
+          "SKILL.md",
+        ),
+        "utf8",
+      ),
+    ).toContain("# Publisher safety");
+  });
+
   test("Compose keeps app HTTP local while CDP stays internal", () => {
     const compose = readFileSync(
       resolve(import.meta.dirname, "..", "compose.yaml"),

@@ -23,5 +23,6 @@ COPY package.json package-lock.json ./
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
+COPY skills ./skills
 
 CMD ["npm", "run", "start:api"]
