@@ -1,3 +1,7 @@
+import type {
+  EvidenceRepository,
+  PublicationEvidence,
+} from "../contracts/evidence.js";
 import {
   JobNotFoundError,
   type ActionRequest,
@@ -47,6 +51,13 @@ export interface JobMaterialProjection {
   readonly imageCount: number;
 }
 
+export interface JobEvidenceProjection {
+  readonly kind: PublicationEvidence["kind"];
+  readonly uri: string | null;
+  readonly value: string | null;
+  readonly createdAt: string;
+}
+
 export interface JobProjection {
   readonly id: string;
   readonly platform: "xiaohongshu";
@@ -66,6 +77,7 @@ export interface JobProjection {
     readonly controlOwner: "human";
   } | null;
   readonly approval: JobApprovalProjection | null;
+  readonly evidence: readonly JobEvidenceProjection[];
   readonly failure: {
     readonly step: string;
     readonly code: string | null;
@@ -76,6 +88,7 @@ export interface JobProjection {
 export interface JobProjectionServiceOptions {
   readonly jobs: JobRepository;
   readonly actionRequests: ActionRequestRepository;
+  readonly evidence?: Pick<EvidenceRepository, "getByJob">;
   readonly browserLiveViewUrl?: string;
 }
 
@@ -281,11 +294,13 @@ function projectMaterial(steps: readonly JobStep[]): JobMaterialProjection | nul
 export class JobProjectionService {
   readonly #jobs: JobRepository;
   readonly #actionRequests: ActionRequestRepository;
+  readonly #evidence: Pick<EvidenceRepository, "getByJob"> | undefined;
   readonly #browserLiveViewUrl: string | undefined;
 
   constructor(options: JobProjectionServiceOptions) {
     this.#jobs = options.jobs;
     this.#actionRequests = options.actionRequests;
+    this.#evidence = options.evidence;
     this.#browserLiveViewUrl = safeLiveViewUrl(options.browserLiveViewUrl);
   }
 
@@ -335,6 +350,15 @@ export class JobProjectionService {
           }
         : null,
       approval: projectApproval(action),
+      evidence:
+        this.#evidence === undefined
+          ? []
+          : this.#evidence.getByJob(job.id).map((item) => ({
+              kind: item.kind,
+              uri: item.uri,
+              value: item.value,
+              createdAt: item.createdAt,
+            })),
       failure: projectFailure(job, steps),
     };
   }
