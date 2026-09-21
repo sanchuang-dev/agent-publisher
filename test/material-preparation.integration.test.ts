@@ -437,6 +437,38 @@ describe("MaterialPreparationService integration", () => {
     ]);
   }, 30_000);
 
+  test("design none keeps a distinct durable cover without invoking DesignProvider", async () => {
+    const harness = await createHarness("mat-05-no-design");
+    const plan = planFixture("plan-no-design", "none");
+
+    harness.jobs.create({
+      id: "job-no-design",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: plan.brief.brief }),
+    });
+    seedPlanCheckpoint(harness.jobs, "job-no-design", plan);
+
+    const result = await harness.preparation.prepareImageText(
+      "job-no-design",
+      plan,
+    );
+
+    expect(result.pack).toMatchObject({
+      mode: "image_text",
+      status: "ready",
+      design: null,
+    });
+    expect(result.pack.images).toHaveLength(plan.imageCount);
+    expect(result.pack.images.map((asset) => asset.assetId)).not.toContain(
+      result.pack.cover.assetId,
+    );
+    expect(harness.calls).toEqual({ text: 1, image: 1, design: 0 });
+    await expect(harness.store.read(result.pack.cover.assetId)).resolves.toBeInstanceOf(
+      Buffer,
+    );
+  }, 30_000);
+
   test("optional missing design provider degrades visibly without changing image_text mode", async () => {
     const harness = await createHarness("mat-05-degradation");
     const plan = planFixture("plan-optional-design", "optional");
