@@ -681,13 +681,32 @@ function Browser({
 
 function Approval({ task }: { task: TaskFixture }) {
   const approval = task.approval!;
+  const [submitting, setSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const isRealRuntime = task.runtimeSource === "api";
+
+  const approve = () => {
+    if (!isRealRuntime || submitting) return;
+    setSubmitting(true);
+    setApprovalError(null);
+    void taskRepository
+      .approve(task.id, approval.actionId)
+      .catch((error: unknown) => {
+        setApprovalError(
+          error instanceof Error
+            ? error.message
+            : "批准发布失败，请检查当前任务状态。",
+        );
+      })
+      .finally(() => setSubmitting(false));
+  };
 
   return (
     <aside className="work-surface">
       <Card
         eyebrow="发布审批"
         title="执行秘书已准备好发布"
-        description="真实审批摘要已准备完成；F3-01 只停在这里，不提供最终发布动作。"
+        description="批准后只允许执行一次最终发布；结果不确定时系统只核验，不会自动再次点击发布。"
       >
         <div className="approval-summary">
           {task.materialProvenance?.source === "controlled_smoke" && (
@@ -719,10 +738,20 @@ function Approval({ task }: { task: TaskFixture }) {
               <p key={warning}>{warning}</p>
             ))}
           </div>
+          {approvalError && <div className="warning-box"><p>{approvalError}</p></div>}
           <div className="approval-actions">
             <button className="secondary-button" disabled>返回修改</button>
-            <button className="primary-button" disabled>
-              批准发布
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!isRealRuntime || submitting}
+              onClick={approve}
+            >
+              {!isRealRuntime
+                ? "Fixture 不执行发布"
+                : submitting
+                  ? "正在写入批准…"
+                  : "批准并发布一次"}
             </button>
           </div>
         </div>
