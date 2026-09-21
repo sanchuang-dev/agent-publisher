@@ -162,6 +162,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "APP_MATERIAL_SOURCE=controlled_smoke" >> "$GITHUB_ENV"
           root="data/controlled-material"
           mkdir -p "$root/assets"
           printf 'fixture\n' > "$root/assets/cover-ci.png"
