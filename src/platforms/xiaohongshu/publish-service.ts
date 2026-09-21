@@ -524,7 +524,15 @@ export class XiaohongshuPublishService {
       if (error instanceof XiaohongshuPublishFailedError) {
         throw error;
       }
-      this.#markUnknown(jobId, action, error);
+
+      const latest = this.#externalActions.getById(action.id);
+      if (latest?.status === "succeeded") {
+        throw new XiaohongshuPublishStateError(
+          "Publication is verified as succeeded, but durable Job finalization did not complete. Resume will finalize without another publish interaction.",
+        );
+      }
+
+      this.#markUnknown(jobId, latest ?? action, error);
       throw new XiaohongshuPublishUnknownError({ cause: error });
     }
   }
@@ -558,10 +566,18 @@ export class XiaohongshuPublishService {
         throw error;
       }
 
-      if (action.status === "started") {
-        this.#markUnknown(jobId, action, error);
+      const latest = this.#externalActions.getById(action.id);
+      if (latest?.status === "succeeded") {
+        throw new XiaohongshuPublishStateError(
+          "Publication is verified as succeeded, but durable Job finalization did not complete. Resume will finalize without another publish interaction.",
+        );
+      }
+
+      const recoverable = latest ?? action;
+      if (recoverable.status === "started") {
+        this.#markUnknown(jobId, recoverable, error);
       } else {
-        this.#recordUnknownCheckpoint(jobId, action);
+        this.#recordUnknownCheckpoint(jobId, recoverable);
       }
 
       throw new XiaohongshuPublishUnknownError({ cause: error });
