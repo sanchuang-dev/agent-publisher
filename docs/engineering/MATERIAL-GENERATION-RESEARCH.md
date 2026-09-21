@@ -1,8 +1,10 @@
 # Material Generation Research
 
-Status: research / implementation recommendation  
+Status: research / reconciled implementation baseline  
 Research date: 2026-09-20  
-Repository baseline: `dev@aa8ea906448af3718d672b749ed9edd4d53d6ef7`  
+Implementation reconciliation: 2026-09-21  
+Historical research baseline: `dev@aa8ea906448af3718d672b749ed9edd4d53d6ef7`  
+Reconciled implementation baseline: `dev@6dbda991d2feecb46447a044ea047817bcbdd8d6`  
 Owning product contract: [../product/PRD.md](../product/PRD.md)  
 Owning technical baseline: [TECHNICAL-DESIGN.md](./TECHNICAL-DESIGN.md)
 
@@ -20,34 +22,38 @@ The goal is not to select every future vendor. The goal is to identify the small
 
 ## 2. Executive conclusion
 
-The current architecture is directionally correct, but the real provider integrations should not start by dropping vendor adapters directly behind the existing provider interfaces.
+The research decision is now implemented for the image-text MVP.
 
-Two cross-cutting gaps must be addressed first:
+The previously identified cross-cutting gaps are closed on `dev`:
 
-1. the current `DesignProvider` contract cannot produce the image assets that the Xiaohongshu publishing path actually consumes;
-2. the schema contains an `assets` table, but the repository has no durable `AssetRepository` / `AssetStore` implementation that can ingest provider output and later resolve an `asset://` reference to a controlled local upload path.
+1. `DesignProvider` receives resolved copy/source images and returns publishable cover/images;
+2. `AssetRepository` + `LocalAssetStore` own durable Publisher asset identity/bytes and resolve canonical `asset://` references for platform upload;
+3. `SafeRichLayout` + the selected Builtin renderer produce deterministic real PNG assets without the authenticated publishing browser;
+4. `MaterialPreparationService` checkpoints copy/images/cover/design independently and assembles a real image-text `MaterialPack`;
+5. the configured product runtime defaults to this real provider pipeline.
 
-Recommended capability order:
+Landed capability order:
 
 ```text
-Material foundation
-  ↓
-Builtin rich-layout DesignProvider
-  ↓
-real Material preparation pipeline
-  ↓
-Canva template/design enhancement
-  ↓
-Canva generative candidate workflow
-  ↓
-Yu-Yu VideoProvider after API contract validation
+MAT-02 / #75 Asset foundation ✅
+          ↓
+MAT-03 / #76 Design contract ✅
+          ↓
+MAT-04 / #77 SafeRichLayout + Takumi renderer ✅
+          ↓
+MAT-05 / #78 MaterialPreparationService ✅
+          ↓
+Xiaohongshu prepare boundary
 ```
 
-The recommended product positioning is:
+The durable product positioning is:
 
-- **Builtin renderer is the dependable baseline**, not merely an emergency fallback.
-- **Canva is an optional advanced DesignProvider**, useful for existing brand/template workflows and later generative design.
-- **Video remains additive**. It should reuse Publisher checkpoints and asset ingestion rather than introducing a parallel job system.
+- **Builtin renderer is the required dependable image-text baseline**, not an emergency fallback.
+- **SafeRichLayout is Publisher's renderer-independent safety/product contract.**
+- **Canva remains an optional advanced DesignProvider** for higher-quality/template workflows.
+- **Video remains additive** and must reuse Publisher checkpoints and asset ingestion rather than creating a parallel Job system.
+
+The next material work should therefore focus on human visual acceptance and additive Canva/video capabilities, not another replacement image-text pipeline.
 
 ## 3. Current code reality
 
@@ -284,41 +290,35 @@ OSS/R2 can remain later implementations behind the same contract.
 
 ## 6. Builtin rich-layout renderer
 
-### 6.1 Recommendation
+### 6.1 Landed decision
 
-Build a Publisher-owned static rich-layout renderer and treat it as the dependable image-text baseline.
+The Builtin image-text renderer is now a required Publisher-owned MVP capability.
 
-Do **not** let an Agent execute arbitrary HTML/JS inside the persistent browser runtime.
-
-Instead, let an Agent produce a validated static layout document that is expressive enough for social cards but incapable of arbitrary execution or network access.
-
-Suggested flow:
+Production flow:
 
 ```text
-MaterialPlan + TextMaterial + source images
+MaterialPlan + TextMaterial + controlled source images
         ↓
-bounded design helper / deterministic planner
-        ↓
-SafeRichLayout[]
+SafeRichLayout
         ↓
 schema + policy validation
         ↓
-Satori
+BuiltinLayoutRenderer (Takumi)
         ↓
-SVG
+deterministic PNG bytes
         ↓
-resvg-js
+LocalAssetStore
         ↓
-PNG
-        ↓
-AssetStore
+asset://...
         ↓
 MaterialPack.cover + MaterialPack.images
 ```
 
-### 6.2 SafeRichLayout
+The implementation deliberately does **not** execute arbitrary model-generated HTML/JavaScript in the persistent authenticated browser runtime.
 
-A minimal initial vocabulary could include:
+### 6.2 SafeRichLayout boundary
+
+The landed Publisher-owned vocabulary covers bounded static composition such as:
 
 ```text
 Page
@@ -334,75 +334,42 @@ Divider
 Spacer
 ```
 
-The model may control bounded presentation attributes such as:
+Validation is fail-closed for unknown/unapproved fields. The contract bounds canvas size, node/depth complexity, text/layout values, colors, gradients, spacing, image placement, and related presentation properties.
 
-- spacing;
-- font size/weight within allowed ranges;
-- color tokens or validated colors;
-- alignment;
-- background;
-- border/radius;
-- image placement;
-- emphasis;
-- page composition.
+The layout contract does not expose arbitrary renderer JSX/HTML/CSS, script execution, browser APIs, or renderer-controlled network fetches.
 
-It should not be able to introduce:
+### 6.3 Renderer decision
 
-- JavaScript;
-- iframe;
-- arbitrary fetch/network requests;
-- arbitrary external image/font URLs;
-- unbounded CSS;
-- arbitrary SVG references;
-- browser-only APIs.
+MAT-04 compared Takumi with Satori + resvg against representative fixtures and kept one production renderer.
 
-### 6.3 Why Satori + resvg-js fits the project
+The selected baseline is `@takumi-rs/core@2.14.0`.
 
-Satori converts a static JSX/object tree using a supported HTML/CSS subset into SVG. It supports direct object input without requiring raw HTML string execution, requires supplied fonts for text rendering, and does not support arbitrary `<script>`, external `<link>`, or `<style>` execution.
+The temporary Satori reference path failed against the pinned WOFF2 strategy with `Unsupported OpenType signature wOF2` and was removed rather than retained as a second production stack.
 
-Reference: https://github.com/vercel/satori
+This is an implementation choice, not a product-contract dependency: callers speak SafeRichLayout, not Takumi node types.
 
-resvg-js converts SVG to PNG from Node.js and has native/prebuilt support across common platforms including Apple Silicon.
+### 6.4 Fonts, images, and overflow
 
-Reference: https://github.com/thx/resvg-js
+- CJK/Latin font bytes come from pinned `@fontsource/noto-sans-sc@5.3.0` local WOFF2 resources (OFL-1.1), not host-installed fonts or runtime CDN fetches.
+- source images reach the renderer as controlled bytes resolved from Publisher assets;
+- model/provider URLs do not become renderer network requests;
+- the first social-card canvas is 1080 × 1440;
+- vertical overflow uses deterministic clipping at the fixed page boundary within the existing complexity bounds;
+- cover/images persisted into the material pack must be durable Publisher assets.
 
-This avoids coupling material rendering to the authenticated browser-runtime container.
+### 6.5 Verification outcome
 
-### 6.4 Important implementation constraints
+The renderer baseline has current repository evidence for:
 
-#### Fonts
+- real 1080 × 1440 PNG output;
+- CJK + Latin mixed text;
+- flex/grid-like composition;
+- images, gradients, borders, and radius;
+- deterministic repeated output;
+- malicious/unknown input rejection;
+- local/CI/Linux-compatible native package execution.
 
-Chinese output must not rely on whatever font happens to be installed on the developer machine.
-
-The renderer needs a deterministic CJK font strategy for local and Docker execution.
-
-Do not commit a font file without first verifying its redistribution/license boundary.
-
-#### Image ingestion
-
-Source images should be read from AssetStore and passed as controlled buffer/data input to the renderer.
-
-Do not allow arbitrary model-generated external image URLs to become renderer network requests.
-
-#### Overflow and bounded generation
-
-Layout validation should enforce practical limits such as:
-
-- fixed supported canvas sizes;
-- maximum page count;
-- maximum node count;
-- bounded title/body length per page;
-- allowed font-size ranges;
-- allowed image count;
-- deterministic overflow failure rather than clipped silent success.
-
-For Xiaohongshu, `1080 × 1440` is a practical first card size, but the size should live in a platform/design policy rather than be hard-coded throughout the material domain.
-
-### 6.5 Difficulty
-
-Estimated engineering difficulty: **medium**.
-
-The difficult part is not rasterization. It is defining a sufficiently expressive but bounded layout contract, deterministic font behavior, and product-quality overflow handling.
+The remaining product-level criterion is visual inspection of a real-brief Builtin material result under parent Issue #6.
 
 ## 7. Canva MCP
 
@@ -698,6 +665,8 @@ This matches the existing product principle: visible failure, recovery, degradat
 
 ## 11. Implementation slices
 
+Slices A–D below are now landed as Issues #75–#78. Their descriptions are retained as implementation-history context; Canva and Yu-Yu remain follow-up work.
+
 These are implementation recommendations, not pre-created Issues.
 
 ### Slice A — Material asset foundation
@@ -875,15 +844,15 @@ External references:
 - resvg-js: https://github.com/thx/resvg-js
 - intended Yu-Yu video provider documentation: https://docs.yu-yu.ai/generate-video
 
-## 15. What this document does not decide
+## 15. What remains undecided
 
-This research does not yet make the following durable product decisions:
+The Builtin image-text baseline, SafeRichLayout boundary, Takumi production renderer, pinned Noto Sans SC font source, LocalAssetStore, and real MaterialPreparationService are now implementation facts rather than research questions.
 
-- the final CJK font package/license;
-- final `SafeRichLayout` schema;
+The remaining material/product questions are:
+
 - whether Canva is exposed as a user-selectable mode or automatic enhancement;
 - Canva credential UX beyond the single-operator POC;
-- the exact Yu-Yu VideoProvider API shape;
+- the exact Yu-Yu VideoProvider API shape and async/idempotency behavior;
 - future OSS/R2 AssetStore implementation;
 - a long-term multi-vendor media routing matrix.
 
