@@ -401,7 +401,7 @@ function mapJobProjection(
     ...(job.failure
       ? {
           failure: {
-            code: job.failure.code ?? undefined,
+            ...(job.failure.code === null ? {} : { code: job.failure.code }),
             step: stepLabel(job.failure.step),
             reason: boundedFailureMessage(job.failure.code),
             recovery:
