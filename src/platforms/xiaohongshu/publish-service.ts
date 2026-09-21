@@ -123,15 +123,22 @@ function preparedFingerprint(job: Job): string {
   if (
     typeof prepared !== "object" ||
     prepared === null ||
-    Array.isArray(prepared) ||
-    typeof prepared.contentFingerprint !== "string" ||
-    prepared.contentFingerprint.length === 0
+    Array.isArray(prepared)
   ) {
     throw new XiaohongshuPublishStateError(
       "The durable prepared-for-approval checkpoint is missing its content fingerprint.",
     );
   }
-  return prepared.contentFingerprint;
+
+  const value = (prepared as Readonly<Record<string, unknown>>)[
+    "contentFingerprint"
+  ];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new XiaohongshuPublishStateError(
+      "The durable prepared-for-approval checkpoint is missing its content fingerprint.",
+    );
+  }
+  return value;
 }
 
 function requireAffirmativeApproval(
