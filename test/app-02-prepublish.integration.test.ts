@@ -630,11 +630,14 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
         blocked: true,
         error: { code: "MATERIAL_SOURCE_UNAVAILABLE" },
         projection: {
-          status: "preparing_materials",
+          status: "created",
         },
       });
       expect(application.runtime.jobs.getById(created.id)?.status).toBe(
-        "preparing_materials",
+        "created",
+      );
+      expect(application.runtime.jobs.getById(created.id)?.status).not.toBe(
+        "failed",
       );
 
       const second = await application.runtime.orchestrator.continueJob(
