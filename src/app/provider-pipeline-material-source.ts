@@ -19,6 +19,23 @@ import {
 
 const MATERIAL_PLAN_STEP_KEY = "material_plan";
 
+export type ProviderPipelineMaterialStage =
+  | "material_plan"
+  | "material_preparation";
+
+export class ProviderPipelineMaterialStageError extends PrepublishMaterialResolutionError {
+  constructor(
+    readonly stage: ProviderPipelineMaterialStage,
+    code: string,
+    retryable: boolean,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(code, retryable, message, options);
+    this.name = "ProviderPipelineMaterialStageError";
+  }
+}
+
 type ProviderPipelineJobs = Pick<
   JobRepository,
   "getById" | "getStepsForJob"
@@ -73,6 +90,66 @@ function requireImageTextPlan(
   return plan;
 }
 
+function materialPlanFailure(error: unknown): ProviderPipelineMaterialStageError {
+  if (error instanceof ProviderPipelineMaterialStageError) {
+    return error;
+  }
+
+  if (error instanceof PrepublishMaterialResolutionError) {
+    return new ProviderPipelineMaterialStageError(
+      "material_plan",
+      error.code,
+      error.retryable,
+      "Provider pipeline could not produce a valid MaterialPlan.",
+      { cause: error },
+    );
+  }
+
+  return new ProviderPipelineMaterialStageError(
+    "material_plan",
+    "MATERIAL_GENERATION_FAILED",
+    false,
+    "Provider pipeline could not produce a valid MaterialPlan.",
+    { cause: error },
+  );
+}
+
+function materialPreparationFailure(
+  error: unknown,
+): ProviderPipelineMaterialStageError {
+  if (error instanceof ProviderPipelineMaterialStageError) {
+    return error;
+  }
+
+  if (error instanceof MaterialPreparationProviderError) {
+    return new ProviderPipelineMaterialStageError(
+      "material_preparation",
+      error.code,
+      error.retryable,
+      "Provider pipeline material preparation failed.",
+      { cause: error },
+    );
+  }
+
+  if (error instanceof PrepublishMaterialResolutionError) {
+    return new ProviderPipelineMaterialStageError(
+      "material_preparation",
+      error.code,
+      error.retryable,
+      "Provider pipeline material preparation failed.",
+      { cause: error },
+    );
+  }
+
+  return new ProviderPipelineMaterialStageError(
+    "material_preparation",
+    "MATERIAL_GENERATION_FAILED",
+    false,
+    "Provider pipeline material preparation failed before producing a valid MaterialPack.",
+    { cause: error },
+  );
+}
+
 /**
  * Real material source for the APP-02 pre-publish seam.
  *
@@ -98,16 +175,22 @@ export function createProviderPipelineMaterialSource(dependencies: {
         );
       }
 
-      const persistedPlan = findPersistedMaterialPlan(
-        dependencies.jobs,
-        input.jobId,
-      );
-      const plan = requireImageTextPlan(
-        input.jobId,
-        persistedPlan ??
-          (await dependencies.contentSecretary.createMaterialPlan(input.jobId))
-            .plan,
-      );
+      let plan: ImageTextMaterialPlan;
+      try {
+        const persistedPlan = findPersistedMaterialPlan(
+          dependencies.jobs,
+          input.jobId,
+        );
+        plan = requireImageTextPlan(
+          input.jobId,
+          persistedPlan ??
+            (await dependencies.contentSecretary.createMaterialPlan(input.jobId))
+              .plan,
+        );
+      } catch (error) {
+        throw materialPlanFailure(error);
+      }
+
       try {
         const prepared = await dependencies.preparation.prepareImageText(
           input.jobId,
@@ -120,15 +203,7 @@ export function createProviderPipelineMaterialSource(dependencies: {
           pack: prepared.pack,
         };
       } catch (error) {
-        if (error instanceof MaterialPreparationProviderError) {
-          throw new PrepublishMaterialResolutionError(
-            error.code,
-            error.retryable,
-            error.message,
-            { cause: error },
-          );
-        }
-        throw error;
+        throw materialPreparationFailure(error);
       }
     },
   };

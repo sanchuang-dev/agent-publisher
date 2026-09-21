@@ -38,6 +38,43 @@ type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
 
+const boundedMaterialFailureStages = [
+  "material_plan",
+  "material_preparation",
+  "material_source",
+] as const;
+
+type BoundedMaterialFailureStage =
+  (typeof boundedMaterialFailureStages)[number];
+
+interface BoundedMaterialFailureDiagnostic {
+  readonly stage: BoundedMaterialFailureStage;
+  readonly code: string;
+}
+
+function boundedMaterialFailureDiagnostic(
+  error: unknown,
+): BoundedMaterialFailureDiagnostic {
+  if (error instanceof PrepublishMaterialResolutionError) {
+    const candidateStage = (error as { readonly stage?: unknown }).stage;
+    const stage: BoundedMaterialFailureStage =
+      candidateStage === "material_plan" ||
+      candidateStage === "material_preparation"
+        ? candidateStage
+        : "material_source";
+    const code = /^[A-Z0-9_]{1,64}$/.test(error.code)
+      ? error.code
+      : "MATERIAL_SOURCE_UNAVAILABLE";
+
+    return { stage, code };
+  }
+
+  return {
+    stage: "material_source",
+    code: "MATERIAL_SOURCE_UNAVAILABLE",
+  };
+}
+
 export interface CreatePrepublishJobInput {
   readonly brief: string;
 }
@@ -479,16 +516,20 @@ export class XiaohongshuPrepublishOrchestrator {
       const retryable =
         error instanceof PrepublishMaterialResolutionError &&
         error.retryable;
+      const diagnostic = boundedMaterialFailureDiagnostic(error);
 
       if (!retryable) {
-        this.#recordMaterialSourceFailure(job.id);
+        this.#recordMaterialSourceFailure(job.id, diagnostic);
       }
 
       throw new PrepublishMaterialSourceError({ cause: error });
     }
   }
 
-  #recordMaterialSourceFailure(jobId: string): void {
+  #recordMaterialSourceFailure(
+    jobId: string,
+    diagnostic: BoundedMaterialFailureDiagnostic,
+  ): void {
     const job = this.#requireJob(jobId);
     if (job.status !== "created" && job.status !== "preparing_materials") {
       return;
@@ -500,6 +541,8 @@ export class XiaohongshuPrepublishOrchestrator {
         status: "failed",
         checkpoint: {
           phase: "material_source_failed",
+          materialFailureStage: diagnostic.stage,
+          materialFailureCode: diagnostic.code,
         },
         step: {
           id: this.#createId(),
@@ -507,8 +550,7 @@ export class XiaohongshuPrepublishOrchestrator {
           status: "failed",
           attempt: this.#nextStepAttempt(jobId, PREPUBLISH_MATERIAL_STEP_KEY),
           errorCode: "MATERIAL_SOURCE_UNAVAILABLE",
-          errorMessage:
-            "The configured pre-publish material source could not prepare valid material.",
+          errorMessage: `Material source failed at ${diagnostic.stage} (${diagnostic.code}).`,
           finishedAt: now,
         },
       });
