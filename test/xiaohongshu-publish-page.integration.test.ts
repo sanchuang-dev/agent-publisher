@@ -156,6 +156,23 @@ describe("Xiaohongshu deterministic final-publish page fixtures", () => {
     }
   });
 
+  test("does not accept generic submission success as publish evidence", async () => {
+    const page = await fixturePage(
+      browser,
+      "<main><div>提交成功</div></main>",
+    );
+
+    try {
+      await expect(
+        verifyXiaohongshuPublishResult({ page, timeoutMs: 50 }),
+      ).rejects.toBeInstanceOf(
+        XiaohongshuPublishVerificationUncertainError,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+
   test("keeps an ambiguous result uncertain", async () => {
     const page = await fixturePage(
       browser,
