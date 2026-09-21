@@ -307,11 +307,28 @@ test("real Web assignment reaches APP-02 waiting_for_approval without publish", 
   });
 
   const publishButton = page.getByRole("button", { name: "批准发布" });
-  assert.equal(await publishButton.isDisabled(), true);
+  assert.equal(await publishButton.isDisabled(), false);
   assert.equal(
-    await page.getByText("当前仅到审批前，最终发布尚未启用。").count(),
+    await page
+      .getByText(
+        "批准后将执行一次不可逆发布；结果不确定时只核验，不会自动再次发布。",
+      )
+      .count(),
     1,
   );
+
+  const jobId = decodeURIComponent(
+    page.url().match(/#\\/task\\/([^/?#]+)/)?.[1] ?? "",
+  );
+  assert.notEqual(jobId, "");
+  assert.equal(
+    application.runtime.externalActions.getByKey(
+      jobId,
+      "publish:xiaohongshu:final",
+    ),
+    null,
+  );
+  assert.equal(application.runtime.evidence.getByJob(jobId).length, 0);
 
   const durableUrl = page.url();
   await page.reload({ waitUntil: "domcontentloaded" });
