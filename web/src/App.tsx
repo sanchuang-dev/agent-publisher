@@ -228,45 +228,9 @@ function TaskDetail({
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let unsubscribe: () => void = () => undefined;
     const repository = fixtureState ? fixtureTaskRepository : taskRepository;
     const key = fixtureState ?? taskId;
-
-    const scheduleContinue = (current: TaskFixture) => {
-      if (fixtureState || cancelled) return;
-
-      if (!shouldAutoContinueTask(current)) {
-        return;
-      }
-
-      const status = current.backendStatus;
-      const delay =
-        status === "waiting_for_login" ||
-        status === "waiting_for_approval" ||
-        status === "publishing"
-          ? 2500
-          : 120;
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        void taskRepository
-          .continue(taskId)
-          .then((next) => {
-            if (cancelled) return;
-            setTask(next);
-            setLoadError(null);
-            scheduleContinue(next);
-          })
-          .catch((error: unknown) => {
-            if (cancelled) return;
-            setLoadError(
-              error instanceof Error
-                ? error.message
-                : "继续任务失败，请检查 APP-02 runtime。",
-            );
-          });
-      }, delay);
-    };
 
     void repository
       .get(key)
@@ -280,10 +244,8 @@ function TaskDetail({
             if (!cancelled) {
               setTask(next);
               setLoadError(null);
-              scheduleContinue(next);
             }
           });
-          scheduleContinue(loaded);
         }
       })
       .catch((error: unknown) => {
@@ -298,10 +260,41 @@ function TaskDetail({
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
       unsubscribe();
     };
   }, [fixtureState, taskId]);
+
+  useEffect(() => {
+    if (fixtureState || !task || !shouldAutoContinueTask(task)) {
+      return;
+    }
+
+    const status = task.backendStatus;
+    const delay =
+      status === "waiting_for_login" ||
+      status === "waiting_for_approval" ||
+      status === "publishing"
+        ? 2500
+        : 120;
+
+    const timer = setTimeout(() => {
+      void taskRepository
+        .continue(taskId)
+        .then((next) => {
+          setTask(next);
+          setLoadError(null);
+        })
+        .catch((error: unknown) => {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "继续任务失败，请检查 APP-02 runtime。",
+          );
+        });
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [fixtureState, task, taskId]);
 
   if (!task) {
     return (
