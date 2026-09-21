@@ -28,10 +28,12 @@ import {
 } from "../src/platforms/xiaohongshu/image-text-prepare.js";
 import {
   MATERIAL_COPY_STEP_KEY,
+  MATERIAL_COVER_STEP_KEY,
   MATERIAL_DESIGN_STEP_KEY,
   MATERIAL_IMAGES_STEP_KEY,
   MaterialPreparationProviderError,
   MaterialPreparationService,
+  createBuiltinBaselineCoverProvider,
   createBuiltinMaterialProviderSlots,
   type ImageTextMaterialPlan,
   type MaterialProviderSlots,
@@ -136,6 +138,9 @@ async function createHarness(name: string): Promise<Harness> {
     jobs,
     providers,
     assetStore: store,
+    baselineCover: createBuiltinBaselineCoverProvider({
+      assetStore: store,
+    }),
   });
 
   const harness = {
@@ -243,6 +248,9 @@ describe("MaterialPreparationService integration", () => {
       },
     });
     expect(resolution.pack.images).toHaveLength(expectedPlan.imageCount);
+    expect(resolution.pack.images.map((asset) => asset.assetId)).not.toContain(
+      resolution.pack.cover.assetId,
+    );
     expect(harness.calls).toEqual({ text: 1, image: 1, design: 1 });
 
     const resolver: AssetPathResolver = (asset) =>
@@ -269,6 +277,7 @@ describe("MaterialPreparationService integration", () => {
       "material_plan",
       MATERIAL_COPY_STEP_KEY,
       MATERIAL_IMAGES_STEP_KEY,
+      MATERIAL_COVER_STEP_KEY,
       MATERIAL_DESIGN_STEP_KEY,
     ]);
   }, 30_000);
@@ -310,6 +319,9 @@ describe("MaterialPreparationService integration", () => {
       jobs: harness.jobs,
       providers: harness.providers,
       assetStore: harness.store,
+      baselineCover: createBuiltinBaselineCoverProvider({
+        assetStore: harness.store,
+      }),
     });
     const restartedSource = createProviderPipelineMaterialSource({
       jobs: harness.jobs,
@@ -333,6 +345,7 @@ describe("MaterialPreparationService integration", () => {
       ["material_plan", 1, "succeeded"],
       [MATERIAL_COPY_STEP_KEY, 1, "succeeded"],
       [MATERIAL_IMAGES_STEP_KEY, 1, "succeeded"],
+      [MATERIAL_COVER_STEP_KEY, 1, "succeeded"],
       [MATERIAL_DESIGN_STEP_KEY, 1, "succeeded"],
     ]);
   }, 30_000);
@@ -385,6 +398,9 @@ describe("MaterialPreparationService integration", () => {
       jobs: harness.jobs,
       providers,
       assetStore: harness.store,
+      baselineCover: createBuiltinBaselineCoverProvider({
+        assetStore: harness.store,
+      }),
     });
 
     await expect(
@@ -404,6 +420,7 @@ describe("MaterialPreparationService integration", () => {
     expect(result.reusedSteps).toEqual([
       MATERIAL_COPY_STEP_KEY,
       MATERIAL_IMAGES_STEP_KEY,
+      MATERIAL_COVER_STEP_KEY,
     ]);
     expect(harness.calls.text).toBe(1);
     expect(harness.calls.image).toBe(1);
@@ -439,6 +456,9 @@ describe("MaterialPreparationService integration", () => {
         image: harness.providers.image,
       },
       assetStore: harness.store,
+      baselineCover: createBuiltinBaselineCoverProvider({
+        assetStore: harness.store,
+      }),
     });
 
     const result = await service.prepareImageText(
@@ -449,6 +469,9 @@ describe("MaterialPreparationService integration", () => {
     expect(result.pack.mode).toBe("image_text");
     expect(result.pack.status).toBe("ready_with_degradation");
     expect(result.pack.design).toBeNull();
+    expect(result.pack.images.map((asset) => asset.assetId)).not.toContain(
+      result.pack.cover.assetId,
+    );
     expect(result.pack.warnings).toEqual([
       expect.objectContaining({
         code: "DESIGN_PROVIDER_UNAVAILABLE",
