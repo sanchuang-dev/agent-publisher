@@ -403,7 +403,13 @@ function TaskDetail({
         </aside>
 
         <Timeline task={task} />
-        <WorkSurface task={task} />
+        <WorkSurface
+          task={task}
+          onTaskUpdate={(next) => {
+            setTask(next);
+            setLoadError(null);
+          }}
+        />
       </div>
     </main>
   );
@@ -519,7 +525,13 @@ function WorkerTimeline({
   );
 }
 
-function WorkSurface({ task }: { task: TaskFixture }) {
+function WorkSurface({
+  task,
+  onTaskUpdate,
+}: {
+  task: TaskFixture;
+  onTaskUpdate: (task: TaskFixture) => void;
+}) {
   const kind = getWorkSurfaceKind(task.state);
 
   if (kind === "material") {
@@ -560,7 +572,9 @@ function WorkSurface({ task }: { task: TaskFixture }) {
     return <Browser task={task} takeover={kind === "takeover"} />;
   }
 
-  if (kind === "approval") return <Approval task={task} />;
+  if (kind === "approval") {
+    return <Approval task={task} onTaskUpdate={onTaskUpdate} />;
+  }
   if (kind === "evidence") return <Evidence task={task} />;
   return <Failure task={task} />;
 }
@@ -686,7 +700,13 @@ function Browser({
   );
 }
 
-function Approval({ task }: { task: TaskFixture }) {
+function Approval({
+  task,
+  onTaskUpdate,
+}: {
+  task: TaskFixture;
+  onTaskUpdate: (task: TaskFixture) => void;
+}) {
   const approval = task.approval!;
   const [submitting, setSubmitting] = useState(false);
   const [approvalError, setApprovalError] = useState<string | null>(null);
@@ -698,6 +718,9 @@ function Approval({ task }: { task: TaskFixture }) {
     setApprovalError(null);
     void taskRepository
       .approve(task.id, approval.actionId)
+      .then((next) => {
+        onTaskUpdate(next);
+      })
       .catch((error: unknown) => {
         setApprovalError(
           error instanceof Error
