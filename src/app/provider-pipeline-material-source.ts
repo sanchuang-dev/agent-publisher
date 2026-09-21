@@ -7,9 +7,13 @@ import type {
   ImageTextMaterialPlan,
   MaterialPlan,
 } from "../materials/contracts.js";
-import type { MaterialPreparationService } from "../materials/material-preparation-service.js";
+import {
+  MaterialPreparationProviderError,
+  type MaterialPreparationService,
+} from "../materials/material-preparation-service.js";
 import {
   PROVIDER_PIPELINE_MATERIAL_SOURCE,
+  PrepublishMaterialResolutionError,
   type PrepublishMaterialSource,
 } from "./prepublish-material-source.js";
 
@@ -104,16 +108,28 @@ export function createProviderPipelineMaterialSource(dependencies: {
           (await dependencies.contentSecretary.createMaterialPlan(input.jobId))
             .plan,
       );
-      const prepared = await dependencies.preparation.prepareImageText(
-        input.jobId,
-        plan,
-      );
+      try {
+        const prepared = await dependencies.preparation.prepareImageText(
+          input.jobId,
+          plan,
+        );
 
-      return {
-        source: PROVIDER_PIPELINE_MATERIAL_SOURCE,
-        generatedFromBrief: true,
-        pack: prepared.pack,
-      };
+        return {
+          source: PROVIDER_PIPELINE_MATERIAL_SOURCE,
+          generatedFromBrief: true,
+          pack: prepared.pack,
+        };
+      } catch (error) {
+        if (error instanceof MaterialPreparationProviderError) {
+          throw new PrepublishMaterialResolutionError(
+            error.code,
+            error.retryable,
+            error.message,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
     },
   };
 }
