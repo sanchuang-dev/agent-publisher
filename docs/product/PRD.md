@@ -224,17 +224,24 @@ The product should capture the strongest practical evidence available, such as:
 
 ## 7. Material generation architecture
 
-Material generation is a pipeline, not one monolithic model call.
+Material generation is a checkpointed pipeline, not one monolithic model call.
 
 ```text
 CreativeBrief
     ↓
+Content Secretary
+    ↓
 MaterialPlan
     ↓
-TextProvider
-ImageProvider
-DesignProvider
-VideoProvider
+MaterialPreparationService
+    ├─ TextProvider
+    ├─ ImageProvider
+    ├─ DesignProvider
+    │    ├─ Builtin renderer      REQUIRED image-text baseline
+    │    └─ external design       optional enhancement
+    └─ VideoProvider              optional enhancement
+    ↓
+Publisher-owned AssetStore
     ↓
 MaterialPack
     ↓
@@ -243,39 +250,50 @@ Platform Adapter
 
 Provider responsibilities:
 
-- **TextProvider** — title, body, tags, script/copy.
-- **ImageProvider** — original visual assets.
-- **DesignProvider** — template/layout/cover composition such as Canva or another renderer.
-- **VideoProvider** — generated video such as an external video model.
+- **TextProvider** — produces resolved title/body/tags.
+- **ImageProvider** — produces controlled source imagery.
+- **DesignProvider** — receives resolved copy/source images and returns platform-publishable cover/images; an editable/source design reference is optional provenance.
+- **VideoProvider** — produces video through an external capability when configured.
+- **AssetStore** — owns durable Publisher asset identity and bytes; platform adapters consume `asset://` references rather than provider delivery URLs.
 
-Canva, image models, and video models are provider implementations, not core product dependencies.
+### Builtin image-text baseline
 
-Concrete vendor selection is intentionally deferred for the MVP. Keep provider slots for `TextProvider`, `ImageProvider`, `DesignProvider`, and `VideoProvider`. Unconfigured providers should report capability unavailable instead of forcing early vendor lock-in.
+The image-text MVP must remain usable with Canva unconfigured, VideoProvider unavailable, and external media enhancement services absent.
+
+The dependable baseline is:
+
+```text
+brief
+  ↓
+MaterialPlan
+  ↓
+Builtin image-text material generation
+  ↓
+Publisher-owned cover/images
+  ↓
+MaterialPack
+  ↓
+Xiaohongshu prepare
+```
+
+A valid baseline therefore requires real uploadable image assets. Fake providers, a design-source reference without exported images, or a flow that only succeeds when Canva is available do not satisfy the MVP.
+
+The Builtin renderer consumes a Publisher-owned bounded static layout contract rather than arbitrary model-generated HTML/JavaScript. The product contract stays renderer-independent; the current implementation uses SafeRichLayout mapped to the selected deterministic renderer.
 
 ### Graceful degradation
 
-Video is an enhancement, not a hard dependency for the MVP.
+Video and external design services are enhancements, not hard dependencies for the image-text MVP.
 
-If video generation fails while text and images are ready, the job may continue as a usable image/text package when the selected task allows that fallback.
+Provider/item failures should remain local where possible. Successfully accepted material steps are checkpointed and reused rather than regenerating the whole pack.
 
-Material items should be independently retryable rather than forcing whole-pack regeneration.
-
-Suggested item states:
-
-```text
-planned
-generating
-ready
-failed
-rejected
-```
-
-Suggested pack readiness:
+Material pack readiness remains explicit:
 
 ```text
 ready
 ready_with_degradation
 ```
+
+Fallback must remain visible and must not silently change the user-selected publish mode.
 
 ## 8. Agent orchestration
 
