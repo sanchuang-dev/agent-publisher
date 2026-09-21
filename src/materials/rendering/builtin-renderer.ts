@@ -327,6 +327,8 @@ class TakumiBuiltinLayoutRenderer implements BuiltinLayoutRenderer {
         data: font.data,
         name: font.name,
         weight: font.weight,
+        subsetOf: font.subsetOf,
+        subsetRank: font.subsetRank,
       });
     }
 
