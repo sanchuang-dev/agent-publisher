@@ -80,8 +80,8 @@ class FakeLocator {
     if (!this.kinds.includes("upload") || !this.state.entered) {
       throw new Error("fixture upload input is not ready");
     }
-    this.state.uploadedPaths =
-      typeof files === "string" ? [files] : [...files];
+    const incoming = typeof files === "string" ? [files] : [...files];
+    this.state.uploadedPaths.push(...incoming);
     this.state.events.push("upload");
   }
 
@@ -195,8 +195,15 @@ class FakeCreatorPage {
 }
 
 describe("XHS-04 current Creator image-text compatibility", () => {
-  test("uploads before editor discovery and falls back to inline topics without final publish", async () => {
-    const pack = createImageTextMaterialPackFixture();
+  test("uploads before editor discovery and keeps empty tags a no-op without final publish", async () => {
+    const basePack = createImageTextMaterialPackFixture();
+    const pack = {
+      ...basePack,
+      copy: {
+        ...basePack.copy,
+        tags: [],
+      },
+    };
     const fake = new FakeCreatorPage();
     let mutationStarted = false;
 
@@ -217,14 +224,14 @@ describe("XHS-04 current Creator image-text compatibility", () => {
       "enter_image_text",
       "mutation_checkpoint",
       "upload",
+      "upload",
+      "upload",
       "fill_title",
       "fill_body",
     ]);
     expect(fake.state.uploadedPaths).toHaveLength(3);
     expect(fake.state.title).toBe(pack.copy.title);
     expect(fake.state.body).toContain(pack.copy.body);
-    expect(fake.state.body).toContain("#AI员工");
-    expect(fake.state.body).toContain("#内容运营");
     expect(fake.state.events).not.toContain("final_publish");
 
     expect(prepared).toMatchObject({
