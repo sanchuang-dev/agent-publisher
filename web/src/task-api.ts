@@ -443,7 +443,8 @@ export function shouldAutoContinueTask(task: TaskFixture): boolean {
   return (
     status === "created" ||
     status === "preparing_materials" ||
-    status === "preparing_publish"
+    status === "preparing_publish" ||
+    status === "publishing"
   );
 }
 
