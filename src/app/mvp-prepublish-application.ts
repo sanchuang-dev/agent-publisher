@@ -1,5 +1,6 @@
 import type { FastifyServerOptions } from "fastify";
 
+import { createActionRoutes } from "../api/routes/actions.js";
 import { createJobEventRoutes } from "../api/routes/job-events.js";
 import { createJobRoutes } from "../api/routes/jobs.js";
 import { SseConnectionRegistry } from "../api/sse.js";
@@ -153,6 +154,7 @@ export function createMvpPrepublishApplication(
     dependencies: { sseConnections },
     routeModules: {
       jobs: createJobRoutes(orchestrator),
+      actions: createActionRoutes(orchestrator),
       events: createJobEventRoutes({
         events,
         projections,
