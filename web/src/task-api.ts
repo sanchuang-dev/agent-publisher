@@ -264,7 +264,12 @@ function mapJobProjection(
 ): TaskFixture {
   const clarificationRequired =
     job.humanAction?.type === "clarification_required";
-  const state = clarificationRequired ? "failed" : fixtureState(job.status);
+  const state =
+    clarificationRequired || job.failure
+      ? "failed"
+      : job.status === "waiting_for_approval" && !job.needsHuman
+        ? "preparing_publish"
+        : fixtureState(job.status);
   const agentRuntime =
     state === "preparing_publish"
       ? getLiveViewDescriptor(
