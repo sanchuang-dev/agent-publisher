@@ -21,8 +21,8 @@ function parseResolveBody(
   }
 
   const body = value as ResolveApprovalBody;
-  return typeof body.approved === "boolean"
-    ? { approved: body.approved }
+  return body.approved === true
+    ? { approved: true }
     : null;
 }
 
@@ -39,7 +39,7 @@ export function createActionRoutes(
             error: {
               code: "INVALID_REQUEST",
               message:
-                "approval_required resolution expects { approved: boolean }.",
+                "PUB-02 accepts only durable affirmative approval: { approved: true }.",
             },
           });
         }
