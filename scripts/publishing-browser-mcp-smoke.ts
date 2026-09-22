@@ -14,12 +14,13 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { AgentDefinition } from "../src/agent/definition.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
-import { resolveCdpWebSocketEndpoint } from "../src/browser/providers/docker-cdp-transport.js";
+import { DockerCdpBrowserProvider } from "../src/browser/providers/docker-cdp.js";
+import type { BrowserSession } from "../src/browser/provider.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
   createPublishingBrowserMcpProfile,
   createPublishingBrowserResourceLoader,
-  type PublishingBrowserCapabilityGrant,
+  issuePublishingBrowserCapabilityGrant,
 } from "../src/agent/publishing-browser-mcp.js";
 
 const cdpEndpoint =
@@ -79,7 +80,7 @@ function serializedMessages(context: { messages: readonly unknown[] }): string {
 function refFor(messages: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = messages.match(
-    new RegExp(`${escaped}[^\\n]*\\[ref=(e\\d+)\\]`, "i"),
+    new RegExp(`${escaped}[^\\n]*\\[ref=(g\\d+:e\\d+)\\]`, "i"),
   );
   if (!match?.[1]) {
     throw new Error(`Could not find snapshot ref for ${label}`);
@@ -98,7 +99,7 @@ async function playwrightMcpPids(): Promise<Set<number>> {
 
   await Promise.all(
     entries
-      .filter((entry) => entry.isDirectory() && /^\\d+$/.test(entry.name))
+      .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
       .map(async (entry) => {
         try {
           const cmdline = await readFile(`/proc/${entry.name}/cmdline`, "utf8");
@@ -139,6 +140,8 @@ async function main(): Promise<void> {
   await writeFile(coverPath, "BRW-01 controlled upload");
   const baselineMcpPids = await playwrightMcpPids();
   const server = await startFixture();
+  const browserProvider = new DockerCdpBrowserProvider({ endpoint: cdpEndpoint });
+  let browserSession: BrowserSession | undefined;
   let session: Awaited<ReturnType<PiAgentHost["createSession"]>> | undefined;
 
   try {
@@ -150,15 +153,29 @@ async function main(): Promise<void> {
     });
     modelRuntime.registerNativeProvider(faux.provider);
 
-    const grant: PublishingBrowserCapabilityGrant = {
+    browserSession = await browserProvider.acquire({});
+    const grant = await issuePublishingBrowserCapabilityGrant({
       jobId: "brw01-docker-smoke",
-      browserSessionId: "brw01-docker-browser",
-      cdpEndpoint,
+      browserProvider,
+      browserSession,
       allowedOrigins: [fixtureOrigin],
       uploadRoot,
-    };
+      authorizeClick: async ({ observedTarget }) => {
+        if (
+          observedTarget.includes("上传图文") ||
+          observedTarget.includes("Choose File")
+        ) {
+          return { allowed: true };
+        }
+        return {
+          allowed: false,
+          reason:
+            "BRW-01 Publisher fixture policy denied a click outside known safe pre-publish affordances",
+        };
+      },
+    });
 
-    const browserMcpProfile = await createPublishingBrowserMcpProfile(grant);
+    const browserMcpProfile = createPublishingBrowserMcpProfile(grant);
 
     const definition: AgentDefinition = {
       id: "publishing-secretary-browser-smoke",
@@ -319,11 +336,11 @@ async function main(): Promise<void> {
         const latestSerialized = JSON.stringify(context.messages.at(-1));
         if (
           !latestSerialized.includes(
-            "not found in the current page snapshot",
+            "was not observed in the latest Publisher-controlled snapshot",
           )
         ) {
           throw new Error(
-            "Playwright MCP silently accepted a stale observation ref",
+            "Publisher silently accepted a stale observation token",
           );
         }
 
@@ -483,12 +500,24 @@ async function main(): Promise<void> {
     session = undefined;
     await waitForPidsToExit(activeMcpPids);
 
-    try {
-      await resolveCdpWebSocketEndpoint(cdpEndpoint, 5_000);
-    } catch (error) {
+    if (
+      !browserSession ||
+      browserSession.page.isClosed() ||
+      !browserSession.page.url().startsWith(fixtureOrigin)
+    ) {
       throw new Error(
-        "Disposing the AgentSession made the persistent Docker Chromium unavailable",
-        { cause: error },
+        "Disposing the AgentSession broke the BrowserProvider-owned persistent page",
+      );
+    }
+
+    await browserSession.page.goto("about:blank");
+    await browserProvider.release(browserSession.id);
+    browserSession = undefined;
+
+    const postReleaseHealth = await browserProvider.health();
+    if (postReleaseHealth.status !== "reachable") {
+      throw new Error(
+        "Releasing the BrowserProvider session made Docker Chromium unavailable",
       );
     }
 
@@ -496,6 +525,7 @@ async function main(): Promise<void> {
       JSON.stringify({
         status: "ok",
         evidence: [
+          "provider-owned-session-issued-mcp-attachment",
           "official-playwright-mcp-connected-over-cdp",
           "bounded-tool-catalog",
           "wrong-origin-blocked",
@@ -513,8 +543,18 @@ async function main(): Promise<void> {
       try {
         await session.dispose();
       } catch {
-        // Preserve the primary smoke failure; process teardown is bounded by
-        // the outer CI timeout and separately asserted on the success path.
+        // Preserve the primary smoke failure.
+      }
+    }
+    if (browserSession) {
+      try {
+        if (!browserSession.page.isClosed()) {
+          await browserSession.page.goto("about:blank");
+        }
+        await browserProvider.release(browserSession.id);
+      } catch {
+        // Preserve the primary smoke failure; normal success path asserts
+        // release + reconnect explicitly above.
       }
     }
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
