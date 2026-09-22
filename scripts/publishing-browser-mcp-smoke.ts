@@ -14,6 +14,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { AgentDefinition } from "../src/agent/definition.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
+import { resolveCdpWebSocketEndpoint } from "../src/browser/providers/docker-cdp-transport.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
   createPublishingBrowserMcpProfile,
@@ -291,10 +292,12 @@ async function main(): Promise<void> {
 
     await session.dispose();
 
-    const postDispose = await fetch(new URL("/json/version", cdpEndpoint));
-    if (!postDispose.ok) {
+    try {
+      await resolveCdpWebSocketEndpoint(cdpEndpoint, 5_000);
+    } catch (error) {
       throw new Error(
         "Disposing the AgentSession made the persistent Docker Chromium unavailable",
+        { cause: error },
       );
     }
 
