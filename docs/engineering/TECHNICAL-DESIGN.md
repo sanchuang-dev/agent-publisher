@@ -18,7 +18,7 @@ task
   → material preparation
   → visible browser
   → login / QR takeover when required
-  → deterministic form preparation
+  → Publishing Secretary browser preparation
   → explicit approval
   → publish once
   → verification / evidence
@@ -76,7 +76,7 @@ Node app
 
 The local browser is started with remote debugging enabled. The provider attaches with Playwright `connectOverCDP()`.
 
-Use this mode for fast development and selector debugging.
+Use this mode for fast development and browser capability/tool debugging.
 
 ### 3.2 Full Docker demo mode
 
@@ -126,24 +126,25 @@ The MVP acceptance environment is the Intel 32 GB MacBook Pro. Other platforms a
 │ Fastify Application                                              │
 │                                                                  │
 │  API → Job/Application Services → Publisher Orchestrator         │
-│                                  │                               │
-│                 ┌────────────────┴───────────────┐               │
-│                 │ reasoning required             │ deterministic │
-│                 ▼                                ▼               │
-│             PiAgentHost                 Platform / Material      │
-│                 │                       / Browser execution       │
-│          AgentDefinition                          │               │
-│                 │                                 │               │
-│          create / resume                          │               │
-│                 ▼                                 │               │
-│            Pi AgentSession                        │               │
-│          /       |        \                       │               │
-│       Skills    Tools      MCP                    │               │
-│                 │                                 │               │
-│                 └──────── structured result ──────┘               │
-│                                  │                               │
-│                  SQLite Job / checkpoint / actions               │
-│                  approval / external_actions / evidence          │
+│                    │                       │                     │
+│                    │ delegated Agent work  │ business control    │
+│                    ▼                       ▼                     │
+│               PiAgentHost          Job / checkpoint / actions    │
+│                    │                approval / external_actions   │
+│             AgentDefinition         validation / evidence         │
+│                    │                                             │
+│             create / resume                                      │
+│                    ▼                                             │
+│               Pi AgentSession                                    │
+│             /       |        \                                   │
+│          Skills    Tools      MCP                                │
+│                    │                                             │
+│       Publishing Secretary browser tools                         │
+│                    ▼                                             │
+│          BrowserProvider → Playwright → current page             │
+│                    │                                             │
+│             observed result                                      │
+│                    └──────────→ Publisher Orchestrator            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -410,20 +411,26 @@ MVP implementations:
 - `LocalDevToolsBrowserProvider` — host browser through CDP.
 - `DockerCdpBrowserProvider` — headful Chromium inside `browser-runtime`.
 
-Platform implementations receive a Playwright `Page`-level abstraction and do not issue raw CDP commands for normal work.
+Restricted browser tools and platform validation/publish-control services receive a Playwright `Page`-level abstraction and do not issue raw CDP commands for normal work. `BrowserProvider` and Playwright supply browser capability; neither decides which publishing route to take.
 
-### 6.3 PlatformPublisher
+### 6.3 Platform execution and publication control
+
+Normal pre-publish path selection belongs to the job-scoped Publishing Secretary AgentSession, guided by the platform Skill and current page observations.
+
+Deterministic platform code owns validation and the irreversible publication boundary. Conceptually:
 
 ```ts
-interface PlatformPublisher {
-  prepare(job: PublishJob, session: BrowserSession): Promise<PreparedPublication>;
-  verifyPrepared(input: PreparedPublication): Promise<PreparedVerification>;
-  publish(input: ApprovedPublication): Promise<PublishAttempt>;
+interface PlatformPublicationControl {
+  verifyPrepared(
+    job: PublishJob,
+    session: BrowserSession,
+  ): Promise<PreparedVerification>;
+  publishApproved(input: ApprovedPublication): Promise<PublishAttempt>;
   verifyResult(input: PublishAttempt): Promise<PublicationEvidence>;
 }
 ```
 
-The first implementation is `XiaohongshuPublisher`.
+The Xiaohongshu implementation may keep stable locators and readback helpers internally, but a `prepare()` selector workflow is not the target ownership model for the normal route.
 
 ### 6.4 Material providers
 
@@ -507,13 +514,13 @@ There is one Publisher Orchestrator and zero or more Orchestrator-owned AgentSes
 
 ```text
 Publisher Orchestrator
-├─ deterministic Job / platform / material steps
-├─ Content Secretary AgentSession        (when reasoning is needed)
-├─ Publishing Secretary AgentSession     (when reasoning is needed)
-└─ bounded Recovery AgentSession         (optional helper)
+├─ deterministic Job / governance / validation
+├─ deterministic material/provider services where appropriate
+├─ Content Secretary AgentSession
+└─ Publishing Secretary AgentSession     (task-local browser execution owner)
 ```
 
-Content Secretary and Publishing Secretary remain the two user-visible product roles. Additional helper sessions do not become independently visible employees unless a later product decision says so.
+Content Secretary and Publishing Secretary remain the two user-visible product roles. Additional bounded helper sessions may exist, but they do not become independently visible employees unless a later product decision says so.
 
 This is **multiple agent instances under one business orchestrator**, not an autonomous multi-agent organization.
 
@@ -524,41 +531,65 @@ The Orchestrator owns:
 - ActionRequests;
 - approval gates;
 - workflow retry policy;
-- control transfer between human and automation;
+- tool/control grants and transfer between human and automation;
+- prepared-state validation;
 - irreversible-side-effect authority;
 - Job completion.
 
-Pi AgentSessions own model-facing execution context and conversation continuity only.
+Pi AgentSessions own model-facing execution context and the bounded task execution delegated to them; they do not become the source of truth for Publisher business state.
 
 ### 7.1 Agent responsibilities
 
-Agent/model reasoning is allowed for:
+Agent/model execution is used for:
 
 - brief interpretation;
 - MaterialPlan creation;
 - copy generation/adaptation;
 - bounded external research through approved Tools/MCP;
-- bounded browser-state interpretation;
-- bounded recovery from an unexpected UI state;
+- Publishing Secretary browser execution for the current Job;
+- interpreting the current browser state;
+- planning and taking the next bounded browser action;
+- observing the resulting state and re-planning/recovering;
 - deciding that clarification or human takeover is safer.
 
-### 7.2 Deterministic responsibilities
+### 7.2 Publishing browser execution
 
-Normal browser execution is deterministic:
+Normal pre-publish browser work is owned by the Publishing Secretary AgentSession:
 
-- open publishing entry;
-- detect expected login state;
-- upload files;
-- fill known fields;
-- wait for processing;
-- read back values;
-- stop for approval;
-- click the approved publish action once;
-- verify result.
+```text
+observe
+  ↓
+plan
+  ↓
+act through restricted browser tools
+  ↓
+observe / validate local post-condition
+  ↓
+continue | recover/re-plan | hand off | fail visibly
+```
 
-The normal path must not be implemented as a free-running instruction such as "publish this post".
+Platform Skills provide knowledge: semantic cues, known entry points, successful patterns, locator hints, required post-conditions, identity handoff conditions, and prohibited actions. They are not fixed selector workflows.
 
-### 7.3 Pi session state vs Publisher business state
+`BrowserProvider` provides the session/page and Playwright implements browser mechanics. Neither component decides the task route.
+
+Stable locators and deterministic helpers remain useful implementation details when they match the observed page. They do not turn the normal path into an Orchestrator-owned sequence.
+
+### 7.3 Publisher-owned deterministic responsibilities
+
+Deterministic Publisher code owns:
+
+- Job status/phase transitions and checkpoint persistence;
+- browser-control lease and allowed tool surface;
+- login/MFA/device-verification handoff and safe resume;
+- prepared-form readback and validation against accepted material;
+- the explicit approval gate;
+- `external_actions` idempotency and publish-once authority;
+- result verification and verify-first recovery for an uncertain publish;
+- final Job completion.
+
+The irreversible Publish action is not exposed as a normal Agent browser tool. After approval, it executes through a Publisher-owned guarded operation. A lost/uncertain result is verified before any retry.
+
+### 7.4 Pi session state vs Publisher business state
 
 Keep two persistence domains:
 
@@ -634,7 +665,7 @@ interface ActionRequest {
 
 When an action is open:
 
-- the current deterministic step stops;
+- the current browser-mutating execution stops;
 - the checkpoint is committed;
 - browser automation must not continue mutating the page;
 - the UI shows the required intervention.
@@ -945,45 +976,46 @@ Only after verification establishes that the previous publish did not occur may 
 
 ## 14. Xiaohongshu publisher
 
-The Xiaohongshu skill owns platform-specific behavior.
+The Xiaohongshu Skill owns platform knowledge for browser preparation; the Publishing Secretary owns the task-local route through the current real page.
 
-Normal deterministic path:
+The Skill may provide:
 
-1. navigate to the supported publishing entry;
-2. classify login state;
-3. choose 图文 or 视频 according to the job;
-4. upload prepared media;
-5. wait for upload/processing completion;
-6. fill title/body/tags;
-7. read back the effective form values;
-8. validate against the prepared publication;
-9. pause for approval;
-10. publish once after approval;
-11. verify resulting platform state;
-12. record evidence.
+- supported publishing intent and entry-point knowledge;
+- semantic cues for login state, 图文/视频 mode, editors, upload readiness, and dialogs;
+- locator hints or successful interaction patterns learned from verified runs;
+- required material/prepared-state post-conditions;
+- identity/risk-control handoff conditions;
+- prohibited actions and known unsafe states.
 
-Selectors belong under the Xiaohongshu module. They must not leak into the Orchestrator.
+The Skill does not prescribe a single selector sequence that must be replayed.
 
-### 14.1 Recovery boundary
+### 14.1 Publishing Secretary execution loop
 
-Bounded agent recovery may:
+For normal pre-publish work the Publishing Secretary:
 
-- inspect text/DOM/accessibility information;
-- interpret changed labels;
-- find a semantically equivalent control;
-- interpret an unexpected dialog;
-- recommend human takeover;
-- return a candidate locator/next safe action.
+1. observes the real page state;
+2. plans the next bounded action from Job intent + Skill guidance;
+3. acts through restricted browser tools;
+4. observes the post-condition;
+5. continues, re-plans/recovers, requests human takeover, or fails visibly;
+6. stops when the prepared-state condition is reached.
 
-Recovery must not:
+Recovery is part of this normal loop rather than a separate Agent-only escape hatch after a deterministic workflow fails.
 
-- publish without approval;
-- repeatedly click possible publish buttons;
-- alter accepted user content merely to get through the flow;
-- bypass identity/risk controls;
-- retry an uncertain publish side effect.
+Stable selectors/helpers remain under the Xiaohongshu module and may be used as hints or safe primitives. They must not leak into the Orchestrator as the definition of the publishing path.
 
-If recovery cannot confidently return to the deterministic path, create a human action or fail visibly.
+### 14.2 Deterministic safety boundary
+
+Publisher-owned code must:
+
+- stop browser mutation while human identity control is active;
+- read back and validate prepared title/body/tags/assets against the accepted material before approval;
+- require a resolved approval before irreversible publication;
+- create/confirm the unique `external_actions` record and allow one guarded publish attempt;
+- verify platform result before marking success;
+- verify first rather than retry when a publish result is uncertain.
+
+The Publishing Secretary must not publish through an ordinary browser tool, repeatedly click possible publish controls, alter accepted content merely to get through the flow, bypass identity/risk controls, or retry an uncertain publish side effect.
 
 ## 15. Material pipeline
 
@@ -1274,15 +1306,16 @@ This is implementation order, not a set of GitHub work items.
 
    This foundation must precede implementation of the obsolete thin `AgentRuntime.start/resume/cancel` shape, custom Skill/Tool/MCP registries, or model/session machinery embedded ad hoc in providers.
 
-3. **Xiaohongshu deterministic pre-publish path**
-   - login detection;
-   - QR/human takeover;
-   - upload;
-   - fill;
-   - prepared-form verification;
-   - stop before publish.
+3. **Xiaohongshu Publishing Secretary pre-publish path**
+   - restricted browser observe/action tools over BrowserProvider/Playwright;
+   - Xiaohongshu Skill knowledge and success/forbidden-state guidance;
+   - task-local `observe → plan → act → observe/recover` execution;
+   - QR/human identity takeover;
+   - upload/fill through the Agent-chosen current-page path;
+   - deterministic prepared-form readback/verification;
+   - stop before approval.
 
-   This path does not wait for agent autonomy. It must remain usable without Pi for the normal deterministic flow.
+   The normal pre-publish route runs through the job-scoped Publishing Secretary session. BrowserProvider, Playwright, Skills, and stable locators supply capabilities/knowledge; they do not own the route.
 
 4. **Application/API + approval + publish-once + evidence**
    - Fastify application/bootstrap;
@@ -1292,12 +1325,12 @@ This is implementation order, not a set of GitHub work items.
    - one publish action;
    - verification.
 
-5. **Agent-powered product features**
+5. **Additional Agent-powered product features**
    - Content Secretary vertical slice through AgentDefinition / Pi AgentSession;
    - real TextProvider/ImageProvider integration where reasoning/provider boundaries require it;
    - optional video;
-   - bounded publishing/browser recovery through restricted inspect tools;
-   - no transfer of Job or irreversible-side-effect authority into Pi.
+   - accumulated platform Skill experience from verified successful runs;
+   - no transfer of Job, approval, or irreversible-side-effect authority into Pi.
 
 The first demo should not wait for a sophisticated material-provider matrix. A controlled MaterialPack fixture is acceptable while proving the browser/publish risk.
 
@@ -1326,7 +1359,7 @@ The technical baseline is proven when, on the agreed Docker demo machine:
 - Reuse mature application/agent infrastructure before rebuilding it.
 - Reusable AgentDefinitions; job-scoped AgentSessions.
 - Explicit resources over ambient developer-machine discovery.
-- Deterministic path first; agent recovery second.
+- Deterministic business governance; Agent-chosen browser path inside bounded tools/Skills.
 - Checkpoint every meaningful boundary.
 - Human identity proof is part of the product.
 - Publish is a side effect, not just another tool call.
