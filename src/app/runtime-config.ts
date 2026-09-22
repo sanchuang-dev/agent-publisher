@@ -43,6 +43,9 @@ export const APP_CONTROLLED_ASSET_ROOT_ENV =
   "APP_CONTROLLED_ASSET_ROOT" as const;
 export const APP_BROWSER_LIVE_VIEW_URL_ENV =
   "APP_BROWSER_LIVE_VIEW_URL" as const;
+export const APP_BROWSER_LIVE_VIEW_UPSTREAM_ENV =
+  "APP_BROWSER_LIVE_VIEW_UPSTREAM" as const;
+export const APP_WEB_ROOT_ENV = "APP_WEB_ROOT" as const;
 export const APP_MATERIAL_SOURCE_ENV = "APP_MATERIAL_SOURCE" as const;
 export const APP_PI_SESSION_DIR_ENV = "APP_PI_SESSION_DIR" as const;
 export const APP_HOST_ENV = "APP_HOST" as const;
@@ -170,6 +173,17 @@ function commonApplicationOptions(env: NodeJS.ProcessEnv) {
             APP_BROWSER_LIVE_VIEW_URL_ENV,
           )!,
         }),
+    ...(optionalEnv(env, APP_BROWSER_LIVE_VIEW_UPSTREAM_ENV) === undefined
+      ? {}
+      : {
+          browserLiveViewUpstream: optionalEnv(
+            env,
+            APP_BROWSER_LIVE_VIEW_UPSTREAM_ENV,
+          )!,
+        }),
+    ...(optionalEnv(env, APP_WEB_ROOT_ENV) === undefined
+      ? {}
+      : { webRoot: optionalEnv(env, APP_WEB_ROOT_ENV)! }),
   };
 }
 
