@@ -11,6 +11,12 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci --include=dev --no-audit --no-fund
 
+FROM dependencies AS web-build
+
+COPY tsconfig.json ./
+COPY web ./web
+RUN npm run build
+
 FROM node:22-bookworm-slim
 
 ENV NODE_ENV=production \
@@ -24,5 +30,6 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
 COPY skills ./skills
+COPY --from=web-build /app/web/dist ./web-dist
 
 CMD ["npm", "run", "start:api"]

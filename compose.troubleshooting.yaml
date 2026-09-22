@@ -1,0 +1,5 @@
+services:
+  browser-runtime:
+    ports:
+      # Troubleshooting only. The product path proxies Live View through :3000.
+      - "127.0.0.1:6080:6080"
