@@ -131,6 +131,7 @@ function isReservedProductPath(pathname: string): boolean {
     pathname.startsWith("/api/") ||
     pathname === "/health" ||
     pathname.startsWith("/health/") ||
+    pathname === BROWSER_LIVE_VIEW_PATH_PREFIX.slice(0, -1) ||
     pathname.startsWith(BROWSER_LIVE_VIEW_PATH_PREFIX)
   );
 }
@@ -218,12 +219,11 @@ export function registerProductSurface(
   const activeSockets = new Set<Duplex>();
 
   if (liveViewUpstream) {
-    server.route({
-      method: ["GET", "HEAD"],
-      url: BROWSER_LIVE_VIEW_PATH_PREFIX + "*",
-      handler: async (request, reply) =>
+    server.get(
+      BROWSER_LIVE_VIEW_PATH_PREFIX + "*",
+      async (request, reply) =>
         proxyBrowserHttp(request, reply, liveViewUpstream),
-    });
+    );
 
     const upgradeHandler = (
       request: IncomingMessage,
