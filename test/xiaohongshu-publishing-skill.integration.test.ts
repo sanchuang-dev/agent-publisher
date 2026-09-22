@@ -125,6 +125,12 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     expect(mandatoryPrompt).toContain(
       "recovery may use multiple loops",
     );
+    expect(xiaohongshuPublishingDefinition.systemPrompt).toContain(
+      "Ordinary page ambiguity is a reason to re-observe",
+    );
+    expect(xiaohongshuPublishingDefinition.systemPrompt).toContain(
+      "materially different safe exploration no longer produces new evidence",
+    );
 
     const mcpReadyDefinition = createXiaohongshuPublishingDefinition({
       servers: [
