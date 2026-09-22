@@ -296,18 +296,10 @@ function nestedMcpCall(
   };
 }
 
-export async function createPublishingBrowserMcpProfile(
+export function createPublishingBrowserMcpProfile(
   inputGrant: PublishingBrowserCapabilityGrant,
-): Promise<AgentMcpProfile> {
+): AgentMcpProfile {
   const grant = normalizeGrant(inputGrant);
-  // Reuse the BrowserProvider transport adapter. Chromium's DevTools discovery
-  // advertises a loopback WebSocket URL, and direct HTTP discovery through the
-  // Compose service hostname can be rejected by Chromium's Host validation.
-  // Resolve once here and give Playwright MCP the exact WebSocket endpoint.
-  const resolvedCdpEndpoint = await resolveCdpWebSocketEndpoint(
-    grant.cdpEndpoint,
-    10_000,
-  );
 
   return {
     servers: [
@@ -318,7 +310,7 @@ export async function createPublishingBrowserMcpProfile(
           command: process.execPath,
           args: [
             playwrightMcpCliPath,
-            `--cdp-endpoint=${resolvedCdpEndpoint}`,
+            `--cdp-endpoint=${grant.cdpEndpoint}`,
             `--allowed-origins=${grant.allowedOrigins.join(";")}`,
             "--block-service-workers",
             "--codegen=none",
