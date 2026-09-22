@@ -210,5 +210,8 @@ describe("APP-02 runtime configuration", () => {
     expect(compose).not.toMatch(
       /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?6080:6080"/m,
     );
+    expect(compose).not.toMatch(
+      /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?6080:6080"/m,
+    );
   });
 });
