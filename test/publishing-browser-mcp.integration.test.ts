@@ -514,7 +514,7 @@ describe("Publishing browser MCP capability", () => {
       },
       (context) => {
         const latest = JSON.stringify(context.messages.at(-1));
-        expect(latest).toContain("Publisher browser origin boundary crossed");
+        expect(latest).toContain("Publisher browser authority or origin boundary was crossed");
         expect(latest).not.toContain("BROWSER_CLICK_EXECUTED");
         return fauxAssistantMessage(fauxText("REDIRECT_RESULT_REDACTED"));
       },
@@ -523,6 +523,47 @@ describe("Publishing browser MCP capability", () => {
     await expect(
       session.run({ prompt: "Exercise an allowed click that redirects away." }),
     ).resolves.toMatchObject({ finalText: "REDIRECT_RESULT_REDACTED" });
+
+    await session.dispose();
+  });
+
+  test("invalidates an issued grant after BrowserProvider releases the acquired session", async () => {
+    const uploadRoot = await tempDir("publisher-browser-released-session-");
+    const harness = browserHarness();
+    const { grant: issued } = await grant(uploadRoot, { harness });
+    const faux = fauxProvider({ provider: "publisher-browser-released-session" });
+    const host = await createHost(faux, issued);
+    const session = await host.createSession({
+      definition: fixtureDefinition(),
+      scope: { jobId: "job-browser", role: "publishing" },
+    });
+
+    await harness.provider.release(harness.session.id);
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            server: PUBLISHING_BROWSER_MCP_SERVER,
+            tool: "browser_navigate",
+            args: { url: "https://creator.xiaohongshu.com/publish" },
+          },
+          { id: "released-session-navigation" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const latest = JSON.stringify(context.messages.at(-1));
+        expect(latest).toContain("session is not owned by this provider");
+        expect(latest).not.toContain("BROWSER_NAVIGATE_EXECUTED");
+        return fauxAssistantMessage(fauxText("RELEASED_SESSION_BLOCKED"));
+      },
+    ]);
+
+    await expect(
+      session.run({ prompt: "Attempt browser use after Provider release." }),
+    ).resolves.toMatchObject({ finalText: "RELEASED_SESSION_BLOCKED" });
 
     await session.dispose();
   });
