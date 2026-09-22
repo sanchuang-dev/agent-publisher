@@ -155,6 +155,9 @@ describe("APP-02 runtime configuration", () => {
     );
 
     expect(dockerfile).toMatch(/^COPY skills \.\/skills$/m);
+    expect(dockerfile).toMatch(
+      /^COPY --from=web-build \/app\/web\/dist \.\/web-dist$/m,
+    );
     expect(
       readFileSync(
         resolve(
@@ -176,8 +179,15 @@ describe("APP-02 runtime configuration", () => {
     );
 
     expect(compose).toMatch(/app-runtime:/);
-    expect(compose).toMatch(/profiles:\n\s+- app/);
+    expect(compose).not.toMatch(/profiles:\n\s+- app/);
     expect(compose).toMatch(/127\.0\.0\.1:3000:3000/);
+    expect(compose).toMatch(/APP_WEB_ROOT: "\/app\/web-dist"/);
+    expect(compose).toMatch(
+      /APP_BROWSER_LIVE_VIEW_UPSTREAM: ".*browser-runtime:6080.*"/,
+    );
+    expect(compose).toMatch(
+      /APP_BROWSER_LIVE_VIEW_URL: ".*\/browser-live-view\/vnc\.html.*"/,
+    );
     expect(compose).toMatch(
       /APP_MATERIAL_SOURCE: "\$\{APP_MATERIAL_SOURCE:-provider_pipeline\}"/,
     );
@@ -196,6 +206,9 @@ describe("APP-02 runtime configuration", () => {
     );
     expect(compose).not.toMatch(
       /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?9222:9222"/m,
+    );
+    expect(compose).not.toMatch(
+      /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?6080:6080"/m,
     );
   });
 });
