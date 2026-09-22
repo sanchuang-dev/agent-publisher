@@ -482,6 +482,7 @@ describe("Publishing browser MCP capability", () => {
     });
 
     let safeToken: string | undefined;
+    let providerVisibleRedirectTranscript = "";
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall(
@@ -513,25 +514,30 @@ describe("Publishing browser MCP capability", () => {
         );
       },
       (context) => {
-        const transcript = JSON.stringify(context.messages);
-        expect(transcript).toContain(
-          "Publisher browser authority or origin boundary was crossed",
-        );
-        // The underlying fixture execution text must be hidden from the model
-        // once the post-action origin check detects the boundary crossing.
-        const latestToolResult = [...context.messages]
-          .reverse()
-          .find((message) => message.role === "toolResult");
-        expect(JSON.stringify(latestToolResult)).not.toContain(
-          "BROWSER_CLICK_EXECUTED",
-        );
+        providerVisibleRedirectTranscript = JSON.stringify(context.messages);
         return fauxAssistantMessage(fauxText("REDIRECT_RESULT_REDACTED"));
       },
     ]);
 
-    await expect(
-      session.run({ prompt: "Exercise an allowed click that redirects away." }),
-    ).resolves.toMatchObject({ finalText: "REDIRECT_RESULT_REDACTED" });
+    const result = await session.run({
+      prompt: "Exercise an allowed click that redirects away.",
+    });
+
+    expect(result.finalText).toBe("REDIRECT_RESULT_REDACTED");
+    expect(providerVisibleRedirectTranscript).toContain(
+      "Publisher browser authority or origin boundary was crossed",
+    );
+    // The underlying fixture execution text must be hidden from the model once
+    // the post-action origin check detects the boundary crossing.
+    const parsedTranscript = JSON.parse(
+      providerVisibleRedirectTranscript,
+    ) as Array<{ role?: string; content?: unknown }>;
+    const latestToolResult = [...parsedTranscript]
+      .reverse()
+      .find((message) => message.role === "toolResult");
+    expect(JSON.stringify(latestToolResult)).not.toContain(
+      "BROWSER_CLICK_EXECUTED",
+    );
 
     await session.dispose();
   });
