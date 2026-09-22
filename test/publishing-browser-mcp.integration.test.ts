@@ -381,8 +381,8 @@ describe("Publishing browser MCP capability", () => {
       ),
       (context) => {
         const messages = JSON.stringify(context.messages);
-        publishToken = messages.match(/发布[^\\n]*\\[ref=(g\\d+:e99)\\]/)?.[1];
-        expect(publishToken).toMatch(/^g\\d+:e99$/);
+        publishToken = messages.match(/发布[^\n]*\[ref=(g\d+:e99)\]/)?.[1];
+        expect(publishToken).toMatch(/^g\d+:e99$/);
         return fauxAssistantMessage(
           fauxToolCall(
             "mcp",
