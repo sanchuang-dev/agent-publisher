@@ -1,6 +1,6 @@
 # Verified Creator mode-entry observation — 2026-09-22
 
-Status: reviewed experience candidate promoted by XHS-SKILL-01.
+Status: repository-managed experience reference; provenance, justified guidance, and limitations below are part of the review contract.
 
 ## Provenance
 
