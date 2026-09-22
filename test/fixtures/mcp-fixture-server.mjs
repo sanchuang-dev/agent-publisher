@@ -23,6 +23,40 @@ function tools() {
       description: "Returns the fixture process id for lifecycle verification.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
     },
+    {
+      name: "browser_navigate",
+      description: "Controlled browser navigation fixture.",
+      inputSchema: {
+        type: "object",
+        properties: { url: { type: "string" } },
+        required: ["url"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "browser_file_upload",
+      description: "Controlled browser upload fixture.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          paths: { type: "array", items: { type: "string" } },
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "browser_click",
+      description: "Controlled browser click fixture.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          element: { type: "string" },
+          target: { type: "string" },
+        },
+        required: ["target"],
+        additionalProperties: false,
+      },
+    },
   ];
 }
 
@@ -70,6 +104,39 @@ function responseFor(message) {
           ...base,
           result: {
             content: [{ type: "text", text: "DENIED_TOOL_EXECUTED" }],
+          },
+        };
+      }
+      if (name === "browser_navigate") {
+        return {
+          ...base,
+          result: {
+            content: [{
+              type: "text",
+              text: `BROWSER_NAVIGATE_EXECUTED:${String(args.url ?? "")}`,
+            }],
+          },
+        };
+      }
+      if (name === "browser_file_upload") {
+        return {
+          ...base,
+          result: {
+            content: [{
+              type: "text",
+              text: `BROWSER_UPLOAD_EXECUTED:${JSON.stringify(args.paths ?? [])}`,
+            }],
+          },
+        };
+      }
+      if (name === "browser_click") {
+        return {
+          ...base,
+          result: {
+            content: [{
+              type: "text",
+              text: `BROWSER_CLICK_EXECUTED:${String(args.element ?? "")}`,
+            }],
           },
         };
       }
