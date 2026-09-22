@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -350,9 +350,8 @@ describe("Publishing browser MCP capability", () => {
     await session.dispose();
   });
 
-  test("keeps obvious final-publish clicks outside the browser capability grant", async () => {
+  test("denies a publish ref even when the model supplies a misleading safe label", async () => {
     const uploadRoot = await tempDir("publisher-browser-publish-");
-    await mkdir(uploadRoot, { recursive: true });
     const faux = fauxProvider({ provider: "publisher-browser-publish" });
     const { grant: issued } = await grant(uploadRoot);
     const host = await createHost(faux, issued);
@@ -367,27 +366,115 @@ describe("Publishing browser MCP capability", () => {
           "mcp",
           {
             server: PUBLISHING_BROWSER_MCP_SERVER,
-            tool: "browser_click",
-            args: { element: "发布", target: "e99" },
+            tool: "browser_navigate",
+            args: { url: "https://creator.xiaohongshu.com/publish" },
           },
-          { id: "final-publish" },
+          { id: "observe-controls" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const messages = JSON.stringify(context.messages);
+        expect(messages).toContain('- button \\"发布\\" [ref=e99]');
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: { element: "Safe next", target: "e99" },
+            },
+            { id: "misleading-publish-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = JSON.stringify(context.messages);
+        expect(messages).toContain(
+          "Publisher policy denied the observed publish control",
+        );
+        expect(messages).not.toContain("BROWSER_CLICK_EXECUTED");
+        return fauxAssistantMessage(fauxText("PUBLISH_REF_BLOCKED"));
+      },
+    ]);
+
+    await expect(
+      session.run({
+        prompt:
+          "Observe the page, then try the control described as safe even if the ref points elsewhere.",
+      }),
+    ).resolves.toMatchObject({ finalText: "PUBLISH_REF_BLOCKED" });
+
+    await session.dispose();
+  });
+
+  test("blocks browser actions when the acquired current page drifts outside the Job origin grant", async () => {
+    const uploadRoot = await tempDir("publisher-browser-current-origin-");
+    const faux = fauxProvider({ provider: "publisher-browser-current-origin" });
+    const { grant: issued, harness } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
+    const session = await host.createSession({
+      definition: fixtureDefinition(),
+      scope: { jobId: "job-browser", role: "publishing" },
+    });
+
+    harness.setUrl("https://example.com/escaped");
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            server: PUBLISHING_BROWSER_MCP_SERVER,
+            tool: "browser_click",
+            args: { element: "Safe next", target: "e2" },
+          },
+          { id: "escaped-origin-click" },
         ),
         { stopReason: "toolUse" },
       ),
       (context) => {
         const messages = JSON.stringify(context.messages);
         expect(messages).toContain(
-          "Final publication is Publisher-owned",
+          "Current browser page is outside the Publisher browser grant",
         );
         expect(messages).not.toContain("BROWSER_CLICK_EXECUTED");
-        return fauxAssistantMessage(fauxText("FINAL_PUBLISH_BLOCKED"));
+        return fauxAssistantMessage(fauxText("CURRENT_ORIGIN_BLOCKED"));
       },
     ]);
 
     await expect(
-      session.run({ prompt: "Attempt the final publication control." }),
-    ).resolves.toMatchObject({ finalText: "FINAL_PUBLISH_BLOCKED" });
+      session.run({ prompt: "Attempt an action on the drifted current page." }),
+    ).resolves.toMatchObject({ finalText: "CURRENT_ORIGIN_BLOCKED" });
 
     await session.dispose();
+  });
+
+  test("refuses to issue a grant when BrowserProvider returns another session attachment", async () => {
+    const uploadRoot = await tempDir("publisher-browser-attachment-");
+    const harness = browserHarness();
+    const mismatchedProvider: BrowserAutomationAttachmentProvider = {
+      ...harness.provider,
+      async resolveAutomationAttachment() {
+        return {
+          sessionId: "another-session",
+          cdpEndpoint:
+            "ws://browser-runtime:9222/devtools/browser/other-browser",
+        };
+      },
+    };
+
+    await expect(
+      issuePublishingBrowserCapabilityGrant({
+        jobId: "job-browser",
+        browserProvider: mismatchedProvider,
+        browserSession: harness.session,
+        allowedOrigins: ["https://creator.xiaohongshu.com"],
+        uploadRoot,
+        authorizeClick: allowSafeClicks,
+      }),
+    ).rejects.toThrow(
+      "BrowserProvider returned an attachment for a different session",
+    );
   });
 });
