@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
@@ -19,7 +19,6 @@ export const PUBLISHING_BROWSER_MCP_TOOLS = [
   "browser_find",
   "browser_tabs",
   "browser_navigate",
-  "browser_navigate_back",
   "browser_click",
   "browser_type",
   "browser_fill_form",
@@ -207,7 +206,11 @@ function nestedMcpCall(
       ? (input.args as Record<string, unknown>)
       : {};
 
-  return { server, tool, args };
+  return {
+    ...(server === undefined ? {} : { server }),
+    ...(tool === undefined ? {} : { tool }),
+    args,
+  };
 }
 
 export function createPublishingBrowserMcpProfile(
@@ -304,9 +307,9 @@ export async function createPublishingBrowserGuardExtension(
               typeof call.args.action === "string"
                 ? call.args.action
                 : undefined;
-            if (action === "close") {
+            if (action !== "list" && action !== "new") {
               throw new Error(
-                "browser_tabs close is not authorized for the persistent Publisher browser",
+                `browser_tabs action "${String(action)}" is not authorized for the persistent Publisher browser`,
               );
             }
             if (action === "new") {
