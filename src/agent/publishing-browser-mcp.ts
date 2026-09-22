@@ -327,8 +327,8 @@ export function createPublishingBrowserMcpProfile(
   };
 }
 
-const rawSnapshotRefPattern = /^(?:f\\d+)?e\\d+$/;
-const modelSnapshotTokenPattern = /^g(\\d+):((?:f\\d+)?e\\d+)$/;
+const rawSnapshotRefPattern = /^(?:f\d+)?e\d+$/;
+const modelSnapshotTokenPattern = /^g(\d+):((?:f\d+)?e\d+)$/;
 
 interface ObservedTargetEvidence {
   readonly token: string;
@@ -419,7 +419,7 @@ function tokenizedObservation(
     }
 
     const originalText = candidate.text;
-    const rawPattern = /\\[ref=((?:f\\d+)?e\\d+)\\]/g;
+    const rawPattern = /\[ref=((?:f\d+)?e\d+)\]/g;
     const matches = [...originalText.matchAll(rawPattern)];
     if (matches.length === 0) return item;
 
@@ -435,7 +435,7 @@ function tokenizedObservation(
         rawRef,
         text: originalText
           .slice(snippetStart, snippetEnd)
-          .replace(/\\s+/g, " ")
+          .replace(/\s+/g, " ")
           .trim(),
       });
     }
