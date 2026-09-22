@@ -21,6 +21,7 @@ import { PiAgentHost } from "../src/agent/pi-agent-host.js";
 import {
   XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
   XIAOHONGSHU_PUBLISHING_ROLE,
+  createXiaohongshuPublishingDefinition,
   createXiaohongshuPublishingResourceLoader,
   xiaohongshuPublishingDefinition,
   xiaohongshuPublishingReferencePath,
@@ -109,6 +110,49 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     expect(mandatoryPrompt).toContain("Final publish is forbidden");
     expect(mandatoryPrompt).toContain("unknown draft");
     expect(mandatoryPrompt).toContain("External irreversible publication");
+
+    const mcpReadyDefinition = createXiaohongshuPublishingDefinition({
+      servers: [
+        {
+          name: "playwright",
+          transport: {
+            kind: "stdio",
+            command: "playwright-mcp-placeholder",
+          },
+          includeTools: ["browser_snapshot", "browser_click"],
+        },
+      ],
+    });
+    await expect(
+      createXiaohongshuPublishingResourceLoader({
+        definition: mcpReadyDefinition,
+        scope: {
+          jobId: "job-xhs-skill-mcp-ready",
+          role: XIAOHONGSHU_PUBLISHING_ROLE,
+        },
+        systemPrompt: mcpReadyDefinition.systemPrompt,
+        cwd,
+        allowedTools: ["read", "mcp"],
+        extensionFactories: [],
+      }),
+    ).resolves.toBeDefined();
+
+    expect(() =>
+      createXiaohongshuPublishingDefinition({
+        servers: [
+          {
+            name: "playwright",
+            transport: {
+              kind: "stdio",
+              command: "playwright-mcp-placeholder",
+            },
+            includeTools: ["browser_evaluate"],
+          },
+        ],
+      }),
+    ).toThrow(
+      'Xiaohongshu Publishing MCP profile must not expose non-browser or overpowered tool "browser_evaluate"',
+    );
 
     await expect(
       createXiaohongshuPublishingResourceLoader({
