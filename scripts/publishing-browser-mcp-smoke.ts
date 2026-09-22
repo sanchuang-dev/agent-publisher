@@ -299,8 +299,10 @@ async function main(): Promise<void> {
         );
       },
       (context) => {
-        const messages = serializedMessages(context);
-        staleUploadImageTextRef = refFor(messages, "上传图文");
+        staleUploadImageTextRef = refFor(
+          JSON.stringify(context.messages.at(-1)),
+          "上传图文",
+        );
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -382,8 +384,10 @@ async function main(): Promise<void> {
         );
       },
       (context) => {
-        const messages = serializedMessages(context);
-        const freshUploadImageTextRef = refFor(messages, "上传图文");
+        const freshUploadImageTextRef = refFor(
+          JSON.stringify(context.messages.at(-1)),
+          "上传图文",
+        );
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -411,7 +415,10 @@ async function main(): Promise<void> {
             "Agent-selected click did not reach the image-text destination",
           );
         }
-        const titleRef = refFor(messages, "标题");
+        const titleRef = refFor(
+          JSON.stringify(context.messages.at(-1)),
+          "标题",
+        );
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -435,7 +442,10 @@ async function main(): Promise<void> {
         if (!messages.includes("BRW-01 controlled fill")) {
           throw new Error("Controlled browser_type did not update the form");
         }
-        const uploadRef = refFor(messages, "Choose File");
+        const uploadRef = refFor(
+          JSON.stringify(context.messages.at(-1)),
+          "Choose File",
+        );
         return fauxAssistantMessage(
           fauxToolCall(
             "mcp",
