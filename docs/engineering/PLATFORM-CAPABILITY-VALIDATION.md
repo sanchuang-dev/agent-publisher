@@ -50,36 +50,30 @@ References:
 
 ### Required real-account smoke
 
-Prerequisite: use the repository's deterministic Xiaohongshu path. Do not create a separate ad-hoc browser script for this spike.
+Architecture note (2026-09-22): GOV-01 #102 supersedes the earlier assumption that a fixed deterministic selector sequence owns the normal Xiaohongshu browser route. Historical #50/#51/#70/#95 evidence remains useful for login guards, readback/validation, diagnostics, and safe primitives, but current validation must exercise the Publishing Secretary task-local browser path rather than treating selector repair as the product contract.
 
-Current repository dependency state:
-
-- #50 owns entry/login/challenge classification and human takeover.
-- #51 / PR #67 owns deterministic image-text prepare/readback/approval stop.
-- As of this document's creation, #50 is still open and PR #67 explicitly does not claim real-account smoke.
+Prerequisite: use the repository's supported Publishing Secretary + BrowserProvider path once its GOV-01 successor dependencies are runnable. Do not create a second ad-hoc browser workflow for this spike.
 
 When the dependent path is runnable:
 
 1. Start the supported browser runtime with a dedicated persistent profile.
-2. Open the Xiaohongshu creator publishing entry.
-3. Record whether the profile is already authenticated.
-4. If login/device verification/challenge appears, hand control to the human and record only the action type and eventual outcome.
-5. Reach the image-text composer.
-6. Use a disposable controlled fixture.
-7. Upload the fixture images.
-8. Fill title/body/tags through the deterministic adapter.
-9. Read the form back and verify it matches the intended fixture.
-10. Stop at `approval_required`; do not click the final publish control.
-11. Capture non-sensitive evidence of:
+2. Give the Publishing Secretary the Xiaohongshu task goal, controlled fixture, approved platform Skill, and bounded browser capabilities.
+3. Let it observe the current Creator page and choose the next safe local action.
+4. If login/device verification/challenge appears, Publisher hands control to the human and records only the action type and eventual outcome.
+5. Resume Agent control after identity success and let the Publishing Secretary navigate to the image-text composer, upload the fixture, and fill required fields from current page observations.
+6. Independently read the prepared form back through Publisher-owned validation and verify it matches the intended fixture.
+7. Stop at `approval_required`; do not expose or invoke final publication as an ordinary Agent browser action.
+8. Capture non-sensitive evidence of:
     - creator entry reached;
+    - Agent-chosen browser progress/recovery;
     - login/challenge boundary if encountered;
     - prepared form/readback result;
     - explicit pre-publish stop.
 
 ### Final classification rule
 
-- `browser`: real creator flow is reachable and deterministic prepare/readback works, with human takeover only for identity/risk-control steps.
-- `human_assisted`: creator flow is reachable but normal prepare cannot be made safely deterministic enough for the current MVP and requires human operation beyond identity proof.
+- `browser`: the real Creator flow is reachable and the bounded Publishing Secretary can complete the pre-publish browser task under Publisher identity/validation/approval governance.
+- `human_assisted`: the Creator flow is reachable but normal preparation still requires human operation beyond identity proof under the current supported Agent/tool boundary.
 - `blocked`: current account cannot reach the required creator/publish capability.
 - `official_api`: only if the real account/application has a currently usable official publishing API and the capability is verified, not inferred from roadmap documentation.
 
