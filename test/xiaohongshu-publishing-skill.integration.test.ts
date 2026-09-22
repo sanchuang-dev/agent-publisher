@@ -116,6 +116,15 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     );
     expect(mandatoryPrompt).toContain("generic browser click capability");
     expect(mandatoryPrompt).toContain("External irreversible publication");
+    expect(mandatoryPrompt).toContain(
+      "current observed page is stronger evidence than a historical reference",
+    );
+    expect(mandatoryPrompt).toContain(
+      "do not repeat the same failed action",
+    );
+    expect(mandatoryPrompt).toContain(
+      "recovery may use multiple loops",
+    );
 
     const mcpReadyDefinition = createXiaohongshuPublishingDefinition({
       servers: [
@@ -177,7 +186,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     );
   });
 
-  test("guides image-text direction from two Creator starting states without a fixed selector path", async () => {
+  test("provides guidance context for different Creator starting states without encoding a standard answer", async () => {
     const cwd = await createTempDir("publisher-xhs-skill-fixtures-");
     const faux = fauxProvider({ provider: "publisher-xhs-skill-fixtures" });
     const host = await createPublishingHost(cwd, faux);
@@ -189,60 +198,49 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
       },
     });
 
-    faux.setResponses([
-      (context) => {
-        const serialized = JSON.stringify(context.messages);
-        const guided =
-          skillIsPresent(context.systemPrompt) &&
-          serialized.includes("START=VIDEO_MODE") &&
-          serialized.includes("上传视频 / 上传图文 / 写文章");
+    const runStartingState = async (statePrompt: string) => {
+      faux.setResponses([
+        (context) => {
+          const prompt = context.systemPrompt ?? "";
+          const hasExplorationGuidance =
+            skillIsPresent(prompt) &&
+            prompt.includes("current observed page is stronger evidence") &&
+            prompt.includes("revise the working hypothesis") &&
+            prompt.includes("recovery may use multiple loops");
 
-        expect((context.tools ?? []).map((tool) => tool.name)).toEqual(["read"]);
-        return fauxAssistantMessage(
-          fauxText(guided ? "SELECT_IMAGE_TEXT_DIRECTION" : "SKILL_MISSING"),
-        );
-      },
-    ]);
+          expect((context.tools ?? []).map((tool) => tool.name)).toEqual(["read"]);
+          expect(JSON.stringify(context.messages)).toContain(statePrompt);
 
-    await expect(
-      session.run({
+          return fauxAssistantMessage(
+            fauxText(hasExplorationGuidance ? "GUIDANCE_AVAILABLE" : "SKILL_MISSING"),
+          );
+        },
+      ]);
+
+      return session.run({
         prompt: [
           "GOAL=IMAGE_TEXT",
-          "START=VIDEO_MODE",
-          "Observed semantic choices: 上传视频 / 上传图文 / 写文章.",
-          "Choose the safe next direction. Do not provide a selector.",
+          statePrompt,
+          "Reason from the page that exists now. Historical experience is guidance, not a mandatory action.",
         ].join("\n"),
-      }),
+      });
+    };
+
+    await expect(
+      runStartingState(
+        "START=VIDEO_MODE; observed choices include 上传视频 / 上传图文 / 写文章.",
+      ),
     ).resolves.toMatchObject({
-      finalText: "SELECT_IMAGE_TEXT_DIRECTION",
+      finalText: "GUIDANCE_AVAILABLE",
       toolExecutions: [],
     });
 
-    faux.setResponses([
-      (context) => {
-        const serialized = JSON.stringify(context.messages);
-        const guided =
-          skillIsPresent(context.systemPrompt) &&
-          serialized.includes("START=IMAGE_TEXT_COMPOSER") &&
-          serialized.includes("composer is fresh");
-
-        return fauxAssistantMessage(
-          fauxText(guided ? "STAY_AND_INSPECT_COMPOSER" : "SKILL_MISSING"),
-        );
-      },
-    ]);
-
     await expect(
-      session.run({
-        prompt: [
-          "GOAL=IMAGE_TEXT",
-          "START=IMAGE_TEXT_COMPOSER",
-          "The image-text composer is already active and the composer is fresh.",
-          "Choose the safe next direction. Do not navigate away.",
-        ].join("\n"),
-      }),
+      runStartingState(
+        "START=IMAGE_TEXT_COMPOSER; current composer appears fresh.",
+      ),
     ).resolves.toMatchObject({
-      finalText: "STAY_AND_INSPECT_COMPOSER",
+      finalText: "GUIDANCE_AVAILABLE",
       toolExecutions: [],
     });
 
