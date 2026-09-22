@@ -457,6 +457,76 @@ describe("Publishing browser MCP capability", () => {
     await session.dispose();
   });
 
+  test("redacts a browser result when an allowed click crosses the origin boundary", async () => {
+    const uploadRoot = await tempDir("publisher-browser-redirect-origin-");
+    const harness = browserHarness();
+    const authorizeRedirectingSafeClick: PublishingBrowserClickAuthorizer =
+      async ({ observedTarget }) => {
+        if (!observedTarget.includes("Safe next")) {
+          return { allowed: false, reason: "unexpected click target" };
+        }
+        // Model a real click-triggered redirect: the preflight saw the allowed
+        // current page, then the browser ends the action on another origin.
+        harness.setUrl("https://example.com/redirected");
+        return { allowed: true };
+      };
+    const faux = fauxProvider({ provider: "publisher-browser-redirect-origin" });
+    const { grant: issued } = await grant(uploadRoot, {
+      harness,
+      authorizeClick: authorizeRedirectingSafeClick,
+    });
+    const host = await createHost(faux, issued);
+    const session = await host.createSession({
+      definition: fixtureDefinition(),
+      scope: { jobId: "job-browser", role: "publishing" },
+    });
+
+    let safeToken: string | undefined;
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            server: PUBLISHING_BROWSER_MCP_SERVER,
+            tool: "browser_navigate",
+            args: { url: "https://creator.xiaohongshu.com/publish" },
+          },
+          { id: "observe-safe-click" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const messages = JSON.stringify(context.messages);
+        safeToken = messages.match(/Safe next[^\n]*\[ref=(g\d+:e2)\]/)?.[1];
+        expect(safeToken).toMatch(/^g\d+:e2$/);
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: { element: "Safe next", target: safeToken! },
+            },
+            { id: "redirecting-safe-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const latest = JSON.stringify(context.messages.at(-1));
+        expect(latest).toContain("Publisher browser origin boundary crossed");
+        expect(latest).not.toContain("BROWSER_CLICK_EXECUTED");
+        return fauxAssistantMessage(fauxText("REDIRECT_RESULT_REDACTED"));
+      },
+    ]);
+
+    await expect(
+      session.run({ prompt: "Exercise an allowed click that redirects away." }),
+    ).resolves.toMatchObject({ finalText: "REDIRECT_RESULT_REDACTED" });
+
+    await session.dispose();
+  });
+
   test("refuses to issue a grant when BrowserProvider returns another session attachment", async () => {
     const uploadRoot = await tempDir("publisher-browser-attachment-");
     const harness = browserHarness();
