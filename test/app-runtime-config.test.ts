@@ -186,7 +186,7 @@ describe("APP-02 runtime configuration", () => {
       /APP_BROWSER_LIVE_VIEW_UPSTREAM: ".*browser-runtime:6080.*"/,
     );
     expect(compose).toMatch(
-      /APP_BROWSER_LIVE_VIEW_URL: ".*\/browser-live-view\/vnc\.html.*"/,
+      /APP_BROWSER_LIVE_VIEW_URL: "\/browser-live-view\/vnc\.html\?path=browser-live-view\/websockify&autoconnect=1&resize=scale"/,
     );
     expect(compose).toMatch(
       /APP_MATERIAL_SOURCE: "\$\{APP_MATERIAL_SOURCE:-provider_pipeline\}"/,
@@ -206,9 +206,6 @@ describe("APP-02 runtime configuration", () => {
     );
     expect(compose).not.toMatch(
       /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?9222:9222"/m,
-    );
-    expect(compose).not.toMatch(
-      /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?6080:6080"/m,
     );
     expect(compose).not.toMatch(
       /(?:^|\n)\s*-\s*"(?:127\.0\.0\.1:)?6080:6080"/m,
