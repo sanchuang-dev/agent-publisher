@@ -1,10 +1,15 @@
 FROM node:22-bookworm-slim AS dependencies
 
+ARG DEBIAN_MIRROR=
+
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 WORKDIR /app
 
-RUN apt-get update \
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+      sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
