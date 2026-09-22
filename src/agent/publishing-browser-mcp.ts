@@ -345,6 +345,13 @@ function currentAllowedPageUrl(
     throw new Error("Publisher browser session page is closed");
   }
 
+  const activePages = page.context().pages().filter((candidate) => !candidate.isClosed());
+  if (activePages.length !== 1 || activePages[0] !== page) {
+    throw new Error(
+      "Publisher browser grant no longer owns the single active browser page",
+    );
+  }
+
   const rawUrl = page.url();
   let parsed: URL;
   try {
@@ -428,15 +435,14 @@ function tokenizedObservation(
       if (!rawRef || !rawSnapshotRefPattern.test(rawRef)) continue;
       const token = `g${generation}:${rawRef}`;
       const index = match.index ?? 0;
-      const snippetStart = Math.max(0, index - 180);
-      const snippetEnd = Math.min(originalText.length, index + 220);
+      const lineStart = originalText.lastIndexOf("\n", index - 1) + 1;
+      const nextLineBreak = originalText.indexOf("\n", index);
+      const lineEnd =
+        nextLineBreak === -1 ? originalText.length : nextLineBreak;
       refs.set(token, {
         token,
         rawRef,
-        text: originalText
-          .slice(snippetStart, snippetEnd)
-          .replace(/\s+/g, " ")
-          .trim(),
+        text: originalText.slice(lineStart, lineEnd).trim(),
       });
     }
 
