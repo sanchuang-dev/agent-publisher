@@ -102,7 +102,7 @@ function refFor(message: unknown, label: string): string {
   );
 
   for (const textValue of collectTextValues(message).reverse()) {
-    for (const line of textValue.split(/\\r?\\n/).reverse()) {
+    for (const line of textValue.split(/\r?\n/).reverse()) {
       const token = line.match(pattern)?.[1];
       if (token) return token;
     }
