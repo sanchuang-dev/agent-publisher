@@ -96,7 +96,7 @@ function grant(uploadRoot: string): PublishingBrowserCapabilityGrant {
   return {
     jobId: "job-browser",
     browserSessionId: "browser-session-a",
-    cdpEndpoint: "http://browser-runtime:9222",
+    cdpEndpoint: "ws://browser-runtime:9222/devtools/browser/test-browser",
     allowedOrigins: [
       "https://creator.xiaohongshu.com",
       "https://www.xiaohongshu.com/some/path",
@@ -108,7 +108,7 @@ function grant(uploadRoot: string): PublishingBrowserCapabilityGrant {
 describe("Publishing browser MCP capability", () => {
   test("pins the official Playwright MCP CDP profile to the bounded tool surface", async () => {
     const uploadRoot = await tempDir("publisher-browser-profile-");
-    const profile = createPublishingBrowserMcpProfile(grant(uploadRoot));
+    const profile = await createPublishingBrowserMcpProfile(grant(uploadRoot));
     const server = profile.servers[0];
 
     expect(PLAYWRIGHT_MCP_VERSION).toBe("0.0.82");
@@ -127,7 +127,7 @@ describe("Publishing browser MCP capability", () => {
     expect(server.transport.args).toEqual(
       expect.arrayContaining([
         expect.stringContaining("@playwright/mcp/cli.js"),
-        "--cdp-endpoint=http://browser-runtime:9222",
+        "--cdp-endpoint=ws://browser-runtime:9222/devtools/browser/test-browser",
         "--allowed-origins=https://creator.xiaohongshu.com;https://www.xiaohongshu.com",
         "--block-service-workers",
         "--codegen=none",
