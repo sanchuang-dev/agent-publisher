@@ -616,6 +616,12 @@ export async function createPublishingBrowserGuardExtension(
                   "Publisher browser authority or origin boundary was crossed; browser result redacted and the stale grant cannot continue mutating the page.",
               },
             ],
+            // MCP adapter details may embed the unredacted nested server result.
+            // Replace them as well as content before the next model request.
+            details: {
+              mode: "publisher-browser-boundary-redaction",
+              redacted: true,
+            },
             // Keep the Agent loop alive so it can surface/recover from the
             // boundary event instead of silently terminating after the tool.
             isError: false,
