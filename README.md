@@ -55,6 +55,11 @@ Then start the product:
 docker compose up -d --build
 ```
 
+The browser image uses Debian's official package source by default. If a local
+network cannot reach it reliably, set `DEBIAN_MIRROR` in `.env` (for example
+`mirrors.ustc.edu.cn`) before building. This is an optional network override,
+not part of the runtime contract.
+
 Open **http://127.0.0.1:3000**.
 
 That URL owns the production Web bundle, Job API, SSE stream, and the controlled
