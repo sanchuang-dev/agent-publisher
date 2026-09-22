@@ -10,6 +10,7 @@ import type {
 } from "./definition.js";
 import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
 import { createControlledPiResourceLoader } from "./pi-controlled-resources.js";
+import { resolveCdpWebSocketEndpoint } from "../browser/providers/docker-cdp-transport.js";
 
 export const PLAYWRIGHT_MCP_VERSION = "0.0.82" as const;
 export const PUBLISHING_BROWSER_MCP_SERVER = "playwright-browser" as const;
@@ -110,10 +111,31 @@ function normalizeGrant(
     grant.browserSessionId,
     "Publishing browser session id",
   );
-  const cdp = normalizeHttpUrl(
+  const cdpRaw = required(
     grant.cdpEndpoint,
     "Publishing browser CDP endpoint",
   );
+  let cdp: URL;
+  try {
+    cdp = new URL(cdpRaw);
+  } catch (error) {
+    throw new Error("Publishing browser CDP endpoint must be a valid absolute URL", {
+      cause: error,
+    });
+  }
+  if (
+    cdp.protocol !== "http:" &&
+    cdp.protocol !== "https:" &&
+    cdp.protocol !== "ws:" &&
+    cdp.protocol !== "wss:"
+  ) {
+    throw new Error(
+      "Publishing browser CDP endpoint must use http(s) or ws(s)",
+    );
+  }
+  if (cdp.username || cdp.password) {
+    throw new Error("Publishing browser CDP endpoint must not embed credentials");
+  }
   const allowedOrigins = unique(grant.allowedOrigins.map(normalizeOrigin));
   if (allowedOrigins.length === 0) {
     throw new Error(
@@ -213,10 +235,18 @@ function nestedMcpCall(
   };
 }
 
-export function createPublishingBrowserMcpProfile(
+export async function createPublishingBrowserMcpProfile(
   inputGrant: PublishingBrowserCapabilityGrant,
-): AgentMcpProfile {
+): Promise<AgentMcpProfile> {
   const grant = normalizeGrant(inputGrant);
+  // Reuse the BrowserProvider transport adapter. Chromium's DevTools discovery
+  // advertises a loopback WebSocket URL, and direct HTTP discovery through the
+  // Compose service hostname can be rejected by Chromium's Host validation.
+  // Resolve once here and give Playwright MCP the exact WebSocket endpoint.
+  const resolvedCdpEndpoint = await resolveCdpWebSocketEndpoint(
+    grant.cdpEndpoint,
+    10_000,
+  );
 
   return {
     servers: [
@@ -227,7 +257,7 @@ export function createPublishingBrowserMcpProfile(
           command: process.execPath,
           args: [
             playwrightMcpCliPath,
-            `--cdp-endpoint=${grant.cdpEndpoint}`,
+            `--cdp-endpoint=${resolvedCdpEndpoint}`,
             `--allowed-origins=${grant.allowedOrigins.join(";")}`,
             "--block-service-workers",
             "--codegen=none",
