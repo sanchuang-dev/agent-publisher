@@ -113,7 +113,7 @@ function responseFor(message) {
           result: {
             content: [{
               type: "text",
-              text: `BROWSER_NAVIGATE_EXECUTED:${String(args.url ?? "")}`,
+              text: `BROWSER_NAVIGATE_EXECUTED:${String(args.url ?? "")}\n- button "Safe next" [ref=e2]\n- button "发布" [ref=e99]\n- textbox "Title" [ref=e3]`,
             }],
           },
         };
