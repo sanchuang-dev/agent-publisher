@@ -360,6 +360,7 @@ describe("Publishing browser MCP capability", () => {
       scope: { jobId: "job-browser", role: "publishing" },
     });
 
+    let publishToken: string | undefined;
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall(
@@ -375,14 +376,15 @@ describe("Publishing browser MCP capability", () => {
       ),
       (context) => {
         const messages = JSON.stringify(context.messages);
-        expect(messages).toContain('- button \\"发布\\" [ref=e99]');
+        publishToken = messages.match(/发布[^\\n]*\\[ref=(g\\d+:e99)\\]/)?.[1];
+        expect(publishToken).toMatch(/^g\\d+:e99$/);
         return fauxAssistantMessage(
           fauxToolCall(
             "mcp",
             {
               server: PUBLISHING_BROWSER_MCP_SERVER,
               tool: "browser_click",
-              args: { element: "Safe next", target: "e99" },
+              args: { element: "Safe next", target: publishToken! },
             },
             { id: "misleading-publish-click" },
           ),
