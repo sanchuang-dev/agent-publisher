@@ -198,6 +198,8 @@ async function main(): Promise<void> {
       scope: { jobId: grant.jobId, role: "publishing" },
     });
 
+    let staleUploadImageTextRef: string | undefined;
+
     faux.setResponses([
       fauxAssistantMessage(
         fauxToolCall(
@@ -286,7 +288,90 @@ async function main(): Promise<void> {
       },
       (context) => {
         const messages = serializedMessages(context);
-        const uploadImageTextRef = refFor(messages, "上传图文");
+        staleUploadImageTextRef = refFor(messages, "上传图文");
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: `${fixtureOrigin}/image-text` },
+            },
+            { id: "navigate-away-from-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("图文发布") || !staleUploadImageTextRef) {
+          throw new Error("Failed to establish the stale-ref test state");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: {
+                element: "stale 上传图文 ref",
+                target: staleUploadImageTextRef,
+              },
+            },
+            { id: "stale-ref-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const latestSerialized = JSON.stringify(context.messages.at(-1));
+        if (
+          !latestSerialized.includes(
+            "not found in the current page snapshot",
+          )
+        ) {
+          throw new Error(
+            "Playwright MCP silently accepted a stale observation ref",
+          );
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: `${fixtureOrigin}/video` },
+            },
+            { id: "return-video-after-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("上传视频")) {
+          throw new Error("Failed to return to the video publishing surface");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "refresh-snapshot-after-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        const freshUploadImageTextRef = refFor(messages, "上传图文");
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -296,10 +381,10 @@ async function main(): Promise<void> {
               tool: "browser_click",
               args: {
                 element: "上传图文",
-                target: uploadImageTextRef,
+                target: freshUploadImageTextRef,
               },
             },
-            { id: "click-image-text" },
+            { id: "click-image-text-with-fresh-ref" },
           ),
           { stopReason: "toolUse" },
         );
@@ -424,6 +509,7 @@ async function main(): Promise<void> {
           "official-playwright-mcp-connected-over-cdp",
           "bounded-tool-catalog",
           "wrong-origin-blocked",
+          "stale-snapshot-ref-rejected",
           "snapshot-ref-navigation",
           "controlled-type",
           "controlled-file-upload",
