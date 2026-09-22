@@ -77,21 +77,40 @@ function serializedMessages(context: { messages: readonly unknown[] }): string {
   return JSON.stringify(context.messages);
 }
 
-function refFor(messages: string, label: string): string {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const matches = [
-    ...messages.matchAll(
-      new RegExp(
-        `${escaped}[^\\n]*\\[ref=(g\\d+:e\\d+)\\]`,
-        "gi",
-      ),
-    ),
-  ];
-  const token = matches.at(-1)?.[1];
-  if (!token) {
-    throw new Error(`Could not find snapshot ref for ${label}`);
+function collectTextValues(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") {
+    out.push(value);
+    return out;
   }
-  return token;
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextValues(item, out);
+    return out;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collectTextValues(nested, out);
+    }
+  }
+  return out;
+}
+
+function refFor(message: unknown, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `${escaped}[^\\r\\n]*\\[ref=(g\\d+:(?:f\\d+)?e\\d+)\\]`,
+    "i",
+  );
+
+  for (const textValue of collectTextValues(message).reverse()) {
+    for (const line of textValue.split(/\\r?\\n/).reverse()) {
+      const token = line.match(pattern)?.[1];
+      if (token) return token;
+    }
+  }
+
+  throw new Error(
+    `Could not find snapshot ref for ${label} in latest browser result`,
+  );
 }
 
 async function playwrightMcpPids(): Promise<Set<number>> {
@@ -299,10 +318,7 @@ async function main(): Promise<void> {
         );
       },
       (context) => {
-        staleUploadImageTextRef = refFor(
-          JSON.stringify(context.messages.at(-1)),
-          "上传图文",
-        );
+        staleUploadImageTextRef = refFor(context.messages.at(-1), "上传图文");
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -384,10 +400,7 @@ async function main(): Promise<void> {
         );
       },
       (context) => {
-        const freshUploadImageTextRef = refFor(
-          JSON.stringify(context.messages.at(-1)),
-          "上传图文",
-        );
+        const freshUploadImageTextRef = refFor(context.messages.at(-1), "上传图文");
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -415,10 +428,7 @@ async function main(): Promise<void> {
             "Agent-selected click did not reach the image-text destination",
           );
         }
-        const titleRef = refFor(
-          JSON.stringify(context.messages.at(-1)),
-          "标题",
-        );
+        const titleRef = refFor(context.messages.at(-1), "标题");
 
         return fauxAssistantMessage(
           fauxToolCall(
@@ -442,10 +452,7 @@ async function main(): Promise<void> {
         if (!messages.includes("BRW-01 controlled fill")) {
           throw new Error("Controlled browser_type did not update the form");
         }
-        const uploadRef = refFor(
-          JSON.stringify(context.messages.at(-1)),
-          "Choose File",
-        );
+        const uploadRef = refFor(context.messages.at(-1), "Choose File");
         return fauxAssistantMessage(
           fauxToolCall(
             "mcp",
