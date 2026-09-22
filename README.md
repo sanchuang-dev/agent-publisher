@@ -26,13 +26,24 @@ Given a content intent or source material, the system should be able to:
 
 Initial platform targets are Xiaohongshu, Douyin, and WeChat Official Accounts. Xiaohongshu is the first MVP path.
 
-## Run locally with Docker
+## Run with Docker
 
-The product Docker path exposes one user-facing Web endpoint. Browser runtime,
-noVNC, and CDP stay behind the application boundary during normal use.
+Prerequisites: Git and Docker Desktop / Docker Engine.
 
-Prerequisite: Docker Desktop / Docker Engine. Node.js is only needed for local
-development or repository checks.
+The product runtime is a two-container composition behind **one user-facing Web endpoint**:
+
+```text
+http://127.0.0.1:3000
+├─ production Web UI
+├─ /api/*                Job API + SSE
+└─ /browser-live-view/*  controlled human-takeover surface
+
+Compose-private only
+├─ browser-runtime:6080  noVNC upstream
+└─ browser-runtime:9222  CDP
+```
+
+Clone the repository, configure the Publisher AI runtime, and start Compose:
 
 ```bash
 git clone https://github.com/sanchuang-dev/agent-publisher.git
@@ -41,7 +52,7 @@ git checkout dev
 cp .env.example .env
 ```
 
-Fill the Publisher AI settings in the repository-local ignored `.env`:
+Edit `.env` and set the existing OpenAI-compatible runtime values:
 
 ```dotenv
 PUBLISHER_AI_BASE_URL=https://your-openai-compatible-gateway.example/v1
@@ -55,125 +66,33 @@ Then start the product:
 docker compose up -d --build
 ```
 
-The browser image uses Debian's official package source by default. If a local
-network cannot reach it reliably, set `DEBIAN_MIRROR` in `.env` (for example
-`mirrors.ustc.edu.cn`) before building. This is an optional network override,
-not part of the runtime contract.
+Open **http://127.0.0.1:3000**. Normal task creation, status/SSE updates, and identity takeover all stay inside that Web origin. Do not open or publish raw noVNC/CDP ports.
 
-Open **http://127.0.0.1:3000**.
+Generated assets, SQLite state, and Pi session files remain in the persistent `app-data` volume. Chromium login/profile state remains in the persistent `browser-profile` volume, so normal container restarts preserve both application and browser state.
 
-That URL owns the production Web bundle, Job API, SSE stream, and the controlled
-human-takeover browser surface. Normal task operation does not require
-`npm run dev:web`, `curl`, raw `:6080`, or a CDP address.
+Development may still use Vite HMR with `npm run dev:web`; its `/api` and `/browser-live-view` paths proxy through the same application boundary rather than teaching the UI about raw browser ports.
 
-Persistent state is split intentionally:
+### Troubleshooting and engineering smokes
 
-- `app-data` keeps SQLite state, Publisher assets, and Pi session files.
-- `browser-profile` keeps the Chromium profile/login session.
-
-A normal restart preserves both volumes:
-
-```bash
-docker compose restart
-```
-
-Stop the containers without deleting persistent state with:
-
-```bash
-docker compose down
-```
-
-### Development Web with Vite HMR
-
-Production Docker does not need Vite. For frontend development, keep the Docker
-runtime running and start the development server separately:
-
-```bash
-npm install
-npm run dev:web
-```
-
-Open **http://127.0.0.1:5173**. The Vite server proxies both `/api` and
-`/browser-live-view` to the app runtime, including the noVNC WebSocket path, so
-development keeps the same product boundary instead of reopening raw browser
-ports.
-
-### Controlled Docker smoke mode
-
-Deterministic CI/runtime smoke can explicitly bypass AI/material generation with
-`APP_MATERIAL_SOURCE=controlled_smoke`. In that mode, provide:
-
-```text
-data/controlled-material/
-├── material.json
-└── assets/
-    ├── cover-1.png
-    ├── image-1.png
-    └── image-2.png
-```
-
-`material.json` must declare `"source": "controlled_smoke"` and
-`"generatedFromBrief": false`. This mode is for bounded verification; the
-normal product runtime remains `provider_pipeline`.
-
-### Troubleshooting browser runtime
-
-The base Compose file does **not** publish raw noVNC `6080` or CDP `9222`.
-Start with product-level logs and readiness:
+Inspect service health and logs only when diagnosing a deployment:
 
 ```bash
 docker compose ps
 docker compose logs app-runtime browser-runtime
 ```
 
-If a developer specifically needs direct noVNC for a browser-runtime diagnostic,
-opt in to the localhost-only troubleshooting overlay:
+The browser's noVNC `6080` and CDP `9222` ports are intentionally Compose-internal. If a diagnostic needs to inspect them, run the diagnostic from inside the Compose network rather than publishing those ports to users.
+
+For deterministic runtime/CI checks, `APP_MATERIAL_SOURCE=controlled_smoke` may explicitly bypass AI material generation using `data/controlled-material/material.json` plus its controlled assets. This is a testing path, not the normal product flow.
+
+The real Xiaohongshu prepare smoke remains an engineering harness and must be the exclusive application-side browser owner:
 
 ```bash
-docker compose -f compose.yaml -f compose.troubleshooting.yaml up -d browser-runtime
+docker compose stop app-runtime && \
+docker compose run --rm --build -e XHS_REAL_ACCOUNT_SMOKE=1 app-runtime npm run smoke:xhs-prepare
 ```
 
-Then `http://127.0.0.1:6080/vnc.html` is available on the Docker host for that
-diagnostic session only. Return to the normal product boundary afterwards:
-
-```bash
-docker compose up -d --force-recreate browser-runtime app-runtime
-```
-
-Raw CDP is never host-published. Inspect it only from inside the browser
-container when debugging:
-
-```bash
-docker compose exec -T browser-runtime \
-  curl -fsS http://127.0.0.1:9222/json/version
-```
-
-### Run the real Xiaohongshu prepare smoke
-
-This developer smoke uses the production XHS login/prepare boundaries and still
-stops at `waiting_for_approval`; it does not publish.
-
-Because the MVP BrowserProvider lock is process-local, stop the long-running app
-container before starting the one-off smoke. If human login inspection may be
-needed, first enable the troubleshooting noVNC overlay described above.
-
-```bash
-docker compose stop app-runtime
-docker compose run --rm --build -e XHS_REAL_ACCOUNT_SMOKE=1 \
-  app-runtime npm run smoke:xhs-prepare
-```
-
-If Xiaohongshu requires QR login, 2FA, device verification, or another identity
-step, use the troubleshooting noVNC surface and complete that step yourself. The
-smoke automatically resumes from the same persistent browser profile when the
-accepted login state is detected.
-
-Expected bounded evidence ends at `waiting_for_approval`. The smoke does not
-print cookies, tokens, QR artifacts, browser-profile contents, or raw local
-asset paths, and it exposes no approval-resolution/final-publish action.
-
-The default login wait is 5 minutes. For a bounded local smoke,
-`XHS_SMOKE_LOGIN_WAIT_MS` may be set from 0 to 900000 milliseconds.
+It may upload/fill/read back the real Creator form but still stops at `waiting_for_approval`; it does not publish. Identity verification should be completed through the product Web takeover surface when the running product flow requests it.
 
 ## Live Content Secretary model smoke
 
