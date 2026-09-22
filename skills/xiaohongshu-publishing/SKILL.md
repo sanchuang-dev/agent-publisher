@@ -13,6 +13,7 @@ Use this Skill as **platform knowledge**, not as a fixed browser workflow.
 - Prefer semantic page meaning and visible labels over remembered DOM paths or selectors.
 - Treat an old element reference as stale after navigation, mode changes, dialogs, uploads, or other page mutations. Re-observe before acting again.
 - A successful past path is guidance only. If the page differs, explore the current safe affordances instead of replaying a selector sequence.
+- The current observed page is stronger evidence than a historical reference. Treat prior experience as a useful hypothesis that may be outdated, incomplete, or inapplicable to the current state.
 
 ## Recognizing the Creator publishing surface
 
@@ -31,8 +32,8 @@ The Publish Job's mode is fixed input.
 
 For an **image-text** task:
 
-- if the current Creator surface is on video/article mode and a semantic `上传图文` choice is available, choosing that image-text direction is an appropriate bounded navigation action;
-- if the current page is already the image-text composer, stay on it and inspect whether the composer is fresh and suitable rather than navigating away;
+- if the current Creator surface is on video/article mode and a semantic `上传图文` choice is available, that is useful evidence for an image-text direction, not a mandatory scripted step;
+- if the current page is already the image-text composer, use that current state as stronger evidence than an older entry-path reference;
 - do not change the Job to video/article merely because that mode is currently selected.
 
 For a **video** task, use the analogous current-page reasoning for the video direction. Do not silently convert the requested mode.
@@ -86,17 +87,23 @@ If the only apparent next action is final publication, stop and return control t
 
 A generic browser click capability is **not** publish authority. The browser capability layer supplied by #105 must enforce the Publisher-owned final-publish boundary; this Skill does not claim that prompt text alone can make an unrestricted click tool safe. If a candidate click could be the final publish action, do not click it.
 
-## Recovery
+## Recovery and exploration
 
-When the page changes or an action fails:
+A failed or surprising action is new evidence, not an instruction to replay the same action or immediately give up.
+
+Use a bounded observe-act-observe loop:
 
 1. observe the current state again;
-2. distinguish identity boundary, unknown draft, transient UI state, and ordinary navigation;
-3. choose at most one bounded safe action supported by the current observation;
-4. observe the result again;
-5. if confidence is insufficient, stop and ask Publisher for human/clarification handling.
+2. compare what actually happened with the working hypothesis and note what the result taught you;
+3. distinguish a hard boundary (identity, unknown draft, approval/final publication, or another irreversible risk) from an ordinary page/navigation mismatch;
+4. for an ordinary mismatch, revise the working hypothesis and choose one materially different bounded safe action supported by the current observation;
+5. observe the result again and update the hypothesis before choosing another action.
 
-Do not turn recovery into repeated guessing or repeated clicks.
+Each loop may contain at most one browser mutation, but recovery may use multiple loops while the task is making progress or producing new evidence.
+
+If the page is materially unchanged, do not repeat the same failed action just because it is still available. Try a meaningfully different safe hypothesis or observation path.
+
+Stop and report a bounded gap when a hard boundary is reached, when no materially different safe path remains, or when further attempts are no longer producing new evidence. Do not turn exploration into blind repeated guessing or repeated clicks.
 
 ## Verified experience references
 
@@ -104,16 +111,22 @@ Repository-reviewed observations from real smoke runs live under `references/`.
 
 Current reviewed references:
 
-- `references/2026-09-22-creator-mode-entry.md` — a logged-in Creator page was visibly on video mode with `上传视频 / 上传图文 / 写文章`; the legacy image-text entry path failed before mutation, so the justified lesson is to re-observe and choose the semantic image-text direction rather than replaying a selector.
+- `references/2026-09-22-creator-mode-entry.md` — a logged-in Creator page was visibly on video mode with `上传视频 / 上传图文 / 写文章`; the legacy image-text entry path failed before mutation, so the justified lesson is to re-observe and consider the semantic image-text direction rather than replaying a selector.
 
-Use references as semantic hints with explicit provenance and limitations. They must never become an undocumented selector workflow.
+Use references as semantic hints with explicit provenance and limitations. A live page may contradict or supersede an older hint. References must never become an undocumented selector workflow or a decision table.
 
 ## Experience refinement
 
+Within one Agent session, keep recovery learning lightweight and local: remember the attempted hypothesis, the observed outcome, and the useful lesson for the next attempt. Do not promote every failure into durable platform knowledge.
+
 A runtime Agent must not permanently edit this Skill.
 
-New experience follows this controlled path:
+Potentially reusable cross-Job experience follows this controlled path:
 
-`real smoke evidence → non-sensitive reference proposal → review for semantics/safety/provenance → PR → merge`
+`real smoke evidence → non-sensitive reference/proposal → review for reusability/semantics/safety/provenance → PR → merge`
 
-A proposal should capture what was observed, what guidance is justified, what remains unproven, and the source evidence. Do not store cookies, tokens, QR artifacts, account identifiers, browser-profile contents, raw DOM dumps, or secret-bearing screenshots.
+A proposal should capture what was observed, what guidance is justified, what remains unproven, and the source evidence. One observation may justify a narrowly scoped reference with explicit limitations; it must not become a universal rule merely because it happened once.
+
+Repeated successful use, repeated recovery value, or independent confirming observations may strengthen or supersede earlier guidance through the same review path.
+
+Do not store cookies, tokens, QR artifacts, account identifiers, browser-profile contents, raw DOM dumps, or secret-bearing screenshots.
