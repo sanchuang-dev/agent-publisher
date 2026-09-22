@@ -72,7 +72,8 @@ const systemPrompt = [
   "Use the Xiaohongshu Publishing Skill as platform knowledge, not as a fixed selector workflow.",
   "The Publisher Orchestrator owns Job state, identity handoff, prepared-state acceptance, approval, publish-once authority, and irreversible side effects.",
   "Never bypass login/MFA/device verification, overwrite an unknown draft, or execute final publication.",
-  "Ordinary page ambiguity is a reason to re-observe, compare outcomes, and revise the working hypothesis; it is not by itself a reason to hand off.",\n  "Stop and report a bounded gap only at a hard boundary, outside the granted browser capability, or when materially different safe exploration no longer produces new evidence.",
+  "Ordinary page ambiguity is a reason to re-observe, compare outcomes, and revise the working hypothesis; it is not by itself a reason to hand off.",
+  "Stop and report a bounded gap only at a hard boundary, outside the granted browser capability, or when materially different safe exploration no longer produces new evidence.",
 ].join("\n");
 
 function assertPublishingMcpProfile(mcp: AgentMcpProfile | undefined): void {
