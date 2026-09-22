@@ -90,13 +90,6 @@ async function main(): Promise<void> {
   const server = await startFixture();
 
   try {
-    const preflight = await fetch(new URL("/json/version", cdpEndpoint));
-    if (!preflight.ok) {
-      throw new Error(
-        `Docker Chromium CDP preflight failed with ${preflight.status}`,
-      );
-    }
-
     const faux = fauxProvider({ provider: "publisher-brw01-docker-smoke" });
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
@@ -113,6 +106,8 @@ async function main(): Promise<void> {
       uploadRoot,
     };
 
+    const browserMcpProfile = await createPublishingBrowserMcpProfile(grant);
+
     const definition: AgentDefinition = {
       id: "publishing-secretary-browser-smoke",
       systemPrompt: [
@@ -121,7 +116,7 @@ async function main(): Promise<void> {
         "Do not use selectors supplied by the prompt; observe the current page and act using snapshot refs.",
         "Never attempt a final publication action.",
       ].join("\n"),
-      mcp: createPublishingBrowserMcpProfile(grant),
+      mcp: browserMcpProfile,
     };
 
     const host = new PiAgentHost({
