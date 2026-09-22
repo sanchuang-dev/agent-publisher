@@ -498,6 +498,15 @@ function clearsObservationBeforeExecution(tool: string): boolean {
  * allow policy over the actually observed target. There is deliberately no
  * model-controlled bypass and no permissive click default.
  */
+function safeBrowserResultDetails(tool: string) {
+  return {
+    mode: "publisher-browser-result",
+    server: PUBLISHING_BROWSER_MCP_SERVER,
+    tool,
+    nestedResultRedacted: true,
+  } as const;
+}
+
 export async function createPublishingBrowserGuardExtension(
   inputGrant: PublishingBrowserCapabilityGrant,
 ): Promise<InlineExtension> {
@@ -619,8 +628,8 @@ export async function createPublishingBrowserGuardExtension(
             // MCP adapter details may embed the unredacted nested server result.
             // Replace them as well as content before the next model request.
             details: {
-              mode: "publisher-browser-boundary-redaction",
-              redacted: true,
+              ...safeBrowserResultDetails(call.tool),
+              boundaryRedacted: true,
             },
             // Keep the Agent loop alive so it can surface/recover from the
             // boundary event instead of silently terminating after the tool.
@@ -628,13 +637,22 @@ export async function createPublishingBrowserGuardExtension(
           };
         }
 
-        if (event.isError) return undefined;
+        if (event.isError) {
+          return {
+            details: safeBrowserResultDetails(call.tool),
+          };
+        }
+
         observationGeneration += 1;
         const observation = tokenizedObservation(
           event.content,
           observationGeneration,
         );
-        if (observation.refs.size === 0) return undefined;
+        if (observation.refs.size === 0) {
+          return {
+            details: safeBrowserResultDetails(call.tool),
+          };
+        }
 
         observedRefs.clear();
         for (const [token, evidence] of observation.refs) {
@@ -642,6 +660,7 @@ export async function createPublishingBrowserGuardExtension(
         }
         return {
           content: observation.content as typeof event.content,
+          details: safeBrowserResultDetails(call.tool),
         };
       });
     },
