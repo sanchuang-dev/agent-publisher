@@ -513,9 +513,18 @@ describe("Publishing browser MCP capability", () => {
         );
       },
       (context) => {
-        const latest = JSON.stringify(context.messages.at(-1));
-        expect(latest).toContain("Publisher browser authority or origin boundary was crossed");
-        expect(latest).not.toContain("BROWSER_CLICK_EXECUTED");
+        const transcript = JSON.stringify(context.messages);
+        expect(transcript).toContain(
+          "Publisher browser authority or origin boundary was crossed",
+        );
+        // The underlying fixture execution text must be hidden from the model
+        // once the post-action origin check detects the boundary crossing.
+        const latestToolResult = [...context.messages]
+          .reverse()
+          .find((message) => message.role === "toolResult");
+        expect(JSON.stringify(latestToolResult)).not.toContain(
+          "BROWSER_CLICK_EXECUTED",
+        );
         return fauxAssistantMessage(fauxText("REDIRECT_RESULT_REDACTED"));
       },
     ]);
