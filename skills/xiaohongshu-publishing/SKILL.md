@@ -84,6 +84,8 @@ The Publishing Secretary does not own:
 
 If the only apparent next action is final publication, stop and return control to Publisher.
 
+A generic browser click capability is **not** publish authority. The browser capability layer supplied by #105 must enforce the Publisher-owned final-publish boundary; this Skill does not claim that prompt text alone can make an unrestricted click tool safe. If a candidate click could be the final publish action, do not click it.
+
 ## Recovery
 
 When the page changes or an action fails:
@@ -100,7 +102,11 @@ Do not turn recovery into repeated guessing or repeated clicks.
 
 Repository-reviewed observations from real smoke runs live under `references/`.
 
-Use them as semantic hints with explicit provenance and limitations. They must never become an undocumented selector workflow.
+Current reviewed references:
+
+- `references/2026-09-22-creator-mode-entry.md` — a logged-in Creator page was visibly on video mode with `上传视频 / 上传图文 / 写文章`; the legacy image-text entry path failed before mutation, so the justified lesson is to re-observe and choose the semantic image-text direction rather than replaying a selector.
+
+Use references as semantic hints with explicit provenance and limitations. They must never become an undocumented selector workflow.
 
 ## Experience refinement
 
