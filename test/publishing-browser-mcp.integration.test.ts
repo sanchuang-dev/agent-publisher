@@ -10,17 +10,24 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { Page } from "playwright";
 import { afterEach, describe, expect, test } from "vitest";
 
 import type { AgentDefinition } from "../src/agent/definition.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
+import type {
+  BrowserAutomationAttachmentProvider,
+  BrowserSession,
+} from "../src/browser/provider.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
   PUBLISHING_BROWSER_MCP_TOOLS,
   PLAYWRIGHT_MCP_VERSION,
   createPublishingBrowserMcpProfile,
   createPublishingBrowserResourceLoader,
+  issuePublishingBrowserCapabilityGrant,
   type PublishingBrowserCapabilityGrant,
+  type PublishingBrowserClickAuthorizer,
 } from "../src/agent/publishing-browser-mcp.js";
 
 const fixturePath = resolve("test/fixtures/mcp-fixture-server.mjs");
@@ -92,23 +99,91 @@ async function createHost(
   });
 }
 
-function grant(uploadRoot: string): PublishingBrowserCapabilityGrant {
+function browserHarness(
+  initialUrl = "https://creator.xiaohongshu.com/publish",
+) {
+  let currentUrl = initialUrl;
+  let closed = false;
+  const page = {
+    url: () => currentUrl,
+    isClosed: () => closed,
+  } as unknown as Page;
+  const session: BrowserSession = {
+    id: "browser-session-a",
+    page,
+    profileRef: "browser-profile",
+  };
+  const provider: BrowserAutomationAttachmentProvider = {
+    async acquire() {
+      return session;
+    },
+    async release() {
+      closed = true;
+    },
+    async health() {
+      return { status: "reachable" };
+    },
+    async resolveAutomationAttachment(sessionId) {
+      if (sessionId !== session.id || closed) {
+        throw new Error("session is not owned by this provider");
+      }
+      return {
+        sessionId,
+        cdpEndpoint:
+          "ws://browser-runtime:9222/devtools/browser/test-browser",
+      };
+    },
+  };
+
   return {
+    page,
+    session,
+    provider,
+    setUrl(url: string) {
+      currentUrl = url;
+    },
+  };
+}
+
+const allowSafeClicks: PublishingBrowserClickAuthorizer = async ({
+  observedTarget,
+}) => ({
+  allowed: !observedTarget.includes("发布"),
+  ...(observedTarget.includes("发布")
+    ? { reason: "Publisher policy denied the observed publish control" }
+    : {}),
+});
+
+async function grant(
+  uploadRoot: string,
+  options: {
+    harness?: ReturnType<typeof browserHarness>;
+    authorizeClick?: PublishingBrowserClickAuthorizer;
+  } = {},
+): Promise<{
+  grant: PublishingBrowserCapabilityGrant;
+  harness: ReturnType<typeof browserHarness>;
+}> {
+  const harness = options.harness ?? browserHarness();
+  const issued = await issuePublishingBrowserCapabilityGrant({
     jobId: "job-browser",
-    browserSessionId: "browser-session-a",
-    cdpEndpoint: "ws://browser-runtime:9222/devtools/browser/test-browser",
+    browserProvider: harness.provider,
+    browserSession: harness.session,
     allowedOrigins: [
       "https://creator.xiaohongshu.com",
       "https://www.xiaohongshu.com/some/path",
     ],
     uploadRoot,
-  };
+    authorizeClick: options.authorizeClick ?? allowSafeClicks,
+  });
+  return { grant: issued, harness };
 }
 
 describe("Publishing browser MCP capability", () => {
   test("pins the official Playwright MCP CDP profile to the bounded tool surface", async () => {
     const uploadRoot = await tempDir("publisher-browser-profile-");
-    const profile = await createPublishingBrowserMcpProfile(grant(uploadRoot));
+    const { grant: issued } = await grant(uploadRoot);
+    const profile = createPublishingBrowserMcpProfile(issued);
     const server = profile.servers[0];
 
     expect(PLAYWRIGHT_MCP_VERSION).toBe("0.0.82");
@@ -117,6 +192,7 @@ describe("Publishing browser MCP capability", () => {
     expect(server?.includeTools).not.toContain("browser_evaluate");
     expect(server?.includeTools).not.toContain("browser_run_code_unsafe");
     expect(server?.includeTools).not.toContain("browser_close");
+    expect(server?.includeTools).not.toContain("browser_tabs");
 
     if (server?.transport.kind !== "stdio") {
       throw new Error("Expected Playwright MCP stdio transport");
@@ -143,7 +219,8 @@ describe("Publishing browser MCP capability", () => {
   test("fails closed when a browser grant is reused across Job scope", async () => {
     const uploadRoot = await tempDir("publisher-browser-scope-");
     const faux = fauxProvider({ provider: "publisher-browser-scope" });
-    const host = await createHost(faux, grant(uploadRoot));
+    const { grant: issued } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
 
     await expect(
       host.createSession({
@@ -169,7 +246,8 @@ describe("Publishing browser MCP capability", () => {
   test("blocks wrong-origin navigation before the MCP browser server executes it", async () => {
     const uploadRoot = await tempDir("publisher-browser-origin-");
     const faux = fauxProvider({ provider: "publisher-browser-origin" });
-    const host = await createHost(faux, grant(uploadRoot));
+    const { grant: issued } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
     const session = await host.createSession({
       definition: fixtureDefinition(),
       scope: { jobId: "job-browser", role: "publishing" },
@@ -212,7 +290,8 @@ describe("Publishing browser MCP capability", () => {
     await writeFile(deniedPath, "denied");
 
     const faux = fauxProvider({ provider: "publisher-browser-upload" });
-    const host = await createHost(faux, grant(uploadRoot));
+    const { grant: issued } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
     const session = await host.createSession({
       definition: fixtureDefinition(),
       scope: { jobId: "job-browser", role: "publishing" },
@@ -275,7 +354,8 @@ describe("Publishing browser MCP capability", () => {
     const uploadRoot = await tempDir("publisher-browser-publish-");
     await mkdir(uploadRoot, { recursive: true });
     const faux = fauxProvider({ provider: "publisher-browser-publish" });
-    const host = await createHost(faux, grant(uploadRoot));
+    const { grant: issued } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
     const session = await host.createSession({
       definition: fixtureDefinition(),
       scope: { jobId: "job-browser", role: "publishing" },
