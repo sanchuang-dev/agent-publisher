@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,7 @@ function fixtureHtml(pathname: string): string {
           <main>
             <h1>图文发布</h1>
             <label>标题 <input aria-label="标题" /></label>
+            <input type="file" />
             <p>BRW-01 destination reached</p>
           </main>
         </body>
@@ -76,6 +77,7 @@ function serializedMessages(context: { messages: readonly unknown[] }): string {
 }
 
 function refFor(messages: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\function refFor(messages: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = messages.match(
     new RegExp(`${escaped}[^\\n]*\\[ref=(e\\d+)\\]`, "i"),
@@ -85,10 +87,69 @@ function refFor(messages: string, label: string): string {
   }
   return match[1];
 }
+");
+  const match = messages.match(
+    new RegExp(`${escaped}[^\\n]*\\[ref=(e\\d+)\\]`, "i"),
+  );
+  if (!match?.[1]) {
+    throw new Error(`Could not find snapshot ref for ${label}`);
+  }
+  return match[1];
+}
+
+async function playwrightMcpPids(): Promise<Set<number>> {
+  const pids = new Set<number>();
+  let entries;
+  try {
+    entries = await readdir("/proc", { withFileTypes: true });
+  } catch {
+    return pids;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^\\d+$/.test(entry.name))
+      .map(async (entry) => {
+        try {
+          const cmdline = await readFile(`/proc/${entry.name}/cmdline`, "utf8");
+          if (cmdline.includes("@playwright/mcp/cli.js")) {
+            pids.add(Number.parseInt(entry.name, 10));
+          }
+        } catch {
+          // Process may exit between directory enumeration and cmdline read.
+        }
+      }),
+  );
+  return pids;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPidsToExit(pids: readonly number[]): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    if (pids.every((pid) => !isPidAlive(pid))) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error(
+    `Playwright MCP child remained alive after AgentSession dispose: ${pids.join(",")}`,
+  );
+}
 
 async function main(): Promise<void> {
   const uploadRoot = await mkdtemp(join(tmpdir(), "publisher-brw01-smoke-"));
+  const coverPath = join(uploadRoot, "cover.txt");
+  await writeFile(coverPath, "BRW-01 controlled upload");
+  const baselineMcpPids = await playwrightMcpPids();
   const server = await startFixture();
+  let session: Awaited<ReturnType<PiAgentHost["createSession"]>> | undefined;
 
   try {
     const faux = fauxProvider({ provider: "publisher-brw01-docker-smoke" });
@@ -132,7 +193,7 @@ async function main(): Promise<void> {
         createPublishingBrowserResourceLoader(input, grant),
     });
 
-    const session = await host.createSession({
+    session = await host.createSession({
       definition,
       scope: { jobId: grant.jobId, role: "publishing" },
     });
@@ -277,6 +338,50 @@ async function main(): Promise<void> {
         if (!messages.includes("BRW-01 controlled fill")) {
           throw new Error("Controlled browser_type did not update the form");
         }
+        const uploadRef = refFor(messages, "Choose File");
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: {
+                element: "Cover file chooser",
+                target: uploadRef,
+              },
+            },
+            { id: "open-file-chooser" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("File chooser")) {
+          throw new Error("browser_click did not open the file chooser modal state");
+        }
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_file_upload",
+              args: { paths: [coverPath] },
+            },
+            { id: "upload-cover" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const latest = context.messages.at(-1);
+        const latestSerialized = JSON.stringify(latest);
+        if (
+          latestSerialized.includes('"isError":true') ||
+          latestSerialized.includes("File access denied")
+        ) {
+          throw new Error("Controlled browser_file_upload did not succeed");
+        }
         return fauxAssistantMessage(fauxText("BRW01_DOCKER_MCP_SMOKE_OK"));
       },
     ]);
@@ -290,7 +395,18 @@ async function main(): Promise<void> {
       throw new Error(`Unexpected smoke result: ${result.finalText}`);
     }
 
+    const activeMcpPids = [...(await playwrightMcpPids())].filter(
+      (pid) => !baselineMcpPids.has(pid),
+    );
+    if (activeMcpPids.length === 0) {
+      throw new Error(
+        "Playwright MCP integration completed without an observable session-owned MCP child",
+      );
+    }
+
     await session.dispose();
+    session = undefined;
+    await waitForPidsToExit(activeMcpPids);
 
     try {
       await resolveCdpWebSocketEndpoint(cdpEndpoint, 5_000);
@@ -310,11 +426,21 @@ async function main(): Promise<void> {
           "wrong-origin-blocked",
           "snapshot-ref-navigation",
           "controlled-type",
+          "controlled-file-upload",
+          "mcp-child-stopped-on-session-dispose",
           "persistent-browser-survived-session-dispose",
         ],
       }) + "\n",
     );
   } finally {
+    if (session) {
+      try {
+        await session.dispose();
+      } catch {
+        // Preserve the primary smoke failure; process teardown is bounded by
+        // the outer CI timeout and separately asserted on the success path.
+      }
+    }
     await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
     await rm(uploadRoot, { recursive: true, force: true });
   }
