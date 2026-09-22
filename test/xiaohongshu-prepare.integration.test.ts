@@ -10,6 +10,7 @@ import {
   fingerprintXiaohongshuImageTextMaterialPack,
   XiaohongshuPageStateError,
   XiaohongshuPreparedValidationError,
+  XiaohongshuPrepareInteractionError,
   XiaohongshuUnsupportedPublishModeError,
   type PreparedImageTextPublication,
 } from "../src/platforms/xiaohongshu/image-text-prepare.js";
@@ -184,6 +185,128 @@ describe("XiaohongshuPrepareService", () => {
       }),
     ).rejects.toBeInstanceOf(XiaohongshuPrepareStateError);
     expect(prepareCalls).toBe(0);
+  });
+
+  test("pre-mutation interaction failure persists bounded diagnostics without leaking raw browser details", async () => {
+    const jobId = "job-xhs-preflight-diagnostic";
+    createPreparingPublishJob(jobId);
+    const { pack, prepared } = preparedFixture();
+    const sensitiveCause =
+      "cookie=session-secret token=token-secret profile=/private/profile https://creator.xiaohongshu.com/publish?token=query-secret";
+    let firstCalls = 0;
+
+    const failingService = new XiaohongshuPrepareService({
+      jobs,
+      actionRequests: actions,
+      jobControl: control,
+      resolveAssetPath: (asset) => "/fixtures/" + asset.assetId + ".png",
+      preparePage: async () => {
+        firstCalls += 1;
+        throw new XiaohongshuPrepareInteractionError(
+          "find_upload_input",
+          "creator_publish",
+          "browser_interaction",
+          "BROWSER_INTERACTION_FAILED",
+          { cause: new Error(sensitiveCause) },
+        );
+      },
+      createId: (() => {
+        let value = 0;
+        return (kind) => "preflight-" + kind + "-" + ++value;
+      })(),
+    });
+
+    await expect(
+      failingService.prepareForApproval({
+        jobId,
+        session: fakeSession(),
+        materialPack: pack,
+      }),
+    ).rejects.toMatchObject({
+      name: "XiaohongshuPrepareInteractionError",
+      stage: "find_upload_input",
+      urlCategory: "creator_publish",
+      interactionErrorType: "browser_interaction",
+      code: "BROWSER_INTERACTION_FAILED",
+    });
+    expect(firstCalls).toBe(1);
+
+    const failedJob = jobs.getById(jobId);
+    expect(failedJob).toMatchObject({
+      status: "preparing_publish",
+      currentStep: "verify_prepared",
+      checkpoint: {
+        platform: "xiaohongshu",
+        phase: "xhs_prepare_preflight_failed",
+        entryState: "authenticated",
+        interactionStage: "find_upload_input",
+        interactionUrlCategory: "creator_publish",
+        interactionErrorType: "browser_interaction",
+        interactionErrorCode: "BROWSER_INTERACTION_FAILED",
+        attempt: 1,
+      },
+    });
+    expect(actions.getCurrentOpenForJob(jobId)).toBeNull();
+
+    const failedStep = jobs
+      .getStepsForJob(jobId)
+      .filter((step) => step.stepKey === "verify_prepared")
+      .at(-1);
+    expect(failedStep).toMatchObject({
+      status: "failed",
+      attempt: 1,
+      errorCode: "BROWSER_INTERACTION_FAILED",
+      errorMessage:
+        "Xiaohongshu prepare interaction failed at find_upload_input (BROWSER_INTERACTION_FAILED).",
+    });
+
+    const durableJson = JSON.stringify({
+      job: failedJob,
+      step: failedStep,
+    });
+    expect(durableJson).not.toContain("session-secret");
+    expect(durableJson).not.toContain("token-secret");
+    expect(durableJson).not.toContain("query-secret");
+    expect(durableJson).not.toContain("/private/profile");
+    expect(durableJson).not.toContain("creator.xiaohongshu.com/publish?");
+
+    let retryCalls = 0;
+    const retryService = new XiaohongshuPrepareService({
+      jobs,
+      actionRequests: actions,
+      jobControl: control,
+      resolveAssetPath: (asset) => "/fixtures/" + asset.assetId + ".png",
+      preparePage: async (input) => {
+        retryCalls += 1;
+        await input.onMutationStarted?.();
+        return prepared;
+      },
+      createId: (() => {
+        let value = 0;
+        return (kind) => "preflight-retry-" + kind + "-" + ++value;
+      })(),
+    });
+
+    const retried = await retryService.prepareForApproval({
+      jobId,
+      session: fakeSession(),
+      materialPack: pack,
+    });
+    expect(retryCalls).toBe(1);
+    expect(retried).toMatchObject({
+      reused: false,
+      job: { status: "waiting_for_approval" },
+      approval: { type: "approval_required", status: "open" },
+    });
+    expect(
+      jobs
+        .getStepsForJob(jobId)
+        .filter((step) => step.stepKey === "verify_prepared")
+        .map((step) => [step.attempt, step.status]),
+    ).toEqual([
+      [1, "failed"],
+      [2, "succeeded"],
+    ]);
   });
 
   test("successful prepare durably pauses once for approval with a safe summary", async () => {

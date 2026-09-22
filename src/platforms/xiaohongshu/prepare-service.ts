@@ -21,6 +21,7 @@ import {
   XiaohongshuComposerNotFreshError,
   XiaohongshuPageStateError,
   XiaohongshuPreparedValidationError,
+  XiaohongshuPrepareInteractionError,
   XiaohongshuUnsupportedPublishModeError,
   type AssetPathResolver,
   type PreparedImageTextPublication,
@@ -213,6 +214,15 @@ function failureCode(error: unknown): string {
 }
 
 function safeFailureMessage(error: unknown): string {
+  if (error instanceof XiaohongshuPrepareInteractionError) {
+    return (
+      "Xiaohongshu prepare interaction failed at " +
+      error.stage +
+      " (" +
+      error.code +
+      ")."
+    );
+  }
   if (error instanceof XiaohongshuPreparedValidationError) {
     return "Prepared form did not match the intended material.";
   }
@@ -272,9 +282,10 @@ function isAuthenticatedLoginCheckpoint(
   job: Job,
   profileFingerprint: string,
 ): boolean {
+  const phase = job.checkpoint?.phase;
   return (
     job.checkpoint?.platform === "xiaohongshu" &&
-    job.checkpoint.phase === "ensure_login" &&
+    (phase === "ensure_login" || phase === "xhs_prepare_preflight_failed") &&
     job.checkpoint.entryState === "authenticated" &&
     job.checkpoint.browserProfileFingerprint === profileFingerprint
   );
@@ -527,9 +538,20 @@ export class XiaohongshuPrepareService {
           false,
         );
       } catch (error) {
+        if (!mutationStarted && error instanceof XiaohongshuPrepareInteractionError) {
+          this.#recordPreMutationInteractionFailure(
+            input.jobId,
+            contentFingerprint,
+            profileFingerprint,
+            stepId,
+            attempt,
+            error,
+          );
+        }
+
         if (
           mutationStarted ||
-          (recoveryMode && error instanceof XiaohongshuComposerNotFreshError)
+          (recoveryMode && failureCode(error) === "COMPOSER_NOT_FRESH")
         ) {
           this.#raiseRecoveryPause(
             { jobId: input.jobId, materialPack: input.materialPack },
@@ -546,6 +568,49 @@ export class XiaohongshuPrepareService {
       activePrepareJobs.delete(input.jobId);
       activePrepareSessions.delete(sessionKey);
     }
+  }
+
+  #recordPreMutationInteractionFailure(
+    jobId: string,
+    contentFingerprint: string,
+    profileFingerprint: string,
+    stepId: string,
+    attempt: number,
+    error: XiaohongshuPrepareInteractionError,
+  ): void {
+    const code = /^[A-Z0-9_]{1,64}$/.test(error.code)
+      ? error.code
+      : "BROWSER_INTERACTION_FAILED";
+    const message =
+      "Xiaohongshu prepare interaction failed at " +
+      error.stage +
+      " (" +
+      code +
+      ").";
+
+    this.#jobs.commitCheckpoint(jobId, {
+      status: "preparing_publish",
+      checkpoint: {
+        platform: "xiaohongshu",
+        phase: "xhs_prepare_preflight_failed",
+        entryState: "authenticated",
+        browserProfileFingerprint: profileFingerprint,
+        contentFingerprint,
+        interactionStage: error.stage,
+        interactionUrlCategory: error.urlCategory,
+        interactionErrorType: error.interactionErrorType,
+        interactionErrorCode: code,
+        attempt,
+      },
+      step: {
+        id: stepId,
+        stepKey: "verify_prepared",
+        status: "failed",
+        attempt,
+        errorCode: code,
+        errorMessage: message,
+      },
+    });
   }
 
   #nextAttempt(jobId: string): number {
