@@ -663,6 +663,7 @@ export async function createPublishingBrowserResourceLoader(
   grant: PublishingBrowserCapabilityGrant,
 ) {
   assertPublishingBrowserScope(input.scope, grant);
+  await assertActiveProviderAttachment(normalizeGrant(grant));
 
   const guard = await createPublishingBrowserGuardExtension(grant);
   return createControlledPiResourceLoader({
