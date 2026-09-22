@@ -169,7 +169,7 @@ describe("APP-02 runtime configuration", () => {
     ).toContain("# Publisher safety");
   });
 
-  test("Compose keeps app HTTP local while CDP stays internal", () => {
+  test("Compose exposes one product HTTP endpoint while noVNC and CDP stay internal", () => {
     const compose = readFileSync(
       resolve(import.meta.dirname, "..", "compose.yaml"),
       "utf8",
