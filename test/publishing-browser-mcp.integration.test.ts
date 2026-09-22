@@ -104,9 +104,14 @@ function browserHarness(
 ) {
   let currentUrl = initialUrl;
   let closed = false;
-  const page = {
+  let page: Page;
+  const context = {
+    pages: () => [page],
+  };
+  page = {
     url: () => currentUrl,
     isClosed: () => closed,
+    context: () => context,
   } as unknown as Page;
   const session: BrowserSession = {
     id: "browser-session-a",
