@@ -9,6 +9,10 @@ import {
   type ApiRouteModules,
 } from "../api/server.js";
 import { SseConnectionRegistry } from "../api/sse.js";
+import {
+  registerProductSurface,
+  type ProductSurfaceOptions,
+} from "../api/product-surface.js";
 
 export interface ApplicationDependencies {
   readonly sseConnections: SseConnectionRegistry;
@@ -18,6 +22,7 @@ export interface CreateApplicationOptions {
   readonly dependencies?: ApplicationDependencies;
   readonly routeModules?: ApiRouteModules;
   readonly fastify?: FastifyServerOptions;
+  readonly productSurface?: ProductSurfaceOptions;
 }
 
 export interface AgentPublisherApplication {
@@ -43,6 +48,8 @@ export function createApplication(
       : { routeModules: options.routeModules }),
     ...(options.fastify === undefined ? {} : { fastify: options.fastify }),
   });
+
+  registerProductSurface(server, options.productSurface ?? {});
 
   return {
     server,
