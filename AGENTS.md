@@ -40,10 +40,12 @@ feat/* -> dev -> test -> prod
 ## Architecture Baseline
 
 - Node.js + TypeScript.
-- Playwright is the deterministic browser automation baseline.
-- Prefer deterministic browser steps for known flows; use an Agent/model when it materially reduces brittle recovery or content-generation logic.
+- Playwright is the browser execution substrate behind `BrowserProvider` and restricted browser tools; it does not own publishing-path decisions.
+- For each Publish Job, the Publishing Secretary owns task-local browser execution: `observe → plan → act → observe/recover` against the current page state.
+- The Publisher Orchestrator deterministically owns business control: Job state/checkpoints, browser-control grants, identity handoff, prepared readback/validation, approval, publish-once, and verify-first recovery for uncertain irreversible side effects.
 - Keep browser runtime/provider concerns behind an adapter so local, self-hosted, and managed browsers can be swapped during the POC.
-- Keep platform-specific behavior in platform skills/adapters rather than spreading selectors and platform rules through orchestration code.
+- Platform Skills/adapters provide platform knowledge, success conditions, known affordances, and prohibited actions. Locator hints may be reused, but a fixed selector sequence is not the product execution contract.
+- Final irreversible publication is not exposed as an ordinary Agent browser tool; it remains behind Publisher-owned approval and side-effect governance.
 - Reuse external AI/media capabilities instead of rebuilding image, video, or model infrastructure during the POC.
 
 ## Identity and Side Effects
