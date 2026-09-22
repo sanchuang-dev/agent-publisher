@@ -7,20 +7,21 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json",
-    "test:unit": "vitest run",
-    "test:browser": "tsx --test web/test/browser-smoke.test.ts",
-    "test:browser-provider": "vitest run test/browser-provider.test.ts",
-    "smoke:browser-provider": "tsx scripts/browser-provider-smoke.ts",
-    "test": "npm run test:unit && npm run test:browser",
+    "build": "vite build web",
     "check": "npm run typecheck && npm run test && npm run build",
     "dev:web": "vite web",
-    "build": "vite build web",
+    "smoke:browser-provider": "tsx scripts/browser-provider-smoke.ts",
+    "smoke:content-secretary-live": "tsx scripts/content-secretary-live-smoke.ts",
+    "smoke:publishing-browser-mcp": "tsx scripts/publishing-browser-mcp-smoke.ts",
     "smoke:session-constraint": "tsx scripts/session-constraint-smoke.ts",
     "smoke:xhs-login": "tsx scripts/xiaohongshu-login-smoke.ts",
+    "smoke:xhs-prepare": "tsx scripts/xiaohongshu-prepare-smoke.ts",
     "start:api": "tsx scripts/start-app.ts",
-    "smoke:content-secretary-live": "tsx scripts/content-secretary-live-smoke.ts",
-    "smoke:xhs-prepare": "tsx scripts/xiaohongshu-prepare-smoke.ts"
+    "test": "npm run test:unit && npm run test:browser",
+    "test:browser": "tsx --test web/test/browser-smoke.test.ts",
+    "test:browser-provider": "vitest run test/browser-provider.test.ts",
+    "test:unit": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web/tsconfig.json"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
