@@ -267,8 +267,14 @@ export function registerProductSurface(
       });
 
       clientSocket.once("error", () => upstreamSocket.destroy());
-      clientSocket.once("close", release);
-      upstreamSocket.once("close", release);
+      clientSocket.once("close", () => {
+        upstreamSocket.destroy();
+        release();
+      });
+      upstreamSocket.once("close", () => {
+        if (!clientSocket.destroyed) clientSocket.destroy();
+        release();
+      });
     };
 
     server.server.on("upgrade", upgradeHandler);
