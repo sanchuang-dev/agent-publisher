@@ -77,17 +77,7 @@ function serializedMessages(context: { messages: readonly unknown[] }): string {
 }
 
 function refFor(messages: string, label: string): string {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\function refFor(messages: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = messages.match(
-    new RegExp(`${escaped}[^\\n]*\\[ref=(e\\d+)\\]`, "i"),
-  );
-  if (!match?.[1]) {
-    throw new Error(`Could not find snapshot ref for ${label}`);
-  }
-  return match[1];
-}
-");
   const match = messages.match(
     new RegExp(`${escaped}[^\\n]*\\[ref=(e\\d+)\\]`, "i"),
   );
