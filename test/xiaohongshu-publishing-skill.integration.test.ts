@@ -154,7 +154,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
       'Xiaohongshu Publishing MCP profile must not expose non-browser or overpowered tool "browser_evaluate"',
     );
 
-    await expect(
+    expect(() =>
       createXiaohongshuPublishingResourceLoader({
         definition: xiaohongshuPublishingDefinition,
         scope: {
@@ -166,7 +166,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
         allowedTools: ["read", "unsafe_probe"],
         extensionFactories: [],
       }),
-    ).rejects.toThrow(
+    ).toThrow(
       'Xiaohongshu Publishing sessions must not inherit unrelated top-level tool "unsafe_probe"',
     );
   });
