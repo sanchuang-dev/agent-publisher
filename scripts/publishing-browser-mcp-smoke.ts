@@ -79,13 +79,19 @@ function serializedMessages(context: { messages: readonly unknown[] }): string {
 
 function refFor(messages: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = messages.match(
-    new RegExp(`${escaped}[^\\n]*\\[ref=(g\\d+:e\\d+)\\]`, "i"),
-  );
-  if (!match?.[1]) {
+  const matches = [
+    ...messages.matchAll(
+      new RegExp(
+        `${escaped}[^\\n]*\\[ref=(g\\d+:e\\d+)\\]`,
+        "gi",
+      ),
+    ),
+  ];
+  const token = matches.at(-1)?.[1];
+  if (!token) {
     throw new Error(`Could not find snapshot ref for ${label}`);
   }
-  return match[1];
+  return token;
 }
 
 async function playwrightMcpPids(): Promise<Set<number>> {
