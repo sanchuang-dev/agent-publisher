@@ -261,8 +261,8 @@ Do not commit the key or paste it into Issue/PR evidence. For local development 
 ## Engineering baseline
 
 - Node.js + TypeScript
-- Playwright for deterministic browser automation
-- Agent/model capabilities used where they materially reduce brittle browser logic
+- Playwright as the browser execution substrate behind BrowserProvider and restricted browser tools
+- Publishing Secretary owns task-local browser path choice through `observe → plan → act → observe/recover`; Publisher code owns Job/checkpoint/identity/validation/approval/publish-once governance
 - Browser runtime may be local, self-hosted, or managed behind an adapter during the POC
 
 ## Branches
