@@ -1,10 +1,14 @@
 FROM debian:bookworm-slim
 
+ARG DEBIAN_MIRROR=
+
 ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     BROWSER_PROFILE_DIR=/data/profile
 
-RUN sed -i 's|deb.debian.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list.d/debian.sources \
+RUN if [ -n "$DEBIAN_MIRROR" ]; then \
+      sed -i "s|deb.debian.org|$DEBIAN_MIRROR|g" /etc/apt/sources.list.d/debian.sources; \
+    fi \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
