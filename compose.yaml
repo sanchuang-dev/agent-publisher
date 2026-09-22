@@ -2,6 +2,8 @@ services:
   browser-runtime:
     build:
       context: ./docker/browser-runtime
+      args:
+        DEBIAN_MIRROR: "${DEBIAN_MIRROR:-}"
     shm_size: "1gb"
     mem_limit: 3g
     cpus: 2.0
