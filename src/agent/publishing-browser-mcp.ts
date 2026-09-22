@@ -132,39 +132,53 @@ function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
 }
 
-function normalizeGrant(
-  grant: PublishingBrowserCapabilityGrant,
-): NormalizedPublishingBrowserGrant {
-  const jobId = required(grant.jobId, "Publishing browser Job id");
-  const browserSessionId = required(
-    grant.browserSessionId,
-    "Publishing browser session id",
-  );
-  const cdpRaw = required(
-    grant.cdpEndpoint,
-    "Publishing browser CDP endpoint",
-  );
-  let cdp: URL;
+function normalizeCdpEndpoint(raw: string): string {
+  const value = required(raw, "Publishing browser CDP endpoint");
+  let parsed: URL;
   try {
-    cdp = new URL(cdpRaw);
+    parsed = new URL(value);
   } catch (error) {
     throw new Error("Publishing browser CDP endpoint must be a valid absolute URL", {
       cause: error,
     });
   }
+
   if (
-    cdp.protocol !== "http:" &&
-    cdp.protocol !== "https:" &&
-    cdp.protocol !== "ws:" &&
-    cdp.protocol !== "wss:"
+    parsed.protocol !== "http:" &&
+    parsed.protocol !== "https:" &&
+    parsed.protocol !== "ws:" &&
+    parsed.protocol !== "wss:"
   ) {
-    throw new Error(
-      "Publishing browser CDP endpoint must use http(s) or ws(s)",
-    );
+    throw new Error("Publishing browser CDP endpoint must use http(s) or ws(s)");
   }
-  if (cdp.username || cdp.password) {
+  if (parsed.username || parsed.password) {
     throw new Error("Publishing browser CDP endpoint must not embed credentials");
   }
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function normalizeGrant(
+  grant: PublishingBrowserCapabilityGrant,
+): NormalizedPublishingBrowserGrant {
+  if (grant[publishingBrowserGrantBrand] !== true) {
+    throw new Error("Publishing browser grants must be issued by Publisher");
+  }
+
+  const jobId = required(grant.jobId, "Publishing browser Job id");
+  const browserSessionId = required(
+    grant.browserSessionId,
+    "Publishing browser session id",
+  );
+  if (grant.browserSession.id !== browserSessionId) {
+    throw new Error("Publishing browser grant session identity mismatch");
+  }
+  if (grant.browserSession.page.isClosed()) {
+    throw new Error("Publishing browser grant references a closed browser page");
+  }
+  if (typeof grant.authorizeClick !== "function") {
+    throw new Error("Publishing browser grant requires a Publisher click authorizer");
+  }
+
   const allowedOrigins = unique(grant.allowedOrigins.map(normalizeOrigin));
   if (allowedOrigins.length === 0) {
     throw new Error(
@@ -176,12 +190,41 @@ function normalizeGrant(
     ...grant,
     jobId,
     browserSessionId,
-    cdpEndpoint: cdp.toString().replace(/\/$/, ""),
+    cdpEndpoint: normalizeCdpEndpoint(grant.cdpEndpoint),
     allowedOrigins,
-    uploadRoot: resolve(required(grant.uploadRoot, "Publishing browser upload root")),
+    uploadRoot: resolve(
+      required(grant.uploadRoot, "Publishing browser upload root"),
+    ),
   };
 }
 
+export async function issuePublishingBrowserCapabilityGrant(
+  input: PublishingBrowserCapabilityGrantInput,
+): Promise<PublishingBrowserCapabilityGrant> {
+  const jobId = required(input.jobId, "Publishing browser Job id");
+  if (input.browserSession.page.isClosed()) {
+    throw new Error("Cannot issue a browser grant for a closed BrowserSession");
+  }
+
+  const attachment = await input.browserProvider.resolveAutomationAttachment(
+    input.browserSession.id,
+  );
+  if (attachment.sessionId !== input.browserSession.id) {
+    throw new Error("BrowserProvider returned an attachment for a different session");
+  }
+
+  const grant: PublishingBrowserCapabilityGrant = {
+    [publishingBrowserGrantBrand]: true,
+    jobId,
+    browserSession: input.browserSession,
+    browserSessionId: input.browserSession.id,
+    cdpEndpoint: attachment.cdpEndpoint,
+    allowedOrigins: input.allowedOrigins,
+    uploadRoot: input.uploadRoot,
+    authorizeClick: input.authorizeClick,
+  };
+  return normalizeGrant(grant);
+}
 function isWithinPath(target: string, root: string): boolean {
   return target === root || target.startsWith(`${root}${sep}`);
 }
@@ -201,17 +244,6 @@ function assertAllowedUrl(
       `${label} origin is outside the Publisher browser grant: ${parsed.origin}`,
     );
   }
-}
-
-function normalizeElementLabel(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
-  return normalized || undefined;
-}
-
-function isFinalPublishLikeClick(args: Record<string, unknown>): boolean {
-  const element = normalizeElementLabel(args.element);
-  return element !== undefined && FINAL_PUBLISH_LABELS.has(element);
 }
 
 async function assertUploadPaths(
