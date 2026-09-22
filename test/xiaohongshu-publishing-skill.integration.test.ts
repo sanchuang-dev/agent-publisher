@@ -13,6 +13,7 @@ import {
 import {
   ModelRuntime,
   defineTool,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test } from "vitest";
 
@@ -46,7 +47,7 @@ async function createFauxRuntime(provider: ReturnType<typeof fauxProvider>) {
 async function createPublishingHost(
   cwd: string,
   faux: ReturnType<typeof fauxProvider>,
-  customTools: Parameters<typeof defineTool>[0][] = [],
+  customTools: readonly ToolDefinition[] = [],
 ) {
   const modelRuntime = await createFauxRuntime(faux);
   return new PiAgentHost({
@@ -56,7 +57,7 @@ async function createPublishingHost(
     defaultRunTimeoutMs: 2_000,
     tools: XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
     sessionOptions: {
-      customTools: customTools.map((definition) => defineTool(definition)),
+      customTools: [...customTools],
       thinkingLevel: "off",
     },
     createResourceLoader: createXiaohongshuPublishingResourceLoader,
@@ -203,7 +204,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     const faux = fauxProvider({ provider: "publisher-xhs-skill-safety" });
     let publishExecutions = 0;
 
-    const finalPublishDefinition = {
+    const finalPublish = defineTool({
       name: "final_publish",
       label: "Final Publish",
       description: "Forbidden irreversible publication probe.",
@@ -215,11 +216,9 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
           details: {},
         };
       },
-    };
+    });
 
-    const host = await createPublishingHost(cwd, faux, [
-      finalPublishDefinition,
-    ]);
+    const host = await createPublishingHost(cwd, faux, [finalPublish]);
     const session = await host.createSession({
       definition: xiaohongshuPublishingDefinition,
       scope: {
