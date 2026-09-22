@@ -30,7 +30,7 @@ import {
   type PublishingBrowserClickAuthorizer,
 } from "../src/agent/publishing-browser-mcp.js";
 
-const fixturePath = resolve("test/fixtures/mcp-fixture-server.mjs");
+const fixturePath = resolve("test/fixtures/publishing-browser-mcp-fixture-server.mjs");
 const temporaryPaths: string[] = [];
 
 async function tempDir(prefix: string): Promise<string> {
