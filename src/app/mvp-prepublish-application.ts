@@ -34,6 +34,8 @@ export interface CreateMvpPrepublishApplicationOptions {
   readonly databasePath?: string;
   readonly browserProvider?: BrowserProvider;
   readonly browserLiveViewUrl?: string;
+  readonly browserLiveViewUpstream?: string;
+  readonly webRoot?: string;
   readonly fastify?: FastifyServerOptions;
   readonly xiaohongshu?: {
     readonly openEntry?: XiaohongshuLoginServiceDependencies["openEntry"];
@@ -132,6 +134,12 @@ export function createMvpPrepublishApplication(
       }),
     },
     ...(options.fastify === undefined ? {} : { fastify: options.fastify }),
+    productSurface: {
+      ...(options.webRoot === undefined ? {} : { webRoot: options.webRoot }),
+      ...(options.browserLiveViewUpstream === undefined
+        ? {}
+        : { browserLiveViewUpstream: options.browserLiveViewUpstream }),
+    },
   });
 
   let stopped = false;
