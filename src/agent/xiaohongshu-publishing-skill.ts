@@ -21,6 +21,26 @@ export const XIAOHONGSHU_PUBLISHING_DEFINITION_ID =
  */
 export const XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS = ["read"] as const;
 
+/**
+ * Remote browser tools that #105 may expose through the controlled MCP server.
+ * Keep this list semantic and minimal: no evaluate/run-code, browser install,
+ * console/network inspection, or irreversible platform-specific publish tool.
+ */
+export const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS = [
+  "browser_snapshot",
+  "browser_tabs",
+  "browser_navigate",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_file_upload",
+  "browser_wait_for",
+] as const;
+
+const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOL_SET = new Set<string>(
+  XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS,
+);
+
 const XIAOHONGSHU_PUBLISHING_ALLOWED_SESSION_TOOLS = new Set([
   "read",
   "mcp",
@@ -50,9 +70,25 @@ const systemPrompt = [
   "If the current state is ambiguous or outside the granted browser capability, stop and report the bounded gap instead of guessing.",
 ].join("\n");
 
+function assertPublishingMcpProfile(mcp: AgentMcpProfile | undefined): void {
+  if (!mcp) return;
+
+  for (const server of mcp.servers) {
+    for (const toolName of server.includeTools) {
+      if (!XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOL_SET.has(toolName)) {
+        throw new Error(
+          `Xiaohongshu Publishing MCP profile must not expose non-browser or overpowered tool "${toolName}"`,
+        );
+      }
+    }
+  }
+}
+
 export function createXiaohongshuPublishingDefinition(
   mcp?: AgentMcpProfile,
 ): AgentDefinition {
+  assertPublishingMcpProfile(mcp);
+
   return {
     id: XIAOHONGSHU_PUBLISHING_DEFINITION_ID,
     systemPrompt,
@@ -102,6 +138,7 @@ export function createXiaohongshuPublishingResourceLoader(
   }
 
   assertPublishingToolSurface(input.allowedTools);
+  assertPublishingMcpProfile(input.definition.mcp);
 
   return createControlledPiResourceLoader({
     cwd: input.cwd,
