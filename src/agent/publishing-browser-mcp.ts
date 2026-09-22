@@ -81,6 +81,7 @@ export interface PublishingBrowserCapabilityGrantInput {
 export interface PublishingBrowserCapabilityGrant {
   readonly [publishingBrowserGrantBrand]: true;
   readonly jobId: string;
+  readonly browserProvider: BrowserAutomationAttachmentProvider;
   readonly browserSession: BrowserSession;
   readonly browserSessionId: string;
   readonly cdpEndpoint: string;
@@ -215,6 +216,7 @@ export async function issuePublishingBrowserCapabilityGrant(
   const grant: PublishingBrowserCapabilityGrant = {
     [publishingBrowserGrantBrand]: true,
     jobId,
+    browserProvider: input.browserProvider,
     browserSession: input.browserSession,
     browserSessionId: input.browserSession.id,
     cdpEndpoint: attachment.cdpEndpoint,
@@ -223,6 +225,27 @@ export async function issuePublishingBrowserCapabilityGrant(
     authorizeClick: input.authorizeClick,
   };
   return normalizeGrant(grant);
+}
+
+async function assertActiveProviderAttachment(
+  grant: NormalizedPublishingBrowserGrant,
+): Promise<void> {
+  const attachment = await grant.browserProvider.resolveAutomationAttachment(
+    grant.browserSessionId,
+  );
+  if (attachment.sessionId !== grant.browserSessionId) {
+    throw new Error(
+      "Publisher browser grant no longer matches the BrowserProvider-owned session",
+    );
+  }
+  if (
+    normalizeCdpEndpoint(attachment.cdpEndpoint) !==
+    normalizeCdpEndpoint(grant.cdpEndpoint)
+  ) {
+    throw new Error(
+      "Publisher browser grant no longer matches the BrowserProvider-owned automation endpoint",
+    );
+  }
 }
 function isWithinPath(target: string, root: string): boolean {
   return target === root || target.startsWith(`${root}${sep}`);
@@ -510,6 +533,7 @@ export async function createPublishingBrowserGuardExtension(
         }
 
         try {
+          await assertActiveProviderAttachment(grant);
           if (call.tool === "browser_navigate") {
             assertAllowedUrl(call.args.url, allowedOrigins, "browser_navigate URL");
           } else {
@@ -580,6 +604,7 @@ export async function createPublishingBrowserGuardExtension(
         if (!publishingBrowserToolSet.has(call.tool)) return undefined;
 
         try {
+          await assertActiveProviderAttachment(grant);
           currentAllowedPageUrl(grant, allowedOrigins);
         } catch {
           observedRefs.clear();
@@ -588,10 +613,12 @@ export async function createPublishingBrowserGuardExtension(
               {
                 type: "text" as const,
                 text:
-                  "Publisher browser origin boundary crossed; browser result redacted and further actions are blocked.",
+                  "Publisher browser authority or origin boundary was crossed; browser result redacted and the stale grant cannot continue mutating the page.",
               },
             ],
-            isError: true,
+            // Keep the Agent loop alive so it can surface/recover from the
+            // boundary event instead of silently terminating after the tool.
+            isError: false,
           };
         }
 
