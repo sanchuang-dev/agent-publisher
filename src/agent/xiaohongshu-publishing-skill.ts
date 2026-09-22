@@ -25,6 +25,11 @@ export const XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS = ["read"] as const;
  * Remote browser tools that #105 may expose through the controlled MCP server.
  * Keep this list semantic and minimal: no evaluate/run-code, browser install,
  * console/network inspection, or irreversible platform-specific publish tool.
+ *
+ * Note that generic browser_click is capability, not publish authority. #105
+ * must enforce the Publisher-owned final-publish boundary at the browser tool
+ * layer; this Skill profile deliberately does not pretend prompt text alone can
+ * make an unrestricted click primitive safe.
  */
 export const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS = [
   "browser_snapshot",
