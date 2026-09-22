@@ -418,14 +418,27 @@ async function main(): Promise<void> {
           { stopReason: "toolUse" },
         );
       },
+      () =>
+        fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "snapshot-image-text-after-click" },
+          ),
+          { stopReason: "toolUse" },
+        ),
       (context) => {
-        const messages = serializedMessages(context);
+        const latest = JSON.stringify(context.messages.at(-1));
         if (
-          !messages.includes("图文发布") ||
-          !messages.includes("BRW-01 destination reached")
+          !latest.includes("图文发布") ||
+          !latest.includes("BRW-01 destination reached")
         ) {
           throw new Error(
-            "Agent-selected click did not reach the image-text destination",
+            "Post-click snapshot did not show the image-text destination",
           );
         }
         const titleRef = refFor(context.messages.at(-1), "标题");
@@ -447,10 +460,23 @@ async function main(): Promise<void> {
           { stopReason: "toolUse" },
         );
       },
+      () =>
+        fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "snapshot-after-title-type" },
+          ),
+          { stopReason: "toolUse" },
+        ),
       (context) => {
-        const messages = serializedMessages(context);
-        if (!messages.includes("BRW-01 controlled fill")) {
-          throw new Error("Controlled browser_type did not update the form");
+        const latest = JSON.stringify(context.messages.at(-1));
+        if (!latest.includes("BRW-01 controlled fill")) {
+          throw new Error("Post-type snapshot did not show the filled title");
         }
         const uploadRef = refFor(context.messages.at(-1), "Choose File");
         return fauxAssistantMessage(
