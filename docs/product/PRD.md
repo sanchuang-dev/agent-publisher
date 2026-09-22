@@ -55,7 +55,9 @@ Responsible for:
 
 These are product roles, not a requirement for two independent autonomous agent runtimes.
 
-The MVP keeps **one Publisher Orchestrator** as the business control owner. It may create isolated agent sessions for the Content Secretary, Publishing Secretary, or a bounded helper such as browser recovery when reasoning is actually needed. Those sessions are execution resources owned by the Orchestrator, not autonomous peers that delegate the Publish Job among themselves.
+The MVP keeps **one Publisher Orchestrator** as the business control owner. For each Publish Job, it delegates browser preparation to a job-scoped Publishing Secretary session. Inside that bounded task, the Publishing Secretary owns page-local execution choices: observe the current page, plan the next safe action, act through allowed browser capabilities, then observe the result and recover or re-plan. It does **not** own Job state transitions, checkpoints, human handoff, approval, or irreversible publish authority.
+
+The Orchestrator may also create isolated Content Secretary or bounded helper sessions. These sessions are execution resources owned by the Orchestrator, not autonomous peers that delegate the Publish Job among themselves.
 
 Reusable agent configuration and per-job agent state are separate concerns: an agent definition may be reused across many jobs, while task conversation/context must remain isolated by job/role (or a narrower helper-task scope).
 
@@ -335,26 +337,45 @@ Pi session history supports agent continuity; **Publisher SQLite remains the sou
 
 Use:
 
-> one Publisher Orchestrator + orchestrator-owned agent sessions created only when reasoning is useful
+> one Publisher Orchestrator + orchestrator-owned, job-scoped agent sessions
 
-The product still exposes Content Secretary and Publishing Secretary as its two worker roles. An implementation may use additional bounded helper sessions, such as browser recovery, without becoming an autonomous multi-agent organization.
+The product still exposes Content Secretary and Publishing Secretary as its two worker roles. The Publishing Secretary session is the task-local execution owner for normal pre-publish browser work. An implementation may use additional bounded helper sessions without becoming an autonomous multi-agent organization.
 
 Agent sessions do not own phase transitions, checkpoints, approval gates, retry authority for irreversible side effects, or Job completion.
 
-### Deterministic first
+### Publishing execution ownership
 
-Known, repeatable browser and workflow steps should be deterministic.
+Browser preparation follows an Agent-owned local control loop:
 
-Use agent/model reasoning for bounded work such as:
+```text
+observe current page
+  ↓
+plan the next bounded action
+  ↓
+act through allowed browser tools
+  ↓
+observe the post-condition
+  ↓
+continue | re-plan/recover | request human action | fail visibly
+```
 
-- understanding a brief;
-- generating a MaterialPlan;
-- generating/adapting copy;
-- interpreting uncertain page state;
-- recovery from unexpected browser/UI changes;
-- deciding a safe next step after bounded failure.
+The current observed page state decides the next local action. A platform Skill may provide known entry points, semantic cues, locator hints, successful patterns, required post-conditions, and prohibited actions, but it is **not** a fixed selector workflow that the Orchestrator replays step by step.
 
-Do **not** require model reasoning for every browser click.
+Stable browser affordances may be used directly when they match the observed state; the product does not require performative model reasoning for every click. The important boundary is that Publisher code does not own a brittle page-path script as the normal publishing route.
+
+Publisher-owned deterministic control remains responsible for:
+
+- Job state transitions and checkpoints;
+- which browser/tool capabilities are granted and who currently owns control;
+- login/MFA/device-verification handoff and resume;
+- prepared-form readback and validation against the accepted material;
+- the explicit approval gate;
+- `external_actions` idempotency and publish-once authority;
+- verify-first recovery when an irreversible result is uncertain.
+
+Final publication is not exposed as an ordinary Agent browser tool. After approval, the side effect goes through a Publisher-owned guarded operation and is verified before success is recorded.
+
+This task-local autonomy must not expand Agent Publisher into a general-purpose browser agent.
 
 ### Human action protocol
 
@@ -457,7 +478,7 @@ The POC should avoid architecture that requires local persistent filesystem sema
 Current baseline:
 
 - Node.js + TypeScript;
-- Playwright for deterministic browser automation;
+- Playwright as the browser execution substrate behind BrowserProvider/restricted browser tools, not as the owner of publishing-path decisions;
 - React + Vite for the operator UI;
 - Material Design 3 as the frontend design-system baseline;
 - SQLite is sufficient for POC task/profile metadata;
@@ -496,24 +517,22 @@ If an irreversible action reaches an uncertain result, move to verification/reco
 
 ## 12. Xiaohongshu MVP skill boundary
 
-The Xiaohongshu publisher is a bounded platform skill.
+The Xiaohongshu Skill is bounded platform knowledge for the Publishing Secretary. It describes the supported publishing intent, semantic cues, known successful patterns, material requirements, prepared-state success conditions, identity/risk-control handoff conditions, and prohibited actions. It may include locator hints discovered from successful runs, but it does not define one mandatory selector sequence.
 
-Deterministic automation owns the normal path:
+For normal pre-publish work, the Publishing Secretary owns the browser path for the current Job:
 
-1. open the publishing entry;
-2. detect authenticated session state;
-3. select 图文 or 视频 from the job;
-4. upload prepared assets;
-5. fill known fields;
-6. wait for uploads/processing;
-7. read back and validate the prepared form;
-8. pause for publish approval;
-9. execute the approved publish action once;
-10. verify the result and capture evidence.
+1. observe the real Creator page and classify the current local state;
+2. choose the next bounded action using the Job intent plus Skill guidance;
+3. act through the allowed browser capabilities;
+4. observe the result;
+5. continue, re-plan/recover, request human takeover, or fail visibly;
+6. stop when the prepared-form success condition is reached.
 
-Agent reasoning is reserved for bounded recovery when the deterministic path fails, such as interpreting changed labels, unexpected dialogs, relocated controls, or deciding that human takeover is safer. Recovery should prefer inspection before mutation.
+Publisher-owned deterministic validation then reads back the effective prepared form and checks it against the accepted material before the Job may enter approval.
 
-The recovery path may not change accepted content without user intent, publish without approval, or repeat a publication whose previous result is uncertain. When recovery cannot confidently restore the known path, transition to human takeover or a visible failure state.
+Identity proof remains human-owned. The Publishing Secretary must not bypass login/MFA/device verification, alter accepted content merely to get through the flow, or keep mutating the page while human control is active.
+
+Final publication is not an ordinary Agent browser action. A resolved approval plus Publisher side-effect governance authorizes one guarded publish attempt, followed by result verification. If that result is uncertain, recovery verifies first and must not immediately publish again.
 
 ## 13. MVP scope
 
@@ -570,7 +589,7 @@ The result must be verified on the real platform. A passing unit test, browser s
 - Small and real beats broad and conceptual.
 - Reuse before rebuild.
 - Stability before maximum autonomy.
-- Deterministic automation before unnecessary model reasoning.
+- Deterministic business governance; Agent-chosen browser execution path within bounded tools and Skills.
 - AI employees are a product interaction model, not an excuse for unnecessary autonomous multi-agent complexity.
 - Reuse mature agent-harness capabilities before inventing Publisher-specific registries, session managers, or protocol runtimes.
 - Reuse agent definitions across jobs, but isolate task sessions and keep business truth outside model conversation state.

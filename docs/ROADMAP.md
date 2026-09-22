@@ -1,6 +1,6 @@
 # Agent Publisher Roadmap
 
-Updated: 2026-09-21
+Updated: 2026-09-22
 
 This document owns **phase ordering, dependency shape, and MVP sequencing**. It is a planning projection, not a second live task board.
 
@@ -21,15 +21,16 @@ brief
   → Builtin image-text material
   → durable Job
   → visible persistent browser
-  → login / human takeover when required
-  → deterministic prepare + readback validation
+  → Publishing Secretary observe / plan / act / recover
+  → human identity takeover when required
+  → Publisher prepared-state readback / validation
   → explicit approval
   → publish once
   → verify result
   → persist evidence
 ```
 
-Known platform flow remains deterministic. Agent sessions may plan content and later propose bounded recovery; they do not own Job truth, approval, or irreversible publication.
+Normal pre-publish browser routing is owned by the job-scoped Publishing Secretary: it observes the current page, chooses the next bounded action, acts through approved browser capabilities, and re-observes/re-plans. Publisher-owned deterministic code still owns Job truth, checkpoints, control grants, identity handoff, prepared-state validation, approval, publish-once, and verify-first recovery for uncertain irreversible side effects.
 
 ## Current snapshot
 
@@ -67,7 +68,7 @@ The implementation chain is complete on `dev`:
   ↓
 #78 MaterialPreparationService + configured provider pipeline ✅
   ↓
-existing Xiaohongshu prepare path
+Xiaohongshu publishing execution boundary
 ```
 
 The product runtime now defaults to the real provider pipeline rather than controlled smoke material.
@@ -84,16 +85,19 @@ The Builtin path provides:
 
 Parent #6 remains open only for its human visual acceptance criterion: a maintainer still needs to inspect at least one real-brief Builtin material result. Canva and video remain additive follow-up capabilities, not MVP prerequisites.
 
-### Xiaohongshu deterministic path
+### Xiaohongshu pre-publish transition
 
-Implementation for #50, #51, and #70 is merged into `dev`, but the real-account acceptance evidence is still pending.
+Implementation for #50, #51, #70, and #95 has landed on `dev` and remains valuable as login/auth guards, prepared-state readback/validation, smoke/diagnostic evidence, and reusable safe browser primitives. It does **not** define the target ownership model for the normal browser route.
 
-- #50 XHS-01: login state / human takeover / resume — implementation landed.
-- #51 XHS-02: image-text prepare / readback / approval stop — implementation landed.
-- #70 XHS-03: dedicated real-account prepare smoke harness — implementation landed and CI-green.
-- Parent #4 remains open until the human-verifiable pre-publish outcome is proven.
+The 2026-09-22 real Creator smoke exposed the architecture gap: the page visibly offered “上传图文”, while the fixed `enter_image_text` route still failed. The durable conclusion is to stop treating selector repair as the normal-path owner and move task-local route choice into the Publishing Secretary under GOV-01.
 
-The next platform evidence should come from the real-account #70 smoke, stopping at durable `waiting_for_approval + approval_required` with no final publish.
+- #50 XHS-01: retain login-state and human-handoff guards.
+- #51 XHS-02: retain upload/readback/prepared validation assets where safe to reuse; its fixed prepare sequence is not the future route owner.
+- #70 XHS-03: retain the real-account smoke harness as evidence/diagnostic infrastructure.
+- #95 XHS-04: retain bounded diagnostics and observed real-page compatibility evidence rather than extending an endless selector path.
+- Parent #4 remains the human-verifiable Agent-driven pre-publish outcome and stays open until that product result is proven.
+
+The replacement execution path is dependency-driven: controlled browser capability (#105) plus Xiaohongshu Skill knowledge (#106) feed the Publishing Secretary vertical slice (#43), while identity handoff (#96) and independent prepared-state validation (#107) preserve Publisher governance. Issue-contract migration and exact dependency wording remain owned by GOV-02 #103.
 
 ### Product integration path
 
@@ -129,7 +133,7 @@ The irreversible publish prerequisites are ready:
 #53 PUB-02 publish-once / verify / evidence
 ```
 
-#53 is the next core implementation slice.
+#53 remains the core irreversible-side-effect slice. It may proceed where its dependencies permit, but it is not the owner of normal browser-route selection.
 
 It may implement deterministic approval binding, publish-once guards, unknown-result verification-first recovery, and evidence persistence without performing a real external publication.
 
@@ -144,18 +148,21 @@ started
   → never automatically re-publish
 ```
 
-## Agent recovery
+## Publishing Secretary browser execution
 
-#43 Publishing Recovery is technically unblocked by the landed deterministic XHS path, but it remains behind the normal human/product MVP path.
+#43 is the Publishing Secretary task-local browser execution vertical slice, not an inspect-only recovery helper. It is gated by the GOV-01 contract and controlled Browser tools (#105), with Xiaohongshu platform knowledge supplied by #106.
 
-Correct boundary:
+Normal pre-publish execution follows:
 
 ```text
-known deterministic step
-  → bounded inspect-only recovery
-  → structured RecoveryProposal
-  → Publisher chooses retry-known-step / human / fail
+observe current page
+  → plan next bounded action
+  → act through approved Browser tools
+  → observe post-condition
+  → continue / re-plan / human handoff / fail visibly
 ```
+
+Recovery is part of that ordinary local execution loop. Publisher code independently owns Job/checkpoint transitions, browser-control handoff, prepared-state validation, approval, and irreversible-side-effect governance.
 
 No final publish/delete/overwrite Tool is exposed to the model.
 
@@ -167,20 +174,20 @@ Public documentation or community research alone is not acceptance evidence.
 
 ## Near-term ordering
 
-Use dependency readiness rather than opening every card at once.
+Use dependency readiness rather than opening every card at once. GOV-02 #103 owns the mutation of existing Issue contracts/dependencies; this roadmap only projects the intended sequence.
 
-1. Run #70 real Xiaohongshu prepare smoke and use that evidence to settle #50/#51/#4 where the observed path satisfies their criteria.
-2. Run #73 human Web MVP smoke through the real provider pipeline; use the rendered material for parent #6 human visual acceptance when suitable.
-3. Implement #53 PUB-02 as the next core backend slice. Real publish remains separately authorized.
-4. Close parent #6 once the human Builtin-material inspection evidence is recorded.
-5. Keep #43 behind the core human/product path unless a concrete recovery need blocks acceptance.
-6. Continue #34 capability validation and later Canva/video work without turning them into MVP blockers.
+1. GOV-01 #102 is the landed architecture gate; use GOV-02 #103 next to remove conflicting old Issue wording without erasing historical evidence.
+2. Establish controlled Publishing Secretary browser capability (#105) and Xiaohongshu Skill knowledge (#106), then complete the task-local execution vertical slice (#43).
+3. Complete Agent-driven identity routing/handoff (#96) and independent prepared-state validation/approval stop (#107) to prove parent #4 on the real Creator page.
+4. Complete the Web product boundary through #97/#108/#109 as dependencies allow; normal users should not need raw CDP/noVNC/internal ports.
+5. Keep #53 as the Publisher-owned approval + publish-once + verify-first side-effect path. A real publish remains separately authorized.
+6. Use product-level human smoke to settle the remaining #3/#4/#6 acceptance evidence; continue #34 capability validation and additive Canva/video work without making them MVP blockers.
 
 ## Definition of meaningful MVP progress
 
 A change materially advances MVP when it removes or proves a boundary on one of these paths:
 
-- human-verifiable XHS pre-publish;
+- human-verifiable Agent-driven XHS pre-publish under Publisher validation;
 - real API/UI task integration;
 - publish-once + verify/evidence;
 - dependable real image-text material generation.
