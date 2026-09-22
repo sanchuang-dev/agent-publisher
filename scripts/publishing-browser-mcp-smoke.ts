@@ -490,7 +490,7 @@ async function main(): Promise<void> {
     });
 
     if (result.finalText !== "BRW01_DOCKER_MCP_SMOKE_OK") {
-      throw new Error(`Unexpected smoke result: ${result.finalText}`);
+      throw new Error(`Unexpected smoke result: ${JSON.stringify(result)}`);
     }
 
     const activeMcpPids = [...(await playwrightMcpPids())].filter(
