@@ -327,7 +327,14 @@ export function createPublishingBrowserMcpProfile(
   };
 }
 
-const snapshotRefPattern = /^(?:f\d+)?e\d+$/;
+const rawSnapshotRefPattern = /^(?:f\\d+)?e\\d+$/;
+const modelSnapshotTokenPattern = /^g(\\d+):((?:f\\d+)?e\\d+)$/;
+
+interface ObservedTargetEvidence {
+  readonly token: string;
+  readonly rawRef: string;
+  readonly text: string;
+}
 
 function currentAllowedPageUrl(
   grant: NormalizedPublishingBrowserGrant,
@@ -363,25 +370,25 @@ function requestedElement(args: Record<string, unknown>): string | undefined {
 
 function observedTarget(
   args: Record<string, unknown>,
-  refs: ReadonlyMap<string, string>,
+  refs: ReadonlyMap<string, ObservedTargetEvidence>,
   tool: string,
-): { readonly ref: string; readonly text: string } {
+): ObservedTargetEvidence {
   const target = args.target;
-  if (typeof target !== "string" || !snapshotRefPattern.test(target)) {
-    throw new Error(`${tool} requires a snapshot ref target`);
+  if (typeof target !== "string" || !modelSnapshotTokenPattern.test(target)) {
+    throw new Error(`${tool} requires a current Publisher snapshot token`);
   }
-  const text = refs.get(target);
-  if (!text) {
+  const evidence = refs.get(target);
+  if (!evidence) {
     throw new Error(
       `${tool} target ${target} was not observed in the latest Publisher-controlled snapshot`,
     );
   }
-  return { ref: target, text };
+  return evidence;
 }
 
-function assertObservedFillFormTargets(
+function rewriteFillFormTargets(
   args: Record<string, unknown>,
-  refs: ReadonlyMap<string, string>,
+  refs: ReadonlyMap<string, ObservedTargetEvidence>,
 ): void {
   if (!Array.isArray(args.fields) || args.fields.length === 0) {
     throw new Error("browser_fill_form fields must be a non-empty array");
@@ -390,34 +397,59 @@ function assertObservedFillFormTargets(
     if (field === null || typeof field !== "object" || Array.isArray(field)) {
       throw new Error("browser_fill_form field must be an object");
     }
-    observedTarget(
-      field as Record<string, unknown>,
-      refs,
-      "browser_fill_form",
-    );
+    const mutableField = field as Record<string, unknown>;
+    const evidence = observedTarget(mutableField, refs, "browser_fill_form");
+    mutableField.target = evidence.rawRef;
   }
 }
 
-function observedRefsFromContent(content: readonly unknown[]): Map<string, string> {
-  const refs = new Map<string, string>();
-  for (const item of content) {
-    if (item === null || typeof item !== "object") continue;
+function tokenizedObservation(
+  content: readonly unknown[],
+  generation: number,
+): {
+  readonly refs: Map<string, ObservedTargetEvidence>;
+  readonly content: readonly unknown[];
+} {
+  const refs = new Map<string, ObservedTargetEvidence>();
+  const contentOut = content.map((item) => {
+    if (item === null || typeof item !== "object") return item;
     const candidate = item as { type?: unknown; text?: unknown };
-    if (candidate.type !== "text" || typeof candidate.text !== "string") continue;
+    if (candidate.type !== "text" || typeof candidate.text !== "string") {
+      return item;
+    }
 
-    const text = candidate.text;
-    const pattern = /\[ref=((?:f\d+)?e\d+)\]/g;
-    for (const match of text.matchAll(pattern)) {
-      const ref = match[1];
+    const originalText = candidate.text;
+    const rawPattern = /\\[ref=((?:f\\d+)?e\\d+)\\]/g;
+    const matches = [...originalText.matchAll(rawPattern)];
+    if (matches.length === 0) return item;
+
+    for (const match of matches) {
+      const rawRef = match[1];
+      if (!rawRef || !rawSnapshotRefPattern.test(rawRef)) continue;
+      const token = `g${generation}:${rawRef}`;
       const index = match.index ?? 0;
       const snippetStart = Math.max(0, index - 180);
-      const snippetEnd = Math.min(text.length, index + 220);
-      refs.set(ref, text.slice(snippetStart, snippetEnd).replace(/\\s+/g, " ").trim());
+      const snippetEnd = Math.min(originalText.length, index + 220);
+      refs.set(token, {
+        token,
+        rawRef,
+        text: originalText
+          .slice(snippetStart, snippetEnd)
+          .replace(/\\s+/g, " ")
+          .trim(),
+      });
     }
-  }
-  return refs;
-}
 
+    return {
+      ...candidate,
+      text: originalText.replace(
+        rawPattern,
+        (_whole, rawRef: string) => `[ref=g${generation}:${rawRef}]`,
+      ),
+    };
+  });
+  return { refs, content: contentOut };
+}
 function clearsObservationBeforeExecution(tool: string): boolean {
   return (
     tool === "browser_navigate" ||
@@ -443,7 +475,8 @@ export async function createPublishingBrowserGuardExtension(
   const grant = normalizeGrant(inputGrant);
   const canonicalUploadRoot = await realpath(grant.uploadRoot);
   const allowedOrigins = new Set(grant.allowedOrigins);
-  const observedRefs = new Map<string, string>();
+  const observedRefs = new Map<string, ObservedTargetEvidence>();
+  let observationGeneration = 0;
 
   return {
     name: "publisher-browser-capability-guard",
@@ -483,7 +516,7 @@ export async function createPublishingBrowserGuardExtension(
               jobId: grant.jobId,
               browserSessionId: grant.browserSessionId,
               pageUrl: currentAllowedPageUrl(grant, allowedOrigins),
-              targetRef: target.ref,
+              targetRef: target.token,
               observedTarget: target.text,
               ...(requestedElement(call.args) === undefined
                 ? {}
@@ -495,19 +528,21 @@ export async function createPublishingBrowserGuardExtension(
                   "Publisher click authorizer denied the observed target",
               );
             }
+            call.args.target = target.rawRef;
           }
 
           if (call.tool === "browser_type") {
-            observedTarget(call.args, observedRefs, call.tool);
+            const target = observedTarget(call.args, observedRefs, call.tool);
             if (call.args.submit === true) {
               throw new Error(
                 "browser_type submit is not authorized; irreversible submission remains Publisher-owned",
               );
             }
+            call.args.target = target.rawRef;
           }
 
           if (call.tool === "browser_fill_form") {
-            assertObservedFillFormTargets(call.args, observedRefs);
+            rewriteFillFormTargets(call.args, observedRefs);
           }
 
           if (call.tool === "browser_file_upload") {
@@ -555,14 +590,20 @@ export async function createPublishingBrowserGuardExtension(
         }
 
         if (event.isError) return undefined;
-        const nextRefs = observedRefsFromContent(event.content);
-        if (call.tool === "browser_find") {
-          for (const [ref, text] of nextRefs) observedRefs.set(ref, text);
-        } else if (nextRefs.size > 0) {
-          observedRefs.clear();
-          for (const [ref, text] of nextRefs) observedRefs.set(ref, text);
+        observationGeneration += 1;
+        const observation = tokenizedObservation(
+          event.content,
+          observationGeneration,
+        );
+        if (observation.refs.size === 0) return undefined;
+
+        observedRefs.clear();
+        for (const [token, evidence] of observation.refs) {
+          observedRefs.set(token, evidence);
         }
-        return undefined;
+        return {
+          content: observation.content as typeof event.content,
+        };
       });
     },
   };
