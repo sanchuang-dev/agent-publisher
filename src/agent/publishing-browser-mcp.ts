@@ -10,7 +10,10 @@ import type {
 } from "./definition.js";
 import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
 import { createControlledPiResourceLoader } from "./pi-controlled-resources.js";
-import { resolveCdpWebSocketEndpoint } from "../browser/providers/docker-cdp-transport.js";
+import type {
+  BrowserAutomationAttachmentProvider,
+  BrowserSession,
+} from "../browser/provider.js";
 
 export const PLAYWRIGHT_MCP_VERSION = "0.0.82" as const;
 export const PUBLISHING_BROWSER_MCP_SERVER = "playwright-browser" as const;
@@ -39,25 +42,52 @@ const playwrightMcpCliPath = fileURLToPath(
   new URL("../../node_modules/@playwright/mcp/cli.js", import.meta.url),
 );
 
-const FINAL_PUBLISH_LABELS = new Set([
-  "publish",
-  "publish now",
-  "post",
-  "发布",
-  "立即发布",
-  "确认发布",
-]);
+const publishingBrowserGrantBrand = Symbol("publishing-browser-grant");
+
+export interface PublishingBrowserClickAuthorizationContext {
+  readonly jobId: string;
+  readonly browserSessionId: string;
+  readonly pageUrl: string;
+  readonly targetRef: string;
+  /** Snapshot text captured from the MCP result, never model-supplied text. */
+  readonly observedTarget: string;
+  readonly requestedElement?: string;
+}
+
+export interface PublishingBrowserClickDecision {
+  readonly allowed: boolean;
+  readonly reason?: string;
+}
+
+export type PublishingBrowserClickAuthorizer = (
+  context: PublishingBrowserClickAuthorizationContext,
+) =>
+  | PublishingBrowserClickDecision
+  | Promise<PublishingBrowserClickDecision>;
+
+export interface PublishingBrowserCapabilityGrantInput {
+  readonly jobId: string;
+  readonly browserProvider: BrowserAutomationAttachmentProvider;
+  readonly browserSession: BrowserSession;
+  readonly allowedOrigins: readonly string[];
+  readonly uploadRoot: string;
+  /**
+   * Publisher-owned allow policy for observed click targets. There is no
+   * permissive default: a click is denied unless this policy explicitly
+   * authorizes the target observed in the latest browser snapshot.
+   */
+  readonly authorizeClick: PublishingBrowserClickAuthorizer;
+}
 
 export interface PublishingBrowserCapabilityGrant {
+  readonly [publishingBrowserGrantBrand]: true;
   readonly jobId: string;
-  /**
-   * Opaque BrowserProvider session id. The grant is issued only after the
-   * Publisher has acquired the authorized browser session for this Job.
-   */
+  readonly browserSession: BrowserSession;
   readonly browserSessionId: string;
   readonly cdpEndpoint: string;
   readonly allowedOrigins: readonly string[];
   readonly uploadRoot: string;
+  readonly authorizeClick: PublishingBrowserClickAuthorizer;
 }
 
 interface NormalizedPublishingBrowserGrant
@@ -66,7 +96,6 @@ interface NormalizedPublishingBrowserGrant
   readonly allowedOrigins: readonly string[];
   readonly uploadRoot: string;
 }
-
 function required(value: string, label: string): string {
   const normalized = value.trim();
   if (!normalized) {
