@@ -176,7 +176,7 @@ Public documentation or community research alone is not acceptance evidence.
 
 Use dependency readiness rather than opening every card at once. GOV-02 #103 owns the mutation of existing Issue contracts/dependencies; this roadmap only projects the intended sequence.
 
-1. Land GOV-01 #102 as the architecture gate, then use GOV-02 #103 to remove conflicting old Issue wording without erasing historical evidence.
+1. GOV-01 #102 is the landed architecture gate; use GOV-02 #103 next to remove conflicting old Issue wording without erasing historical evidence.
 2. Establish controlled Publishing Secretary browser capability (#105) and Xiaohongshu Skill knowledge (#106), then complete the task-local execution vertical slice (#43).
 3. Complete Agent-driven identity routing/handoff (#96) and independent prepared-state validation/approval stop (#107) to prove parent #4 on the real Creator page.
 4. Complete the Web product boundary through #97/#108/#109 as dependencies allow; normal users should not need raw CDP/noVNC/internal ports.
