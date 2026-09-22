@@ -218,7 +218,7 @@ async function main(): Promise<void> {
         fauxToolCall(
           "mcp",
           {
-            search: "page snapshot navigate click type",
+            search: "page snapshot navigate click type file upload",
             server: PUBLISHING_BROWSER_MCP_SERVER,
           },
           { id: "discover-browser-tools" },
