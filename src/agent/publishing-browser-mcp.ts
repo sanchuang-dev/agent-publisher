@@ -327,7 +327,7 @@ export function createPublishingBrowserMcpProfile(
   };
 }
 
-const snapshotRefPattern = /^(?:f\\d+)?e\\d+$/;
+const snapshotRefPattern = /^(?:f\d+)?e\d+$/;
 
 function currentAllowedPageUrl(
   grant: NormalizedPublishingBrowserGrant,
@@ -406,7 +406,7 @@ function observedRefsFromContent(content: readonly unknown[]): Map<string, strin
     if (candidate.type !== "text" || typeof candidate.text !== "string") continue;
 
     const text = candidate.text;
-    const pattern = /\\[ref=((?:f\\d+)?e\\d+)\\]/g;
+    const pattern = /\[ref=((?:f\d+)?e\d+)\]/g;
     for (const match of text.matchAll(pattern)) {
       const ref = match[1];
       const index = match.index ?? 0;
