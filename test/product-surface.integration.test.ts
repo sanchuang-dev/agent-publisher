@@ -104,25 +104,27 @@ describe("DEP-01 product surface", () => {
 
   test("proxies Live View WebSocket upgrades through the product origin", async () => {
     const upstream = createServer();
+    let upgradedSocket: import("node:stream").Duplex | undefined;
     upstream.on("upgrade", (request, socket) => {
+      upgradedSocket = socket;
       expect(request.url).toBe("/websockify");
       socket.write(
         "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
       );
     });
     const upstreamOrigin = await listen(upstream);
-    cleanup.push(
-      () =>
-        new Promise<void>((resolve, reject) =>
-          upstream.close((error) => (error ? reject(error) : resolve())),
-        ),
-    );
 
     const application = createApplication({
       productSurface: { browserLiveViewUpstream: upstreamOrigin },
     });
     const origin = await application.start({ host: "127.0.0.1", port: 0 });
-    cleanup.push(() => application.stop());
+    cleanup.push(async () => {
+      upgradedSocket?.destroy();
+      await application.stop();
+      await new Promise<void>((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve())),
+      );
+    });
 
     const appUrl = new URL(origin);
     const response = await new Promise<string>((resolve, reject) => {
