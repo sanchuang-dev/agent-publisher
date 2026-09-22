@@ -109,6 +109,12 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     const mandatoryPrompt = loader.getAppendSystemPrompt().join("\n");
     expect(mandatoryPrompt).toContain("Final publish is forbidden");
     expect(mandatoryPrompt).toContain("unknown draft");
+    expect(mandatoryPrompt).toContain("authorized human");
+    expect(mandatoryPrompt).toContain("approval");
+    expect(mandatoryPrompt).toContain(
+      "references/2026-09-22-creator-mode-entry.md",
+    );
+    expect(mandatoryPrompt).toContain("generic browser click capability");
     expect(mandatoryPrompt).toContain("External irreversible publication");
 
     const mcpReadyDefinition = createXiaohongshuPublishingDefinition({
@@ -243,7 +249,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     await session.dispose();
   });
 
-  test("stops on an unknown draft and has no final-publish capability", async () => {
+  test("stops on an unknown draft and does not expose a dedicated final-publish tool", async () => {
     const cwd = await createTempDir("publisher-xhs-skill-safety-");
     const faux = fauxProvider({ provider: "publisher-xhs-skill-safety" });
     let publishExecutions = 0;
@@ -362,8 +368,10 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     ]);
 
     const result = await session.run({
-      prompt:
-        "Read the reviewed real-smoke reference before reasoning about a Creator mode-entry mismatch.",
+      prompt: [
+        "Use the Xiaohongshu Skill's reviewed experience index.",
+        "Read the Creator mode-entry reference named there before reasoning about the mismatch.",
+      ].join("\n"),
     });
 
     expect(result.finalText).toBe("REFERENCE_LOADED");
