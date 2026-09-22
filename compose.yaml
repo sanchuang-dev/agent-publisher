@@ -2,8 +2,6 @@ services:
   browser-runtime:
     build:
       context: ./docker/browser-runtime
-      args:
-        DEBIAN_MIRROR: "${DEBIAN_MIRROR:-}"
     shm_size: "1gb"
     mem_limit: 3g
     cpus: 2.0
@@ -35,8 +33,8 @@ services:
       APP_HOST: "0.0.0.0"
       APP_PORT: "3000"
       APP_WEB_ROOT: "/app/web-dist"
-      APP_BROWSER_LIVE_VIEW_URL: "${APP_BROWSER_LIVE_VIEW_URL:-/browser-live-view/vnc.html?path=browser-live-view/websockify&autoconnect=1&resize=scale}"
-      APP_BROWSER_LIVE_VIEW_UPSTREAM: "${APP_BROWSER_LIVE_VIEW_UPSTREAM:-http://browser-runtime:6080}"
+      APP_BROWSER_LIVE_VIEW_URL: "/browser-live-view/vnc.html?autoconnect=1&resize=scale"
+      APP_BROWSER_LIVE_VIEW_UPSTREAM: "http://browser-runtime:6080"
       APP_MATERIAL_SOURCE: "${APP_MATERIAL_SOURCE:-provider_pipeline}"
       APP_CONTROLLED_MATERIAL_PATH: "/controlled-material/material.json"
       APP_CONTROLLED_ASSET_ROOT: "/controlled-material/assets"
@@ -49,12 +47,22 @@ services:
       PUBLISHER_AI_MODEL: "${PUBLISHER_AI_MODEL:-}"
       XHS_SMOKE_DATA_ROOT: "/data/smoke/xhs-prepare"
     ports:
-      # The product exposes one host endpoint. Browser Live View is available
-      # below this origin; raw noVNC/CDP remain Compose-internal.
+      # Single product endpoint. Browser Live View is available only through
+      # the same-origin /browser-live-view/* application boundary.
       - "127.0.0.1:3000:3000"
     volumes:
       - app-data:/data
       - ./data/controlled-material:/controlled-material:ro
+    healthcheck:
+      interval: 5s
+      timeout: 3s
+      start_period: 10s
+      retries: 12
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
     restart: unless-stopped
 
 volumes:
