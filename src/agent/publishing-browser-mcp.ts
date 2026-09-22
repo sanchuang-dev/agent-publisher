@@ -21,7 +21,6 @@ export const PUBLISHING_BROWSER_MCP_SERVER = "playwright-browser" as const;
 export const PUBLISHING_BROWSER_MCP_TOOLS = [
   "browser_snapshot",
   "browser_find",
-  "browser_tabs",
   "browser_navigate",
   "browser_click",
   "browser_type",
