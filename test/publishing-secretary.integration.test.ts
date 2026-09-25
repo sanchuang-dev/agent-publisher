@@ -299,7 +299,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     });
     expect(host.created[0]!.prompts[0]).toContain(pack.copy.title);
     expect(host.created[0]!.prompts[0]).toContain(
-      "observe the page, choose the next bounded safe action",
+      "Observe the page, choose the next bounded safe action",
     );
     expect(host.created[0]!.prompts[0]).toContain(
       "https://creator.xiaohongshu.com",
