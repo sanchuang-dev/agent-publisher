@@ -8,7 +8,7 @@ import type {
 import type {
   PublishingSecretaryExecutionResult,
   PublishingSecretaryPort,
-} from "../agent/publishing-secretary.js";
+} from "../agent/publishing-secretary-contract.js";
 import {
   JobNotFoundError,
   type ActionRequestRepository,

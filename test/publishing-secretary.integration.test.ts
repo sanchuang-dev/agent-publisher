@@ -20,8 +20,8 @@ import {
   PublishingSecretaryService,
   authorizeXiaohongshuPrepublishClick,
   createXiaohongshuPublishingBrowserResourceLoader,
-  type PublishingSecretaryPort,
 } from "../src/agent/publishing-secretary.js";
+import type { PublishingSecretaryPort } from "../src/agent/publishing-secretary-contract.js";
 import type { AgentSessionRef } from "../src/agent/session-ref.js";
 import type {
   BrowserAutomationAttachmentProvider,
@@ -407,7 +407,9 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     for (const observedTarget of [
       '- button "发布" [ref=g1:e2]',
       '- button "立即发布" [ref=g1:e3]',
-      '- button "删除" [ref=g1:e4]',
+      '- button "Publish" [ref=g1:e4]',
+      '- button "提交" [ref=g1:e5]',
+      '- button "删除" [ref=g1:e6]',
     ]) {
       expect(
         authorizeXiaohongshuPrepublishClick({

@@ -2,15 +2,17 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 import type { ImageTextMaterialPack } from "../materials/contracts.js";
 import type { AssetPathResolver } from "../platforms/xiaohongshu/image-text-prepare.js";
-import type {
-  BrowserAutomationAttachmentProvider,
-  BrowserSession,
-} from "../browser/provider.js";
 import type { JobRepository } from "../contracts/job.js";
 import type { AgentSessionBindingRepository } from "./job-session-binding.js";
 import { JobAgentSessionService } from "./job-session-service.js";
 import type { AgentHost } from "./host.js";
 import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
+import type {
+  PublishingSecretaryExecutionInput,
+  PublishingSecretaryExecutionResult,
+  PublishingSecretaryPort,
+  PublishingSecretaryResultKind,
+} from "./publishing-secretary-contract.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
   createPublishingBrowserGuardExtension,
@@ -31,33 +33,6 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "https://creator.xiaohongshu.com",
 ] as const;
 const MAX_RESULT_TEXT = 500;
-
-export type PublishingSecretaryResultKind =
-  | "progress"
-  | "needs_identity"
-  | "prepared_candidate"
-  | "needs_clarification"
-  | "failed";
-
-export interface PublishingSecretaryExecutionResult {
-  readonly kind: PublishingSecretaryResultKind;
-  readonly summary: string;
-  readonly semanticMilestone: string | null;
-  readonly browserToolCalls: number;
-}
-
-export interface PublishingSecretaryExecutionInput {
-  readonly jobId: string;
-  readonly browserProvider: BrowserAutomationAttachmentProvider;
-  readonly browserSession: BrowserSession;
-  readonly materialPack: ImageTextMaterialPack;
-}
-
-export interface PublishingSecretaryPort {
-  execute(
-    input: PublishingSecretaryExecutionInput,
-  ): Promise<PublishingSecretaryExecutionResult>;
-}
 
 export type PublishingSecretaryHostFactory = (
   grant: PublishingBrowserCapabilityGrant,
@@ -164,24 +139,20 @@ function parseResultPayload(finalText: string): {
   };
 }
 
-const forbiddenObservedClick = [
-  /["“](?:立即|确认|提交)?发布(?:笔记|作品|内容)?["”](?:\s|\[|$)/u,
-  /["“](?:删除|清空|覆盖|退出登录)["”](?:\s|\[|$)/u,
-];
+const forbiddenObservedClick =
+  /(?:发布|提交|publish|submit|删除|清空|覆盖|退出登录)/iu;
 
 export function authorizeXiaohongshuPrepublishClick(
   context: PublishingBrowserClickAuthorizationContext,
 ): PublishingBrowserClickDecision {
   const observed = context.observedTarget.replace(/\s+/g, " ").trim();
 
-  for (const forbidden of forbiddenObservedClick) {
-    if (forbidden.test(observed)) {
-      return {
-        allowed: false,
-        reason:
-          "Publisher safety policy denied an irreversible or account-destructive observed control.",
-      };
-    }
+  if (forbiddenObservedClick.test(observed)) {
+    return {
+      allowed: false,
+      reason:
+        "Publisher safety policy denied an irreversible or account-destructive observed control.",
+    };
   }
 
   return { allowed: true };
