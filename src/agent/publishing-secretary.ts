@@ -196,6 +196,7 @@ async function controlledUploadFiles(
 function buildTaskPrompt(
   input: PublishingSecretaryExecutionInput,
   uploadFiles: readonly { readonly assetId: string; readonly path: string }[],
+  allowedOrigins: readonly string[],
 ): string {
   const material = {
     platform: "xiaohongshu",
@@ -209,6 +210,8 @@ function buildTaskPrompt(
 
   return [
     "Prepare the current Xiaohongshu Creator page for this accepted Publisher material.",
+    "Granted Creator origins: " + allowedOrigins.join(", "),
+    "If the current page is blank or outside the task surface, choose a browser_navigate action within the granted Creator origin before trying to inspect or mutate page controls.",
     "You own the page-local browser route. Observe the page, choose the next bounded safe action, act, and re-observe. You may use multiple observe/act loops while progress or new evidence exists.",
     "Do not ask Publisher code which UI control to click. Current page evidence and the reviewed Xiaohongshu Skill guide the route.",
     "Never execute final publication, delete/clear/overwrite unknown content, or bypass login/MFA/device verification.",
@@ -302,7 +305,11 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
 
     try {
       const run = await session.run({
-        prompt: buildTaskPrompt(input, uploadFiles),
+        prompt: buildTaskPrompt(
+          input,
+          uploadFiles,
+          this.#allowedOrigins,
+        ),
         ...(this.#runTimeoutMs === undefined
           ? {}
           : { timeoutMs: this.#runTimeoutMs }),

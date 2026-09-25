@@ -301,6 +301,12 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.created[0]!.prompts[0]).toContain(
       "observe the page, choose the next bounded safe action",
     );
+    expect(host.created[0]!.prompts[0]).toContain(
+      "https://creator.xiaohongshu.com",
+    );
+    expect(host.created[0]!.prompts[0]).toContain(
+      "choose a browser_navigate action",
+    );
     expect(host.created[0]!.definition.mcp?.servers[0]?.includeTools).toEqual(
       PUBLISHING_BROWSER_MCP_TOOLS,
     );
