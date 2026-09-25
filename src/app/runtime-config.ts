@@ -3,9 +3,12 @@ import { extname, isAbsolute, relative, resolve } from "node:path";
 
 import { ContentSecretaryService } from "../agent/content-secretary.js";
 import { JobAgentSessionService } from "../agent/job-session-service.js";
+import { PublishingSecretaryService } from "../agent/publishing-secretary.js";
+import { DockerCdpBrowserProvider } from "../browser/providers/docker-cdp.js";
 import {
   createPublisherAiRuntime,
   createPublisherContentSecretaryHost,
+  createPublisherPublishingSecretaryHost,
   readPublisherAiConfig,
 } from "../agent/runtime-ai.js";
 import {
@@ -255,9 +258,23 @@ async function createProviderPipelineConfiguredApplication(
       contentSecretary,
       preparation,
     });
+    const browserProvider = new DockerCdpBrowserProvider();
+    const publishingSecretary = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      uploadRoot: assetRoot,
+      resolveAssetPath: (asset) => assetStore.resolveLocalPath(asset),
+      createHost: (grant) =>
+        createPublisherPublishingSecretaryHost(aiRuntime, {
+          sessionDirectory,
+          grant,
+        }),
+    });
 
     const application = createMvpPrepublishApplication({
       ...commonApplicationOptions(env),
+      browserProvider,
+      publishingSecretary,
       materialSource,
       resolveAssetPath: (asset) => assetStore.resolveLocalPath(asset),
     });

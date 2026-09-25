@@ -12,6 +12,13 @@ import {
   createContentSecretaryResourceLoader,
 } from "./content-secretary.js";
 import { PiAgentHost } from "./pi-agent-host.js";
+import type { PublishingBrowserCapabilityGrant } from "./publishing-browser-mcp.js";
+import {
+  createXiaohongshuPublishingBrowserResourceLoader,
+} from "./publishing-secretary.js";
+import {
+  XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
+} from "./xiaohongshu-publishing-skill.js";
 
 export const PUBLISHER_AI_BASE_URL_ENV = "PUBLISHER_AI_BASE_URL";
 export const PUBLISHER_AI_API_KEY_ENV = "PUBLISHER_AI_API_KEY";
@@ -237,6 +244,44 @@ export function createPublisherContentSecretaryHost(
     tools: CONTENT_SECRETARY_ALLOWED_TOOLS,
     sessionOptions: { thinkingLevel: "off" },
     createResourceLoader: createContentSecretaryResourceLoader,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+  });
+}
+
+
+export interface PublisherPublishingSecretaryHostOptions {
+  readonly sessionDirectory: string;
+  readonly grant: PublishingBrowserCapabilityGrant;
+  readonly cwd?: string;
+  readonly defaultRunTimeoutMs?: number;
+  readonly defaultAbortTimeoutMs?: number;
+  readonly defaultDisposeTimeoutMs?: number;
+}
+
+export function createPublisherPublishingSecretaryHost(
+  runtime: PublisherAiRuntimeSelection,
+  options: PublisherPublishingSecretaryHostOptions,
+): PiAgentHost {
+  if (options.sessionDirectory.trim().length === 0) {
+    throw new PublisherAiConfigError(
+      "Publishing Secretary runtime requires a non-empty session directory.",
+    );
+  }
+
+  return new PiAgentHost({
+    model: runtime.model,
+    modelRuntime: runtime.modelRuntime,
+    sessionDirectory: options.sessionDirectory,
+    defaultRunTimeoutMs: options.defaultRunTimeoutMs ?? 120_000,
+    defaultAbortTimeoutMs: options.defaultAbortTimeoutMs ?? 5_000,
+    defaultDisposeTimeoutMs: options.defaultDisposeTimeoutMs ?? 5_000,
+    tools: XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
+    sessionOptions: { thinkingLevel: "off" },
+    createResourceLoader: (input) =>
+      createXiaohongshuPublishingBrowserResourceLoader(
+        input,
+        options.grant,
+      ),
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
   });
 }
