@@ -4,6 +4,7 @@ import { createJobEventRoutes } from "../api/routes/job-events.js";
 import { createJobRoutes } from "../api/routes/jobs.js";
 import { SseConnectionRegistry } from "../api/sse.js";
 import type { BrowserProvider } from "../browser/provider.js";
+import type { PublishingSecretaryPort } from "../agent/publishing-secretary.js";
 import { DockerCdpBrowserProvider } from "../browser/providers/docker-cdp.js";
 import { JobControlService } from "../jobs/job-control-service.js";
 import { ResumeService } from "../jobs/resume-service.js";
@@ -33,6 +34,7 @@ export interface CreateMvpPrepublishApplicationOptions {
   readonly resolveAssetPath: AssetPathResolver;
   readonly databasePath?: string;
   readonly browserProvider?: BrowserProvider;
+  readonly publishingSecretary?: PublishingSecretaryPort;
   readonly browserLiveViewUrl?: string;
   readonly browserLiveViewUpstream?: string;
   readonly webRoot?: string;
@@ -115,6 +117,9 @@ export function createMvpPrepublishApplication(
     jobs,
     actionRequests,
     browserProvider,
+    ...(options.publishingSecretary === undefined
+      ? {}
+      : { publishingSecretary: options.publishingSecretary }),
     login,
     prepare,
     materialSource: options.materialSource,

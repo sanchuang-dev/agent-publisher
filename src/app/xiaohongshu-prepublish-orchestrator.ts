@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  BrowserAutomationAttachmentProvider,
   BrowserProvider,
   BrowserSession,
 } from "../browser/provider.js";
+import type {
+  PublishingSecretaryExecutionResult,
+  PublishingSecretaryPort,
+} from "../agent/publishing-secretary.js";
 import {
   JobNotFoundError,
   type ActionRequestRepository,
@@ -95,6 +100,7 @@ export interface XiaohongshuPrepublishOrchestratorDependencies {
   readonly jobs: JobRepository;
   readonly actionRequests: ActionRequestRepository;
   readonly browserProvider: BrowserProvider;
+  readonly publishingSecretary?: PublishingSecretaryPort;
   readonly login: LoginServicePort;
   readonly prepare: PrepareServicePort;
   readonly materialSource: PrepublishMaterialSource;
@@ -236,10 +242,47 @@ function briefFromJob(job: Job): string {
   throw new Error(`Job ${job.id} has an invalid APP-02 brief payload.`);
 }
 
+function asAutomationProvider(
+  provider: BrowserProvider,
+): BrowserAutomationAttachmentProvider | null {
+  const candidate = provider as Partial<BrowserAutomationAttachmentProvider>;
+  return typeof candidate.resolveAutomationAttachment === "function"
+    ? (provider as BrowserAutomationAttachmentProvider)
+    : null;
+}
+
+function publishingSecretaryRunError(
+  result: PublishingSecretaryExecutionResult,
+): ContinuePrepublishResult["error"] {
+  if (result.kind === "needs_identity") {
+    return {
+      code: "LOGIN_REQUIRED",
+      message:
+        "The Publishing Secretary reached an identity boundary that requires the dedicated human handoff flow.",
+    };
+  }
+  if (result.kind === "needs_clarification") {
+    return {
+      code: "CLARIFICATION_REQUIRED",
+      message:
+        "The Publishing Secretary stopped because the current page needs human clarification.",
+    };
+  }
+  if (result.kind === "failed") {
+    return {
+      code: "PUBLISHING_SECRETARY_FAILED",
+      message:
+        "The Publishing Secretary exhausted bounded safe browser exploration without reaching a prepared candidate.",
+    };
+  }
+  return null;
+}
+
 export class XiaohongshuPrepublishOrchestrator {
   readonly #jobs: JobRepository;
   readonly #actionRequests: ActionRequestRepository;
   readonly #browserProvider: BrowserProvider;
+  readonly #publishingSecretary: PublishingSecretaryPort | undefined;
   readonly #login: LoginServicePort;
   readonly #prepare: PrepareServicePort;
   readonly #materialSource: PrepublishMaterialSource;
@@ -253,6 +296,7 @@ export class XiaohongshuPrepublishOrchestrator {
     this.#jobs = dependencies.jobs;
     this.#actionRequests = dependencies.actionRequests;
     this.#browserProvider = dependencies.browserProvider;
+    this.#publishingSecretary = dependencies.publishingSecretary;
     this.#login = dependencies.login;
     this.#prepare = dependencies.prepare;
     this.#materialSource = dependencies.materialSource;
@@ -394,6 +438,31 @@ export class XiaohongshuPrepublishOrchestrator {
         } catch (error) {
           this.#recordBrowserAcquireFailure(jobId);
           throw new PrepublishBrowserUnavailableError({ cause: error });
+        }
+
+        if (this.#publishingSecretary && job.status === "preparing_publish") {
+          const automationProvider = asAutomationProvider(
+            this.#browserProvider,
+          );
+          if (!automationProvider) {
+            this.#recordBrowserAcquireFailure(jobId);
+            throw new PrepublishBrowserUnavailableError();
+          }
+
+          const material = this.#requireMaterial(jobId);
+          const agentResult = await this.#publishingSecretary.execute({
+            jobId,
+            browserProvider: automationProvider,
+            browserSession: session,
+            materialPack: material.pack,
+          });
+          this.#recordPublishingSecretaryResult(jobId, agentResult);
+
+          return {
+            projection: this.#publish(jobId),
+            blocked: true,
+            error: publishingSecretaryRunError(agentResult),
+          };
         }
 
         if (
@@ -601,6 +670,51 @@ export class XiaohongshuPrepublishOrchestrator {
         { code: "APP_BROWSER_FAILURE_PERSIST_FAILED" },
       );
     }
+  }
+
+  #recordPublishingSecretaryResult(
+    jobId: string,
+    result: PublishingSecretaryExecutionResult,
+  ): void {
+    const job = this.#requireJob(jobId);
+    if (job.status !== "preparing_publish") {
+      throw new UnsupportedPrepublishStateError(jobId, job.status);
+    }
+
+    const now = this.#now().toISOString();
+    const failed = result.kind === "failed";
+    this.#jobs.commitCheckpoint(jobId, {
+      status: failed ? "failed" : "preparing_publish",
+      checkpoint: {
+        phase: "publishing_secretary_" + result.kind,
+        publishingSecretaryKind: result.kind,
+        publishingSecretaryMilestone:
+          result.semanticMilestone ?? "none",
+        publishingSecretaryBrowserToolCalls: result.browserToolCalls,
+      },
+      step: {
+        id: this.#createId(),
+        stepKey: "publishing_secretary_execution",
+        status: failed ? "failed" : "succeeded",
+        attempt: this.#nextStepAttempt(
+          jobId,
+          "publishing_secretary_execution",
+        ),
+        outputJson: JSON.stringify({
+          kind: result.kind,
+          summary: result.summary,
+          semanticMilestone: result.semanticMilestone,
+          browserToolCalls: result.browserToolCalls,
+        }),
+        ...(failed
+          ? {
+              errorCode: "PUBLISHING_SECRETARY_FAILED",
+              errorMessage: result.summary,
+            }
+          : {}),
+        finishedAt: now,
+      },
+    });
   }
 
   #getMaterial(jobId: string): PersistedPrepublishMaterial | null {
