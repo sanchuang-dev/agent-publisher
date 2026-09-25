@@ -41,6 +41,7 @@ function browserStub(options: {
 } = {}): Browser {
   const browser = {
     contexts: () => options.contexts ?? [],
+    isConnected: () => true,
     once: (event: string, listener: () => void) => {
       if (event === "disconnected") {
         options.captureDisconnected?.(() => listener());
@@ -237,6 +238,31 @@ test("acquire reuses an existing usable page and release disconnects the Playwri
 
   expect(browserCloseCalls).toBe(1);
   expect(pageCloseCalls).toBe(0);
+});
+
+test("automation attachment is minted only for the active session owned by this provider", async () => {
+  const provider = providerWithConnection({
+    resolveEndpoint: async () =>
+      "ws://172.18.0.2:9222/devtools/browser/owned-session",
+  });
+  const session = await provider.acquire({});
+
+  await expect(
+    provider.resolveAutomationAttachment(session.id),
+  ).resolves.toEqual({
+    sessionId: session.id,
+    cdpEndpoint: "ws://172.18.0.2:9222/devtools/browser/owned-session",
+  });
+
+  await expect(
+    provider.resolveAutomationAttachment("another-session"),
+  ).rejects.toThrow(/currently acquired session owned by this provider/);
+
+  await provider.release(session.id);
+
+  await expect(
+    provider.resolveAutomationAttachment(session.id),
+  ).rejects.toThrow(/currently acquired session owned by this provider/);
 });
 
 test("acquire creates a page when the existing browser context has no usable page", async () => {

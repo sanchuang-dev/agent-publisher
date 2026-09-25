@@ -195,8 +195,8 @@ describe("Publisher Pi MCP adapter", () => {
         return fauxAssistantMessage(
           fauxToolCall(
             "mcp",
-            { search: "allowed echo", server: "stdio-fixture" },
-            { id: "stdio-search" },
+            { connect: "stdio-fixture" },
+            { id: "stdio-connect" },
           ),
           { stopReason: "toolUse" },
         );

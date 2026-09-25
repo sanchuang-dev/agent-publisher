@@ -4,7 +4,7 @@ import { chromium, type Browser } from "playwright";
 
 import type {
   BrowserAcquireInput,
-  BrowserProvider,
+  BrowserAutomationAttachmentProvider,
   BrowserProviderHealth,
   BrowserSession,
 } from "../provider.js";
@@ -40,7 +40,9 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export class DockerCdpBrowserProvider implements BrowserProvider {
+export class DockerCdpBrowserProvider
+  implements BrowserAutomationAttachmentProvider
+{
   readonly #endpoint: string;
   readonly #connectTimeoutMs: number;
   readonly #profileRef: string;
@@ -152,6 +154,31 @@ export class DockerCdpBrowserProvider implements BrowserProvider {
         DockerCdpBrowserProvider.#activeSessionId = undefined;
       }
     }
+  }
+
+  async resolveAutomationAttachment(sessionId: string): Promise<{
+    readonly sessionId: string;
+    readonly cdpEndpoint: string;
+  }> {
+    const browser = this.#connections.get(sessionId);
+    if (
+      !browser ||
+      !browser.isConnected() ||
+      DockerCdpBrowserProvider.#activeSessionId !== sessionId ||
+      this.#releasingSessionIds.has(sessionId)
+    ) {
+      throw new Error(
+        "Browser automation attachment requires a currently acquired session owned by this provider instance",
+      );
+    }
+
+    return {
+      sessionId,
+      cdpEndpoint: await this.#resolveEndpoint(
+        this.#endpoint,
+        this.#connectTimeoutMs,
+      ),
+    };
   }
 
   async release(sessionId: string): Promise<void> {

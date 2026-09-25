@@ -1,0 +1,620 @@
+import { createServer } from "node:http";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  InMemoryCredentialStore,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+} from "@earendil-works/pi-ai";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+
+import type { AgentDefinition } from "../src/agent/definition.js";
+import { PiAgentHost } from "../src/agent/pi-agent-host.js";
+import { DockerCdpBrowserProvider } from "../src/browser/providers/docker-cdp.js";
+import type { BrowserSession } from "../src/browser/provider.js";
+import {
+  PUBLISHING_BROWSER_MCP_SERVER,
+  createPublishingBrowserMcpProfile,
+  createPublishingBrowserResourceLoader,
+  issuePublishingBrowserCapabilityGrant,
+} from "../src/agent/publishing-browser-mcp.js";
+
+const cdpEndpoint =
+  process.env.BROWSER_CDP_ENDPOINT?.trim() || "http://browser-runtime:9222";
+const fixtureOrigin =
+  process.env.BRW01_SMOKE_ORIGIN?.trim() || "http://app-smoke:3101";
+const fixturePort = Number(new URL(fixtureOrigin).port || "80");
+
+function fixtureHtml(pathname: string): string {
+  if (pathname === "/image-text") {
+    return `<!doctype html>
+      <html lang="zh-CN">
+        <head><meta charset="utf-8"><title>图文发布</title></head>
+        <body>
+          <main>
+            <h1>图文发布</h1>
+            <label>标题 <input aria-label="标题" /></label>
+            <input type="file" />
+            <p>BRW-01 destination reached</p>
+          </main>
+        </body>
+      </html>`;
+  }
+
+  return `<!doctype html>
+    <html lang="zh-CN">
+      <head><meta charset="utf-8"><title>上传视频</title></head>
+      <body>
+        <main>
+          <h1>上传视频</h1>
+          <button onclick="location.href='/image-text'">上传图文</button>
+        </main>
+      </body>
+    </html>`;
+}
+
+async function startFixture() {
+  const server = createServer((request, response) => {
+    const url = new URL(request.url || "/", fixtureOrigin);
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/html; charset=utf-8");
+    response.end(fixtureHtml(url.pathname));
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(fixturePort, "0.0.0.0", resolve);
+  });
+
+  return server;
+}
+
+function serializedMessages(context: { messages: readonly unknown[] }): string {
+  return JSON.stringify(context.messages);
+}
+
+function collectTextValues(value: unknown, out: string[] = []): string[] {
+  if (typeof value === "string") {
+    out.push(value);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextValues(item, out);
+    return out;
+  }
+  if (value && typeof value === "object") {
+    for (const nested of Object.values(value as Record<string, unknown>)) {
+      collectTextValues(nested, out);
+    }
+  }
+  return out;
+}
+
+function refFor(message: unknown, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `${escaped}[^\\r\\n]*\\[ref=(g\\d+:(?:f\\d+)?e\\d+)\\]`,
+    "i",
+  );
+
+  for (const textValue of collectTextValues(message).reverse()) {
+    for (const line of textValue.split(/\r?\n/).reverse()) {
+      const token = line.match(pattern)?.[1];
+      if (token) return token;
+    }
+  }
+
+  throw new Error(
+    `Could not find snapshot ref for ${label} in latest browser result`,
+  );
+}
+
+async function playwrightMcpPids(): Promise<Set<number>> {
+  const pids = new Set<number>();
+  let entries;
+  try {
+    entries = await readdir("/proc", { withFileTypes: true });
+  } catch {
+    return pids;
+  }
+
+  await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+      .map(async (entry) => {
+        try {
+          const cmdline = await readFile(`/proc/${entry.name}/cmdline`, "utf8");
+          if (cmdline.includes("@playwright/mcp/cli.js")) {
+            pids.add(Number.parseInt(entry.name, 10));
+          }
+        } catch {
+          // Process may exit between directory enumeration and cmdline read.
+        }
+      }),
+  );
+  return pids;
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPidsToExit(pids: readonly number[]): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    if (pids.every((pid) => !isPidAlive(pid))) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+  }
+  throw new Error(
+    `Playwright MCP child remained alive after AgentSession dispose: ${pids.join(",")}`,
+  );
+}
+
+async function main(): Promise<void> {
+  const uploadRoot = await mkdtemp(join(tmpdir(), "publisher-brw01-smoke-"));
+  const coverPath = join(uploadRoot, "cover.txt");
+  await writeFile(coverPath, "BRW-01 controlled upload");
+  const baselineMcpPids = await playwrightMcpPids();
+  const server = await startFixture();
+  const browserProvider = new DockerCdpBrowserProvider({ endpoint: cdpEndpoint });
+  let browserSession: BrowserSession | undefined;
+  let session: Awaited<ReturnType<PiAgentHost["createSession"]>> | undefined;
+
+  try {
+    const faux = fauxProvider({ provider: "publisher-brw01-docker-smoke" });
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      refreshOnCreate: false,
+    });
+    modelRuntime.registerNativeProvider(faux.provider);
+
+    browserSession = await browserProvider.acquire({});
+    const grant = await issuePublishingBrowserCapabilityGrant({
+      jobId: "brw01-docker-smoke",
+      browserProvider,
+      browserSession,
+      allowedOrigins: [fixtureOrigin],
+      uploadRoot,
+      authorizeClick: async ({ observedTarget }) => {
+        if (
+          observedTarget.includes("上传图文") ||
+          observedTarget.includes("Choose File")
+        ) {
+          return { allowed: true };
+        }
+        return {
+          allowed: false,
+          reason:
+            "BRW-01 Publisher fixture policy denied a click outside known safe pre-publish affordances",
+        };
+      },
+    });
+
+    const browserMcpProfile = createPublishingBrowserMcpProfile(grant);
+
+    const definition: AgentDefinition = {
+      id: "publishing-secretary-browser-smoke",
+      systemPrompt: [
+        "You are the bounded Publishing Secretary browser smoke worker.",
+        "Use only the Publisher-provisioned browser MCP capability.",
+        "Do not use selectors supplied by the prompt; observe the current page and act using snapshot refs.",
+        "Never attempt a final publication action.",
+      ].join("\n"),
+      mcp: browserMcpProfile,
+    };
+
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      tools: [],
+      defaultRunTimeoutMs: 15_000,
+      defaultAbortTimeoutMs: 1_000,
+      defaultDisposeTimeoutMs: 3_000,
+      sessionOptions: { thinkingLevel: "off" },
+      createResourceLoader: (input) =>
+        createPublishingBrowserResourceLoader(input, grant),
+    });
+
+    session = await host.createSession({
+      definition,
+      scope: { jobId: grant.jobId, role: "publishing" },
+    });
+
+    let staleUploadImageTextRef: string | undefined;
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            connect: PUBLISHING_BROWSER_MCP_SERVER,
+          },
+          { id: "connect-browser-tools" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const messages = serializedMessages(context);
+        for (const expected of [
+          "browser_snapshot",
+          "browser_navigate",
+          "browser_click",
+          "browser_type",
+          "browser_file_upload",
+        ]) {
+          if (!messages.includes(expected)) {
+            throw new Error(`Allowed Playwright MCP tool missing: ${expected}`);
+          }
+        }
+        for (const forbidden of [
+          "browser_evaluate",
+          "browser_run_code_unsafe",
+          "browser_close",
+        ]) {
+          if (messages.includes(forbidden)) {
+            throw new Error(`Forbidden Playwright MCP tool leaked: ${forbidden}`);
+          }
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: "https://example.com/not-authorized" },
+            },
+            { id: "wrong-origin" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("outside the Publisher browser grant")) {
+          throw new Error("Wrong-origin browser navigation was not blocked");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: `${fixtureOrigin}/video` },
+            },
+            { id: "navigate-video" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("上传视频")) {
+          throw new Error("Playwright MCP did not observe the video fixture page");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "snapshot-video" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        staleUploadImageTextRef = refFor(context.messages.at(-1), "上传图文");
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: `${fixtureOrigin}/image-text` },
+            },
+            { id: "navigate-away-from-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("图文发布") || !staleUploadImageTextRef) {
+          throw new Error("Failed to establish the stale-ref test state");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: {
+                element: "stale 上传图文 ref",
+                target: staleUploadImageTextRef,
+              },
+            },
+            { id: "stale-ref-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const latestSerialized = JSON.stringify(context.messages.at(-1));
+        if (
+          !latestSerialized.includes(
+            "was not observed in the latest Publisher-controlled snapshot",
+          )
+        ) {
+          throw new Error(
+            "Publisher silently accepted a stale observation token",
+          );
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_navigate",
+              args: { url: `${fixtureOrigin}/video` },
+            },
+            { id: "return-video-after-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("上传视频")) {
+          throw new Error("Failed to return to the video publishing surface");
+        }
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "refresh-snapshot-after-stale-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const freshUploadImageTextRef = refFor(context.messages.at(-1), "上传图文");
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: {
+                element: "上传图文",
+                target: freshUploadImageTextRef,
+              },
+            },
+            { id: "click-image-text-with-fresh-ref" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      () =>
+        fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "snapshot-image-text-after-click" },
+          ),
+          { stopReason: "toolUse" },
+        ),
+      (context) => {
+        const latest = JSON.stringify(context.messages.at(-1));
+        if (
+          !latest.includes("图文发布") ||
+          !latest.includes("BRW-01 destination reached")
+        ) {
+          throw new Error(
+            "Post-click snapshot did not show the image-text destination",
+          );
+        }
+        const titleRef = refFor(context.messages.at(-1), "标题");
+
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_type",
+              args: {
+                element: "标题",
+                target: titleRef,
+                text: "BRW-01 controlled fill",
+              },
+            },
+            { id: "type-title" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      () =>
+        fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_snapshot",
+              args: {},
+            },
+            { id: "snapshot-after-title-type" },
+          ),
+          { stopReason: "toolUse" },
+        ),
+      (context) => {
+        const latest = JSON.stringify(context.messages.at(-1));
+        if (!latest.includes("BRW-01 controlled fill")) {
+          throw new Error("Post-type snapshot did not show the filled title");
+        }
+        const uploadRef = refFor(context.messages.at(-1), "Choose File");
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: {
+                element: "Cover file chooser",
+                target: uploadRef,
+              },
+            },
+            { id: "open-file-chooser" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = serializedMessages(context);
+        if (!messages.includes("File chooser")) {
+          throw new Error("browser_click did not open the file chooser modal state");
+        }
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_file_upload",
+              args: { paths: [coverPath] },
+            },
+            { id: "upload-cover" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const latest = context.messages.at(-1);
+        const latestSerialized = JSON.stringify(latest);
+        if (
+          latestSerialized.includes('"isError":true') ||
+          latestSerialized.includes("File access denied")
+        ) {
+          throw new Error("Controlled browser_file_upload did not succeed");
+        }
+        return fauxAssistantMessage(fauxText("BRW01_DOCKER_MCP_SMOKE_OK"));
+      },
+    ]);
+
+    const result = await session.run({
+      prompt:
+        "From the current publishing surface, enter the image-text publishing surface and fill the title field. Choose the route from page observation; no selector is provided.",
+    });
+
+    if (result.finalText !== "BRW01_DOCKER_MCP_SMOKE_OK") {
+      throw new Error(`Unexpected smoke result: ${JSON.stringify(result)}`);
+    }
+
+    const activeMcpPids = [...(await playwrightMcpPids())].filter(
+      (pid) => !baselineMcpPids.has(pid),
+    );
+    if (activeMcpPids.length === 0) {
+      throw new Error(
+        "Playwright MCP integration completed without an observable session-owned MCP child",
+      );
+    }
+
+    await session.dispose();
+    session = undefined;
+    await waitForPidsToExit(activeMcpPids);
+
+    if (
+      !browserSession ||
+      browserSession.page.isClosed() ||
+      !browserSession.page.url().startsWith(fixtureOrigin)
+    ) {
+      throw new Error(
+        "Disposing the AgentSession broke the BrowserProvider-owned persistent page",
+      );
+    }
+
+    await browserSession.page.goto("about:blank");
+    await browserProvider.release(browserSession.id);
+    browserSession = undefined;
+
+    const postReleaseHealth = await browserProvider.health();
+    if (postReleaseHealth.status !== "reachable") {
+      throw new Error(
+        "Releasing the BrowserProvider session made Docker Chromium unavailable",
+      );
+    }
+
+    process.stdout.write(
+      JSON.stringify({
+        status: "ok",
+        evidence: [
+          "provider-owned-session-issued-mcp-attachment",
+          "official-playwright-mcp-connected-over-cdp",
+          "bounded-tool-catalog",
+          "wrong-origin-blocked",
+          "stale-snapshot-ref-rejected",
+          "snapshot-ref-navigation",
+          "controlled-type",
+          "controlled-file-upload",
+          "mcp-child-stopped-on-session-dispose",
+          "persistent-browser-survived-session-dispose",
+        ],
+      }) + "\n",
+    );
+  } finally {
+    if (session) {
+      try {
+        await session.dispose();
+      } catch {
+        // Preserve the primary smoke failure.
+      }
+    }
+    if (browserSession) {
+      try {
+        if (!browserSession.page.isClosed()) {
+          await browserSession.page.goto("about:blank");
+        }
+        await browserProvider.release(browserSession.id);
+      } catch {
+        // Preserve the primary smoke failure; normal success path asserts
+        // release + reconnect explicitly above.
+      }
+    }
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+    await rm(uploadRoot, { recursive: true, force: true });
+  }
+}
+
+main().catch((error) => {
+  console.error(
+    error instanceof Error
+      ? `BRW-01 Docker MCP smoke failed: ${error.message}`
+      : "BRW-01 Docker MCP smoke failed",
+  );
+  process.exitCode = 1;
+});
