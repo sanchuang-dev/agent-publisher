@@ -423,6 +423,51 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     }
   });
 
+
+  test("keeps needs_identity as a durable stop and does not restart browser mutation on repeated continue", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt07-identity-stop-"));
+    roots.push(root);
+    const browser = new FakeAutomationBrowserProvider();
+    const pack = createImageTextMaterialPackFixture();
+    const execute = vi.fn(async () => ({
+      kind: "needs_identity" as const,
+      summary: "login verification is visible",
+      semanticMilestone: "identity_required",
+      browserToolCalls: 2,
+    }));
+    const application = createMvpPrepublishApplication({
+      databasePath: join(root, "app.db"),
+      browserProvider: browser,
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "需要登录的人机边界",
+      });
+      const first = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(first.error?.code).toBe("LOGIN_REQUIRED");
+      expect(
+        application.runtime.jobs.getById(created.id)?.checkpoint?.phase,
+      ).toBe("publishing_secretary_needs_identity");
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      const second = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(second.error?.code).toBe("LOGIN_REQUIRED");
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(browser.acquireCalls).toBe(1);
+      expect(browser.releaseCalls).toBe(1);
+    } finally {
+      await application.stop();
+    }
+  });
+
   test("orchestrator delegates normal browser preparation to Publishing Secretary and does not replay legacy prepare", async () => {
     const root = mkdtempSync(join(tmpdir(), "publisher-agt07-orchestrator-"));
     roots.push(root);
@@ -469,6 +514,15 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       expect(execute).toHaveBeenCalledTimes(1);
       expect(openEntry).not.toHaveBeenCalled();
       expect(preparePage).not.toHaveBeenCalled();
+      expect(browser.releaseCalls).toBe(1);
+
+      const repeated = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(repeated.error).toBeNull();
+      expect(repeated.projection.status).toBe("preparing_publish");
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(browser.acquireCalls).toBe(1);
       expect(browser.releaseCalls).toBe(1);
     } finally {
       await application.stop();

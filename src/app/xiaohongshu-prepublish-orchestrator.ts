@@ -423,6 +423,39 @@ export class XiaohongshuPrepublishOrchestrator {
       }
 
       job = this.#jobs.getById(jobId)!;
+
+      if (
+        this.#publishingSecretary &&
+        job.status === "preparing_publish"
+      ) {
+        const phase = job.checkpoint?.phase;
+        if (
+          phase === "publishing_secretary_prepared_candidate" ||
+          phase === "publishing_secretary_needs_identity" ||
+          phase === "publishing_secretary_needs_clarification"
+        ) {
+          const kind =
+            phase === "publishing_secretary_prepared_candidate"
+              ? "prepared_candidate"
+              : phase === "publishing_secretary_needs_identity"
+                ? "needs_identity"
+                : "needs_clarification";
+          return {
+            projection: this.#publish(jobId),
+            blocked: true,
+            error:
+              kind === "prepared_candidate"
+                ? null
+                : publishingSecretaryRunError({
+                    kind,
+                    summary: "Durable Publishing Secretary stop point.",
+                    semanticMilestone: null,
+                    browserToolCalls: 0,
+                  }),
+          };
+        }
+      }
+
       if (
         job.status !== "preparing_publish" &&
         job.status !== "waiting_for_login"
