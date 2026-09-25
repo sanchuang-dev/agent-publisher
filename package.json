@@ -20,12 +20,14 @@
     "smoke:xhs-login": "tsx scripts/xiaohongshu-login-smoke.ts",
     "start:api": "tsx scripts/start-app.ts",
     "smoke:content-secretary-live": "tsx scripts/content-secretary-live-smoke.ts",
-    "smoke:xhs-prepare": "tsx scripts/xiaohongshu-prepare-smoke.ts"
+    "smoke:xhs-prepare": "tsx scripts/xiaohongshu-prepare-smoke.ts",
+    "smoke:publishing-browser-mcp": "tsx scripts/publishing-browser-mcp-smoke.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",
     "@earendil-works/pi-coding-agent": "0.85.1",
     "@fontsource/noto-sans-sc": "5.3.0",
+    "@playwright/mcp": "0.0.82",
     "@takumi-rs/core": "2.14.0",
     "better-sqlite3": "13.0.3",
     "fastify": "5.12.5",

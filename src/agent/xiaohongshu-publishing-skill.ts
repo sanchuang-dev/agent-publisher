@@ -6,6 +6,7 @@ import type {
 } from "./definition.js";
 import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
 import { createControlledPiResourceLoader } from "./pi-controlled-resources.js";
+import { PUBLISHING_BROWSER_MCP_TOOLS } from "./publishing-browser-mcp.js";
 
 export const XIAOHONGSHU_PUBLISHING_ROLE = "publishing" as const;
 export const XIAOHONGSHU_PUBLISHING_DEFINITION_ID =
@@ -22,25 +23,15 @@ export const XIAOHONGSHU_PUBLISHING_DEFINITION_ID =
 export const XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS = ["read"] as const;
 
 /**
- * Remote browser tools that #105 may expose through the controlled MCP server.
- * Keep this list semantic and minimal: no evaluate/run-code, browser install,
- * console/network inspection, or irreversible platform-specific publish tool.
+ * Browser capability names come from BRW-01's accepted tool surface.
  *
- * Note that generic browser_click is capability, not publish authority. #105
- * must enforce the Publisher-owned final-publish boundary at the browser tool
- * layer; this Skill profile deliberately does not pretend prompt text alone can
- * make an unrestricted click primitive safe.
+ * Keep one source of truth: this Skill may narrow behavior semantically, but it
+ * must not maintain a second browser-tool catalog that can drift from #105.
+ * Generic browser_click is capability, not publish authority; the browser
+ * capability layer enforces Publisher-owned click/final-publish boundaries.
  */
-export const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS = [
-  "browser_snapshot",
-  "browser_tabs",
-  "browser_navigate",
-  "browser_click",
-  "browser_type",
-  "browser_fill_form",
-  "browser_file_upload",
-  "browser_wait_for",
-] as const;
+export const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS =
+  PUBLISHING_BROWSER_MCP_TOOLS;
 
 const XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOL_SET = new Set<string>(
   XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS,

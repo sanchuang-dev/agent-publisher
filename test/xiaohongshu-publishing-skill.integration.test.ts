@@ -18,7 +18,9 @@ import {
 import { afterEach, describe, expect, test } from "vitest";
 
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
+import { PUBLISHING_BROWSER_MCP_TOOLS } from "../src/agent/publishing-browser-mcp.js";
 import {
+  XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS,
   XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
   XIAOHONGSHU_PUBLISHING_ROLE,
   createXiaohongshuPublishingDefinition,
@@ -132,6 +134,14 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
       "materially different safe exploration no longer produces new evidence",
     );
 
+    expect(XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS).toEqual(
+      PUBLISHING_BROWSER_MCP_TOOLS,
+    );
+    expect(XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS).toContain("browser_find");
+    expect(XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS).not.toContain(
+      "browser_tabs",
+    );
+
     const mcpReadyDefinition = createXiaohongshuPublishingDefinition({
       servers: [
         {
@@ -140,7 +150,7 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
             kind: "stdio",
             command: "playwright-mcp-placeholder",
           },
-          includeTools: ["browser_snapshot", "browser_click"],
+          includeTools: ["browser_snapshot", "browser_find", "browser_click"],
         },
       ],
     });
@@ -173,6 +183,23 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
       }),
     ).toThrow(
       'Xiaohongshu Publishing MCP profile must not expose non-browser or overpowered tool "browser_evaluate"',
+    );
+
+    expect(() =>
+      createXiaohongshuPublishingDefinition({
+        servers: [
+          {
+            name: "playwright",
+            transport: {
+              kind: "stdio",
+              command: "playwright-mcp-placeholder",
+            },
+            includeTools: ["browser_tabs"],
+          },
+        ],
+      }),
+    ).toThrow(
+      'Xiaohongshu Publishing MCP profile must not expose non-browser or overpowered tool "browser_tabs"',
     );
 
     expect(() =>

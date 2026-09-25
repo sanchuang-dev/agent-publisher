@@ -243,6 +243,14 @@ jobs:
 
           test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
 
+      - name: Run Publishing Secretary Playwright MCP CDP smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run \
+            --use-aliases --no-deps --rm app-smoke \
+            sh -lc 'timeout --signal=TERM 90s npm run smoke:publishing-browser-mcp'
+
       - name: Run one-URL Web API SSE and takeover black-box smoke
         shell: bash
         run: |

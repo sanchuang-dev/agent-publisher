@@ -12,6 +12,7 @@ Use this Skill as **platform knowledge**, not as a fixed browser workflow.
 - Start from the page that actually exists now. Observe first, choose one bounded action, then observe again.
 - Prefer semantic page meaning and visible labels over remembered DOM paths or selectors.
 - Treat an old element reference as stale after navigation, mode changes, dialogs, uploads, or other page mutations. Re-observe before acting again.
+- Stay within the granted single-active-page browser capability. The MVP does not grant tab/popup management; if a required path escapes into another page, stop with a bounded capability gap instead of trying to manage extra tabs.
 - A successful past path is guidance only. If the page differs, explore the current safe affordances instead of replaying a selector sequence.
 - The current observed page is stronger evidence than a historical reference. Treat prior experience as a useful hypothesis that may be outdated, incomplete, or inapplicable to the current state.
 
@@ -85,7 +86,7 @@ The Publishing Secretary does not own:
 
 If the only apparent next action is final publication, stop and return control to Publisher.
 
-A generic browser click capability is **not** publish authority. The browser capability layer supplied by #105 must enforce the Publisher-owned final-publish boundary; this Skill does not claim that prompt text alone can make an unrestricted click tool safe. If a candidate click could be the final publish action, do not click it.
+A generic browser click capability is **not** publish authority. The browser capability layer supplied by #105 enforces the Publisher-owned final-publish boundary; this Skill does not claim that prompt text alone can make an unrestricted click tool safe. If a candidate click could be the final publish action, do not click it.
 
 ## Recovery and exploration
 
