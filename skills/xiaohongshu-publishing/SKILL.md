@@ -1,6 +1,6 @@
 ---
 name: xiaohongshu-publishing
-description: Platform guidance for a bounded Publishing Secretary preparing Xiaohongshu Creator content without owning identity, approval, or final publication.
+description: Platform guidance for a bounded Publishing Secretary preparing Xiaohongshu Creator content without performing human identity actions or owning approval/final publication.
 ---
 
 # Xiaohongshu Publishing
@@ -39,16 +39,38 @@ For an **image-text** task:
 
 For a **video** task, use the analogous current-page reasoning for the video direction. Do not silently convert the requested mode.
 
-## Identity boundary
+## Identity navigation and human boundary
 
-Login, QR scanning, MFA, device verification, CAPTCHA, and equivalent identity/risk-control steps belong to the authorized human.
+Finding the identity surface is part of the Publishing Secretary's browser task. The human should not have to locate the login button, choose the login method, or switch the page into QR-login mode.
 
-When such a boundary appears:
+Within the granted Xiaohongshu Creator origin, the Agent may:
+
+- observe a logged-out Creator page;
+- navigate ordinary login UI;
+- choose or switch login methods;
+- prefer a visible QR/scanning login method when available;
+- re-observe after each bounded action until a real human-action surface is ready.
+
+A login label, login page, or login-method selector is **not** by itself the human boundary.
+
+The human boundary begins only when the page is ready for an identity action the Agent must not perform, such as:
+
+- a QR code that is ready for the authorized human to scan;
+- CAPTCHA;
+- MFA / OTP;
+- device verification;
+- another equivalent identity/risk-control challenge.
+
+At that point:
 
 - stop browser mutation;
-- report the observed identity requirement through the Publisher-owned handoff path;
+- report a bounded safe state: `qr_ready` or `verification_required`;
+- hand control through the Publisher-owned login path;
 - do not bypass, solve, or work around the challenge;
+- do not copy or persist QR contents, one-time codes, cookies, storage state, account identifiers, passwords, or tokens;
 - resume only after Publisher returns browser control.
+
+If the login UI changes before reaching a human-action surface, treat that as ordinary browser exploration: re-observe, revise the hypothesis, and try a materially different bounded safe path. Do not ask the human to find the QR/login route for the Agent.
 
 ## Composer and material safety
 
@@ -96,7 +118,7 @@ Use a bounded observe-act-observe loop:
 
 1. observe the current state again;
 2. compare what actually happened with the working hypothesis and note what the result taught you;
-3. distinguish a hard boundary (identity, unknown draft, approval/final publication, or another irreversible risk) from an ordinary page/navigation mismatch;
+3. distinguish a hard boundary (a prepared human-only identity action such as QR scan/CAPTCHA/MFA/OTP/device verification, unknown draft, approval/final publication, or another irreversible risk) from an ordinary login/page/navigation mismatch;
 4. for an ordinary mismatch, revise the working hypothesis and choose one materially different bounded safe action supported by the current observation;
 5. observe the result again and update the hypothesis before choosing another action.
 

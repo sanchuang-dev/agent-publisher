@@ -39,7 +39,10 @@ import {
   type PrepublishMaterialSource,
 } from "./prepublish-material-source.js";
 
-type LoginServicePort = Pick<XiaohongshuLoginService, "ensureLogin">;
+type LoginServicePort = Pick<
+  XiaohongshuLoginService,
+  "ensureLogin" | "enterPreparedHumanTakeover"
+>;
 type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
@@ -431,15 +434,12 @@ export class XiaohongshuPrepublishOrchestrator {
         const phase = job.checkpoint?.phase;
         if (
           phase === "publishing_secretary_prepared_candidate" ||
-          phase === "publishing_secretary_needs_identity" ||
           phase === "publishing_secretary_needs_clarification"
         ) {
           const kind =
             phase === "publishing_secretary_prepared_candidate"
               ? "prepared_candidate"
-              : phase === "publishing_secretary_needs_identity"
-                ? "needs_identity"
-                : "needs_clarification";
+              : "needs_clarification";
           return {
             projection: this.#publish(jobId),
             blocked: true,
@@ -489,6 +489,30 @@ export class XiaohongshuPrepublishOrchestrator {
             browserSession: session,
             materialPack: material.pack,
           });
+
+          if (agentResult.kind === "needs_identity") {
+            const identitySurface = agentResult.identitySurface;
+            if (
+              identitySurface !== "qr_ready" &&
+              identitySurface !== "verification_required"
+            ) {
+              throw new Error(
+                "Publishing Secretary reached needs_identity without a safe identity surface.",
+              );
+            }
+
+            this.#login.enterPreparedHumanTakeover({
+              jobId,
+              session,
+              identitySurface,
+            });
+            return {
+              projection: this.#publish(jobId),
+              blocked: true,
+              error: null,
+            };
+          }
+
           this.#recordPublishingSecretaryResult(jobId, agentResult);
 
           return {
@@ -514,6 +538,14 @@ export class XiaohongshuPrepublishOrchestrator {
             return {
               projection: this.#projections.get(jobId),
               blocked: true,
+              error: null,
+            };
+          }
+
+          if (this.#publishingSecretary) {
+            return {
+              projection: this.#projections.get(jobId),
+              blocked: false,
               error: null,
             };
           }
@@ -737,6 +769,7 @@ export class XiaohongshuPrepublishOrchestrator {
           kind: result.kind,
           summary: result.summary,
           semanticMilestone: result.semanticMilestone,
+          identitySurface: result.identitySurface ?? null,
           browserToolCalls: result.browserToolCalls,
         }),
         ...(failed

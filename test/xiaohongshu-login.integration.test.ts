@@ -201,6 +201,66 @@ describe("XiaohongshuLoginService", () => {
     }
   });
 
+  test("accepts an Agent-prepared QR surface without navigating and persists only bounded handoff state", () => {
+    const temp = makeTempDb();
+    cleanupRoots.push(temp.root);
+    const db = openDatabase({ databasePath: temp.databasePath });
+    const jobs = new JobRepository(db);
+    const actions = new ActionRequestRepository(db);
+    createPreparingPublishJob(jobs, "job-agent-qr-ready");
+
+    let openCalls = 0;
+    let inspectCalls = 0;
+    const service = makeService(db, jobs, actions, {
+      openEntry: async () => {
+        openCalls += 1;
+        return { kind: "unexpected" };
+      },
+      inspectEntry: async () => {
+        inspectCalls += 1;
+        return { kind: "unexpected" };
+      },
+    });
+
+    try {
+      const result = service.enterPreparedHumanTakeover({
+        jobId: "job-agent-qr-ready",
+        session: fakeSession(),
+        identitySurface: "qr_ready",
+      });
+
+      expect(result).toMatchObject({
+        kind: "human_takeover",
+        job: {
+          status: "waiting_for_login",
+          checkpoint: {
+            phase: "ensure_login",
+            entryState: "login_required",
+            identitySurface: "qr_ready",
+          },
+        },
+        action: {
+          type: "login_required",
+          status: "open",
+          payload: {
+            platform: "xiaohongshu",
+            reason: "qr_ready",
+            identitySurface: "qr_ready",
+            humanControl: "live_browser",
+            instruction: "Scan the QR code in the live browser to continue.",
+          },
+        },
+      });
+      expect(openCalls).toBe(0);
+      expect(inspectCalls).toBe(0);
+      expect(JSON.stringify(result)).not.toMatch(
+        /qrPayload|cookie|storageState|token|password/i,
+      );
+    } finally {
+      db.close();
+    }
+  });
+
   test("logged-out takeover reuses exactly one durable login action and never renavigates while human control is active", async () => {
     const temp = makeTempDb();
     cleanupRoots.push(temp.root);

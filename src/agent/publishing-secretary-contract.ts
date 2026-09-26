@@ -11,10 +11,19 @@ export type PublishingSecretaryResultKind =
   | "needs_clarification"
   | "failed";
 
+export const publishingSecretaryIdentitySurfaces = [
+  "qr_ready",
+  "verification_required",
+] as const;
+
+export type PublishingSecretaryIdentitySurface =
+  (typeof publishingSecretaryIdentitySurfaces)[number];
+
 export interface PublishingSecretaryExecutionResult {
   readonly kind: PublishingSecretaryResultKind;
   readonly summary: string;
   readonly semanticMilestone: string | null;
+  readonly identitySurface?: PublishingSecretaryIdentitySurface | null;
   readonly browserToolCalls: number;
 }
 

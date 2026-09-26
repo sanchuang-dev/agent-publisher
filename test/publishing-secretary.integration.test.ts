@@ -289,6 +289,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       kind: "prepared_candidate",
       summary: "composer appears prepared",
       semanticMilestone: "image_text_composer_ready",
+      identitySurface: null,
       browserToolCalls: 3,
     });
     expect(host.created).toHaveLength(1);
@@ -307,6 +308,10 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.created[0]!.prompts[0]).toContain(
       "choose a browser_navigate action",
     );
+    expect(host.created[0]!.prompts[0]).toContain(
+      "A login page or login button is not itself a human-action boundary",
+    );
+    expect(host.created[0]!.prompts[0]).toContain("identitySurface=qr_ready");
     expect(host.created[0]!.definition.mcp?.servers[0]?.includeTools).toEqual(
       PUBLISHING_BROWSER_MCP_TOOLS,
     );
@@ -323,6 +328,56 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.resumed[0]!.ref).toBe(host.created[0]!.ref);
 
     db.close();
+  });
+
+  test("rejects needs_identity before a bounded human-action surface is named", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-xhs05-invalid-identity-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-invalid-identity",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "身份边界" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(
+      agentResult({
+        kind: "needs_identity",
+        summary: "login page exists",
+        semanticMilestone: "login_page_seen",
+      }),
+    );
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-invalid-identity",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+        }),
+      ).rejects.toThrow(
+        "needs_identity result must name a safe identitySurface",
+      );
+    } finally {
+      db.close();
+    }
   });
 
   test("keeps another Job isolated and returns identity handoff without a publish capability", async () => {
@@ -350,8 +405,10 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       agentResult(
         {
           kind: "needs_identity",
-          summary: "login verification is visible",
-          semanticMilestone: "identity_required",
+          summary: "do not persist QR payload: secret-example",
+          semanticMilestone: "untrusted identity detail",
+          identitySurface: "qr_ready",
+          qrPayload: "secret-example",
         },
         ["mcp"],
       ),
@@ -380,8 +437,12 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     });
     expect(identity).toMatchObject({
       kind: "needs_identity",
+      summary: "QR login is ready for authorized human action.",
+      semanticMilestone: "qr_ready",
+      identitySurface: "qr_ready",
       browserToolCalls: 1,
     });
+    expect(JSON.stringify(identity)).not.toContain("secret-example");
 
     await service.execute({
       jobId: "job-b",
@@ -430,45 +491,142 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
   });
 
 
-  test("keeps needs_identity as a durable stop and does not restart browser mutation on repeated continue", async () => {
-    const root = mkdtempSync(join(tmpdir(), "publisher-agt07-identity-stop-"));
+  test("turns an Agent-prepared QR surface into one durable login handoff and freezes Agent mutation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-xhs05-identity-stop-"));
     roots.push(root);
     const browser = new FakeAutomationBrowserProvider();
     const pack = createImageTextMaterialPackFixture();
     const execute = vi.fn(async () => ({
       kind: "needs_identity" as const,
-      summary: "login verification is visible",
-      semanticMilestone: "identity_required",
-      browserToolCalls: 2,
+      summary: "model output is replaced with safe bounded text",
+      semanticMilestone: "model-milestone",
+      identitySurface: "qr_ready" as const,
+      browserToolCalls: 4,
     }));
+    let inspectCalls = 0;
     const application = createMvpPrepublishApplication({
       databasePath: join(root, "app.db"),
       browserProvider: browser,
       publishingSecretary: { execute },
       materialSource: createControlledMaterialSource(async () => pack),
       resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+      xiaohongshu: {
+        inspectEntry: async () => {
+          inspectCalls += 1;
+          return { kind: "login_required" as const };
+        },
+      },
     });
 
     try {
       const created = await application.runtime.orchestrator.createJob({
-        brief: "需要登录的人机边界",
+        brief: "执行秘书自己找到二维码再叫我",
       });
       const first = await application.runtime.orchestrator.continueJob(
         created.id,
       );
-      expect(first.error?.code).toBe("LOGIN_REQUIRED");
+      expect(first.error).toBeNull();
+      expect(first.projection.status).toBe("waiting_for_login");
+      expect(first.projection.humanAction).toMatchObject({
+        type: "login_required",
+        reason: "qr_ready",
+        instruction: "Scan the QR code in the live browser to continue.",
+      });
       expect(
-        application.runtime.jobs.getById(created.id)?.checkpoint?.phase,
-      ).toBe("publishing_secretary_needs_identity");
+        application.runtime.jobs.getById(created.id)?.checkpoint,
+      ).toMatchObject({
+        phase: "ensure_login",
+        entryState: "login_required",
+        identitySurface: "qr_ready",
+      });
       expect(execute).toHaveBeenCalledTimes(1);
 
       const second = await application.runtime.orchestrator.continueJob(
         created.id,
       );
-      expect(second.error?.code).toBe("LOGIN_REQUIRED");
+      expect(second.error).toBeNull();
+      expect(second.projection.status).toBe("waiting_for_login");
       expect(execute).toHaveBeenCalledTimes(1);
-      expect(browser.acquireCalls).toBe(1);
-      expect(browser.releaseCalls).toBe(1);
+      expect(inspectCalls).toBe(1);
+      expect(
+        application.runtime.actionRequests.getCurrentOpenForJob(created.id),
+      ).toMatchObject({
+        type: "login_required",
+        status: "open",
+      });
+    } finally {
+      await application.stop();
+    }
+  });
+
+  test("same-profile login detection returns to Publishing Secretary instead of legacy deterministic prepare", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-xhs05-resume-"));
+    roots.push(root);
+    const browser = new FakeAutomationBrowserProvider();
+    const pack = createImageTextMaterialPackFixture();
+    const preparePage = vi.fn();
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: "needs_identity" as const,
+        summary: "QR is ready",
+        semanticMilestone: "qr_ready",
+        identitySurface: "qr_ready" as const,
+        browserToolCalls: 3,
+      })
+      .mockResolvedValueOnce({
+        kind: "progress" as const,
+        summary: "resumed after authentication",
+        semanticMilestone: "authenticated_creator_observed",
+        identitySurface: null,
+        browserToolCalls: 2,
+      });
+
+    let authenticated = false;
+    const application = createMvpPrepublishApplication({
+      databasePath: join(root, "app.db"),
+      browserProvider: browser,
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+      xiaohongshu: {
+        inspectEntry: async () =>
+          authenticated
+            ? { kind: "authenticated" as const }
+            : { kind: "login_required" as const },
+        preparePage,
+      },
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "扫码后继续让执行秘书工作",
+      });
+
+      const waiting = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(waiting.projection.status).toBe("waiting_for_login");
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      authenticated = true;
+      const loginResolved = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(loginResolved.projection.status).toBe("preparing_publish");
+      expect(loginResolved.blocked).toBe(false);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(preparePage).not.toHaveBeenCalled();
+      expect(
+        application.runtime.actionRequests.getCurrentOpenForJob(created.id),
+      ).toBeNull();
+
+      const resumed = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(resumed.projection.status).toBe("preparing_publish");
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(preparePage).not.toHaveBeenCalled();
     } finally {
       await application.stop();
     }

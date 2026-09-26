@@ -10,6 +10,7 @@ import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
 import type {
   PublishingSecretaryExecutionInput,
   PublishingSecretaryExecutionResult,
+  PublishingSecretaryIdentitySurface,
   PublishingSecretaryPort,
   PublishingSecretaryResultKind,
 } from "./publishing-secretary-contract.js";
@@ -77,6 +78,7 @@ function parseResultPayload(finalText: string): {
   readonly kind: PublishingSecretaryResultKind;
   readonly summary: string;
   readonly semanticMilestone: string | null;
+  readonly identitySurface: PublishingSecretaryIdentitySurface | null;
 } {
   const markerIndex = finalText.lastIndexOf(RESULT_MARKER);
   if (markerIndex < 0) {
@@ -126,6 +128,37 @@ function parseResultPayload(finalText: string): {
     );
   }
 
+  const rawIdentitySurface = record.identitySurface;
+  const identitySurface =
+    rawIdentitySurface === "qr_ready" ||
+    rawIdentitySurface === "verification_required"
+      ? rawIdentitySurface
+      : null;
+
+  if (kind === "needs_identity") {
+    if (!identitySurface) {
+      throw new PublishingSecretaryResultError(
+        "Publishing Secretary needs_identity result must name a safe identitySurface.",
+      );
+    }
+
+    return {
+      kind,
+      summary:
+        identitySurface === "qr_ready"
+          ? "QR login is ready for authorized human action."
+          : "Identity verification is ready for authorized human action.",
+      semanticMilestone: identitySurface,
+      identitySurface,
+    };
+  }
+
+  if (rawIdentitySurface !== undefined && rawIdentitySurface !== null) {
+    throw new PublishingSecretaryResultError(
+      "Publishing Secretary identitySurface is only valid for needs_identity.",
+    );
+  }
+
   const milestone =
     record.semanticMilestone === undefined ||
     record.semanticMilestone === null
@@ -136,6 +169,7 @@ function parseResultPayload(finalText: string): {
     kind,
     summary: boundedText(record.summary, "summary"),
     semanticMilestone: milestone,
+    identitySurface: null,
   };
 }
 
@@ -214,8 +248,10 @@ function buildTaskPrompt(
     "If the current page is blank or outside the task surface, choose a browser_navigate action within the granted Creator origin before trying to inspect or mutate page controls.",
     "You own the page-local browser route. Observe the page, choose the next bounded safe action, act, and re-observe. You may use multiple observe/act loops while progress or new evidence exists.",
     "Do not ask Publisher code which UI control to click. Current page evidence and the reviewed Xiaohongshu Skill guide the route.",
-    "Never execute final publication, delete/clear/overwrite unknown content, or bypass login/MFA/device verification.",
-    "If identity verification is required, stop browser mutation once recognized and return needs_identity.",
+    "Never execute final publication, delete/clear/overwrite unknown content, or bypass QR scan, CAPTCHA, MFA, OTP, device verification, or equivalent identity challenges.",
+    "A login page or login button is not itself a human-action boundary. Within the granted Creator origin, you may safely navigate the login UI, choose or switch login methods, and prefer a visible QR/scanning login method when available.",
+    "Return needs_identity only after a true human-action surface is visibly ready. Use identitySurface=qr_ready when a QR code is ready to scan; use identitySurface=verification_required when CAPTCHA/MFA/OTP/device verification or another human-only challenge is already presented.",
+    "Do not include QR contents, one-time codes, cookies, storage state, account identifiers, tokens, or other credential material in the result.",
     "If the composer already contains content of unknown ownership, stop and return needs_clarification.",
     "If the accepted material appears fully prepared, return prepared_candidate. Publisher will verify it independently in #107; do not self-approve.",
     "If safe progress is possible but this run stops before a terminal outcome, return progress.",
@@ -223,7 +259,8 @@ function buildTaskPrompt(
     "Accepted material and controlled upload paths:",
     JSON.stringify(material),
     "Finish with exactly one final marker line and no hidden reasoning after it:",
-    'PUBLISHING_SECRETARY_RESULT={"kind":"prepared_candidate","summary":"bounded user-safe summary","semanticMilestone":"optional semantic milestone"}',
+    'PUBLISHING_SECRETARY_RESULT={"kind":"prepared_candidate","summary":"bounded user-safe summary","semanticMilestone":"optional semantic milestone","identitySurface":null}',
+    'For needs_identity use exactly identitySurface "qr_ready" or "verification_required".',
     "Allowed kind values: progress, needs_identity, prepared_candidate, needs_clarification, failed.",
   ].join("\n");
 }
