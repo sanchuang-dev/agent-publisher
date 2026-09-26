@@ -14,7 +14,7 @@ import {
   defineTool,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentDefinition } from "../src/agent/definition.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
@@ -374,15 +374,19 @@ describe("PiAgentHost", () => {
       readonly completed: boolean;
       readonly isError: boolean | null;
     }> = [];
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     let settled = false;
     const run = session
       .run({
         prompt: "Run the observer probe.",
-        onToolExecution: (execution) => {
+        onToolExecution: async (execution) => {
           observed.push({
             completed: execution.completed,
             isError: execution.isError,
           });
+          if (execution.completed) {
+            throw new Error("fixture async observer rejection");
+          }
         },
       })
       .finally(() => {
@@ -398,8 +402,14 @@ describe("PiAgentHost", () => {
 
     releaseTool();
     await expect(run).resolves.toMatchObject({ finalText: "OBSERVER_DONE" });
+    await Promise.resolve();
     expect(observed.at(-1)).toEqual({ completed: true, isError: false });
+    expect(warning).toHaveBeenCalledWith(
+      "Agent tool observer failed; execution continues.",
+      { code: "AGENT_TOOL_OBSERVER_FAILED" },
+    );
 
+    warning.mockRestore();
     await session.dispose();
   });
 
