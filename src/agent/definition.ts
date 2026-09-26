@@ -74,7 +74,9 @@ export interface AgentTaskInput {
    * Observational only. Implementations must never let a broken observer
    * change Agent execution or external-side-effect semantics.
    */
-  readonly onToolExecution?: (execution: AgentToolExecutionEvidence) => void;
+  readonly onToolExecution?: (
+    execution: AgentToolExecutionEvidence,
+  ) => void | Promise<void>;
 }
 
 export interface AgentToolExecutionEvidence {
