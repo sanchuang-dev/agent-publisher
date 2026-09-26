@@ -94,6 +94,363 @@ jobs:
           docker compose exec -T browser-runtime curl -fsS -X PUT \
             'http://127.0.0.1:9222/json/new?data:text/html,%3Ctitle%3Ebrowser-runtime-ci%3C/title%3E' >/dev/null
 
+      - name: Verify stale Chromium profile lock recovery across forced recreate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker compose exec -T browser-runtime             sh -lc 'printf brw-runtime-persistent > /data/profile/brw-runtime-ci-marker'
+
+          docker compose stop browser-runtime
+
+          docker compose run --rm --no-deps --entrypoint sh browser-runtime -lc '
+            set -eu
+            ln -sfn stale-container-999999 /data/profile/SingletonLock
+            ln -sfn stale-cookie /data/profile/SingletonCookie
+            ln -sfn /tmp/stale-browser-runtime/SingletonSocket /data/profile/SingletonSocket
+          '
+
+          docker compose up -d --no-build --force-recreate browser-runtime
+
+          container_id="$(docker compose ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+          docker compose exec -T browser-runtime             grep -q '^brw-runtime-persistent          set -euo pipefail
+          container_id="$(docker compose ps -q browser-runtime)"
+
+          docker inspect --format '{{json .HostConfig.SecurityOpt}}' "$container_id" | grep -q 'seccomp'
+          ! docker compose exec -T browser-runtime sh -lc "ps -ef | grep '[c]hromium' | grep -q -- '--no-sandbox'"
+          docker compose exec -T browser-runtime \
+            curl -fsS http://127.0.0.1:6080/vnc.html >/dev/null
+
+          for port in 6080 9222; do
+            if docker port "$container_id" "$port/tcp" 2>/dev/null | grep -q .; then
+              echo "::error::browser-runtime port $port must stay Compose-internal"
+              docker port "$container_id" "$port/tcp" || true
+              exit 1
+            fi
+          done
+
+          # Chromium requires unprivileged user namespaces, but unrelated mount
+          # namespace creation must remain denied by the scoped seccomp rule.
+          if docker compose exec -T browser-runtime sh -lc 'command -v unshare >/dev/null 2>&1'; then
+            if docker compose exec -T browser-runtime gosu browser unshare --mount true; then
+              echo "::error::mount namespace creation unexpectedly succeeded"
+              exit 1
+            fi
+          fi
+
+      - name: Browser-runtime logs on failure
+        if: failure()
+        run: docker compose logs browser-runtime
+
+      - name: Stop browser-runtime
+        if: always()
+        run: docker compose down
+
+
+  browser-provider-smokes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Prepare Compose smoke overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          overlay="$RUNNER_TEMP/compose.browser-provider-smoke.yaml"
+          cat > "$overlay" <<'YAML'
+          services:
+            app-smoke:
+              image: node:22-bookworm-slim
+              working_dir: /workspace
+              volumes:
+                - .:/workspace
+              environment:
+                BROWSER_CDP_ENDPOINT: http://browser-runtime:9222
+              depends_on:
+                browser-runtime:
+                  condition: service_healthy
+          YAML
+          echo "SMOKE_COMPOSE_OVERLAY=$overlay" >> "$GITHUB_ENV"
+
+      - name: Prepare controlled runtime smoke material
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "APP_MATERIAL_SOURCE=controlled_smoke" >> "$GITHUB_ENV"
+          root="data/controlled-material"
+          mkdir -p "$root/assets"
+          printf 'fixture\n' > "$root/assets/cover-ci.png"
+          cat > "$root/material.json" <<'JSON'
+          {
+            "version": 1,
+            "source": "controlled_smoke",
+            "generatedFromBrief": false,
+            "pack": {
+              "mode": "image_text",
+              "status": "ready",
+              "planId": "ci-controlled-plan",
+              "copy": {
+                "title": "DEP-01 CI controlled material",
+                "body": "Controlled runtime material for single-entry deployment verification.",
+                "tags": ["DEP01", "smoke"]
+              },
+              "cover": {
+                "kind": "image",
+                "assetId": "cover-ci",
+                "uri": "asset://controlled/cover-ci",
+                "mimeType": "image/png",
+                "width": 1080,
+                "height": 1440
+              },
+              "images": [],
+              "design": null,
+              "warnings": [],
+              "degradations": []
+            }
+          }
+          JSON
+
+      - name: Build DEP-01 app-runtime image
+        run: docker compose build app-runtime
+
+      - name: Verify app-runtime contains product Web and Publisher Skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose run --rm --no-deps --entrypoint sh app-runtime -lc '
+            test -f /app/skills/publisher-safety/SKILL.md
+            grep -q "^# Publisher safety" /app/skills/publisher-safety/SKILL.md
+            test -f /app/web-dist/index.html
+            grep -q "<title>Agent Publisher</title>" /app/web-dist/index.html
+          '
+
+      - name: Build and start browser-runtime
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" up -d --build browser-runtime
+
+      - name: Wait for healthy browser-runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+
+      - name: Run Publishing Secretary Playwright MCP CDP smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run \
+            --use-aliases --no-deps --rm app-smoke \
+            sh -lc 'timeout --signal=TERM 90s npm run smoke:publishing-browser-mcp'
+
+      - name: Run one-URL Web API SSE and takeover black-box smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" up -d --no-build --no-deps app-runtime
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health/ready >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS http://127.0.0.1:3000/health/ready | grep -q '"status":"ready"'
+          curl -fsS http://127.0.0.1:3000/ | grep -q '<title>Agent Publisher</title>'
+
+          live_view="$(mktemp)"
+          curl -fsS 'http://127.0.0.1:3000/browser-live-view/vnc.html?path=browser-live-view/websockify&autoconnect=1&resize=scale' >"$live_view"
+          test -s "$live_view"
+
+          node <<'NODE'
+          const crypto = require("node:crypto");
+          const net = require("node:net");
+          const key = crypto.randomBytes(16).toString("base64");
+          const socket = net.connect(3000, "127.0.0.1");
+          let received = "";
+          let ok = false;
+          const finish = (code, detail) => {
+            clearTimeout(timeout);
+            if (detail) console.error(detail);
+            socket.destroy();
+            process.exit(code);
+          };
+          const timeout = setTimeout(
+            () => finish(1, "timed out waiting for product WebSocket takeover proxy"),
+            5000,
+          );
+
+          socket.on("connect", () => {
+            socket.write([
+              "GET /browser-live-view/websockify HTTP/1.1",
+              "Host: 127.0.0.1:3000",
+              "Connection: Upgrade",
+              "Upgrade: websocket",
+              "Sec-WebSocket-Key: " + key,
+              "Sec-WebSocket-Version: 13",
+              "",
+              "",
+            ].join("\r\n"));
+          });
+
+          socket.on("data", (chunk) => {
+            received += chunk.toString("utf8");
+            if (!received.includes("\r\n\r\n")) return;
+            ok = /^HTTP\/1\.1 101\b/.test(received);
+            finish(ok ? 0 : 1, ok ? undefined : received);
+          });
+          socket.on("error", (error) => finish(1, error));
+          NODE
+
+          response="$(curl -fsS -X POST http://127.0.0.1:3000/api/jobs \
+            -H 'content-type: application/json' \
+            --data '{"brief":"DEP-01 one-url runtime smoke","platform":"xiaohongshu","publishMode":"image_text"}')"
+
+          job_id="$(node -e '
+            const payload = JSON.parse(process.argv[1]);
+            if (!payload.job?.id || payload.job.status !== "created") process.exit(1);
+            if (payload.job.material !== null) process.exit(1);
+            process.stdout.write(payload.job.id);
+          ' "$response")"
+          test -n "$job_id"
+          printf '%s' "$job_id" > "$RUNNER_TEMP/dep01-job-id"
+
+          sse_output="$(mktemp)"
+          set +e
+          timeout 3s curl -fsSN "http://127.0.0.1:3000/api/jobs/$job_id/events" >"$sse_output"
+          sse_status="$?"
+          set -e
+          test "$sse_status" -eq 0 -o "$sse_status" -eq 124
+          grep -q '^event: job' "$sse_output"
+
+      - name: Verify raw browser ports stay Compose-internal
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" ps -q browser-runtime)"
+          for port in 6080 9222; do
+            if docker port "$container_id" "$port/tcp" 2>/dev/null | grep -q .; then
+              echo "::error::browser-runtime port $port must not be published to the host"
+              docker port "$container_id" "$port/tcp" || true
+              exit 1
+            fi
+          done
+
+      - name: Verify app and browser persistence across restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          job_id="$(cat "$RUNNER_TEMP/dep01-job-id")"
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" exec -T browser-runtime \
+            sh -lc 'printf dep01-persistent > /data/profile/dep01-ci-marker'
+
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" restart browser-runtime app-runtime
+
+          browser_id="$(docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" ps -q browser-runtime)"
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$browser_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime app-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$browser_id")" = "healthy"
+
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health/ready >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl -fsS "http://127.0.0.1:3000/api/jobs/$job_id" \
+            | node -e '
+                let body = "";
+                process.stdin.on("data", chunk => body += chunk);
+                process.stdin.on("end", () => {
+                  const payload = JSON.parse(body);
+                  if (payload.job?.id !== process.argv[1]) process.exit(1);
+                });
+              ' "$job_id"
+
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" exec -T browser-runtime \
+            grep -q '^dep01-persistent$' /data/profile/dep01-ci-marker
+
+      - name: Run BrowserProvider and single-session smokes on Compose network
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" run --no-deps --rm app-smoke \
+            sh -lc '
+              set -eu
+              echo "[compose-smoke] endpoint=$BROWSER_CDP_ENDPOINT"
+              timeout 15s node -e '"'"'require("node:dns").lookup("browser-runtime", { family: 4 }, (error, address) => { if (error) { console.error("[compose-smoke] dns-failed", error); process.exit(1); } console.log("[compose-smoke] browser-runtime-ip=" + address); })'"'"'
+              echo "[compose-smoke] browser-provider=start"
+              timeout --signal=TERM 45s npm run smoke:browser-provider
+              echo "[compose-smoke] browser-provider=done"
+              echo "[compose-smoke] session-constraint=start"
+              timeout --signal=TERM 45s npm run smoke:session-constraint
+              echo "[compose-smoke] session-constraint=done"
+            '
+
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" logs browser-runtime app-runtime
+
+      - name: Stop runtime services
+        if: always()
+        run: docker compose -f compose.yaml -f "$SMOKE_COMPOSE_OVERLAY" down
+ /data/profile/brw-runtime-ci-marker
+
+          recovery_logs="$(docker compose logs browser-runtime)"
+          grep -q 'removing stale Chromium SingletonLock' <<<"$recovery_logs"
+          grep -q 'removing stale Chromium SingletonCookie' <<<"$recovery_logs"
+          grep -q 'removing stale Chromium SingletonSocket' <<<"$recovery_logs"
+
       - name: Verify sandbox boundary and live-view endpoint
         shell: bash
         run: |

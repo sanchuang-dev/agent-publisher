@@ -20,6 +20,7 @@ RUN if [ -n "$DEBIAN_MIRROR" ]; then \
         novnc \
         socat \
         tini \
+        util-linux \
         websockify \
         x11vnc \
         xvfb \

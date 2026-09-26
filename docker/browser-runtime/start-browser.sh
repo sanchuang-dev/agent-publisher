@@ -4,6 +4,7 @@ set -eu
 display="${DISPLAY:-:99}"
 profile_dir="${BROWSER_PROFILE_DIR:-/data/profile}"
 runtime_dir="${BROWSER_RUNTIME_DIR:-/run/browser-runtime}"
+profile_lease_file="${profile_dir}/.publisher-browser-runtime.lock"
 
 # Internal browser-runtime transport contract. Host/reverse-proxy exposure belongs
 # to Compose or the application boundary instead of a second container port config.
@@ -15,6 +16,28 @@ x_socket="/tmp/.X11-unix/X${display_number}"
 
 mkdir -p "${profile_dir}" "${runtime_dir}"
 chown -R browser:browser "${profile_dir}"
+
+# The Chromium profile lives on a persistent named volume. Container recreation
+# changes Chromium's hostname/PID identity, so its Singleton* symlinks can remain
+# even though the previous managed browser is gone. Hold a Publisher-owned
+# kernel lease for the full runtime lifetime before touching those artifacts.
+# flock is released automatically when this supervisor exits, including crashes.
+touch "${profile_lease_file}"
+chown browser:browser "${profile_lease_file}"
+exec 9>"${profile_lease_file}"
+if ! flock -n 9; then
+  echo "Browser profile is already owned by another browser-runtime instance: ${profile_dir}" >&2
+  exit 1
+fi
+
+for singleton_name in SingletonLock SingletonCookie SingletonSocket; do
+  singleton_path="${profile_dir}/${singleton_name}"
+  if [ -e "${singleton_path}" ] || [ -L "${singleton_path}" ]; then
+    echo "[browser-runtime] removing stale Chromium ${singleton_name}" >&2
+    rm -f "${singleton_path}"
+  fi
+done
+
 rm -f "${runtime_dir}"/*.pid
 
 xvfb_pid=""
