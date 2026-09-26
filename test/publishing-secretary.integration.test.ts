@@ -324,7 +324,9 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
         browserProvider: browser,
         browserSession: browser.session,
         materialPack: pack,
-        onProgress: (event) => progress.push(event),
+        onProgress: (event) => {
+          progress.push(event);
+        },
       });
 
       expect(
