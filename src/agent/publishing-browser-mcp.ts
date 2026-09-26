@@ -333,7 +333,6 @@ export function createPublishingBrowserMcpProfile(
           args: [
             playwrightMcpCliPath,
             `--cdp-endpoint=${grant.cdpEndpoint}`,
-            `--allowed-origins=${grant.allowedOrigins.join(";")}`,
             "--block-service-workers",
             "--codegen=none",
             "--image-responses=omit",
@@ -612,6 +611,16 @@ export async function createPublishingBrowserGuardExtension(
         }
         if (!publishingBrowserToolSet.has(call.tool)) return undefined;
 
+        if (event.isError) {
+          observedRefs.clear();
+          return {
+            // Preserve the nested tool's failure truth. Do not let the
+            // post-result page/origin guard overwrite an actual MCP error.
+            details: safeBrowserResultDetails(call.tool),
+            isError: true,
+          };
+        }
+
         try {
           await assertActiveProviderAttachment(grant);
           currentAllowedPageUrl(grant, allowedOrigins);
@@ -631,15 +640,9 @@ export async function createPublishingBrowserGuardExtension(
               ...safeBrowserResultDetails(call.tool),
               boundaryRedacted: true,
             },
-            // Keep the Agent loop alive so it can surface/recover from the
-            // boundary event instead of silently terminating after the tool.
-            isError: false,
-          };
-        }
-
-        if (event.isError) {
-          return {
-            details: safeBrowserResultDetails(call.tool),
+            // Crossing the Publisher-owned page/origin boundary is a failure,
+            // not a successful recovery result.
+            isError: true,
           };
         }
 

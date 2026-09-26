@@ -209,7 +209,6 @@ describe("Publishing browser MCP capability", () => {
       expect.arrayContaining([
         expect.stringContaining("@playwright/mcp/cli.js"),
         "--cdp-endpoint=ws://browser-runtime:9222/devtools/browser/test-browser",
-        "--allowed-origins=https://creator.xiaohongshu.com;https://www.xiaohongshu.com",
         "--block-service-workers",
         "--codegen=none",
         "--image-responses=omit",
@@ -219,6 +218,9 @@ describe("Publishing browser MCP capability", () => {
     expect(server.transport.args).not.toContain(
       "--allow-unrestricted-file-access",
     );
+    expect(
+      server.transport.args.some((arg) => arg.startsWith("--allowed-origins=")),
+    ).toBe(false);
   });
 
   test("fails closed when a browser grant is reused across Job scope", async () => {
@@ -457,6 +459,59 @@ describe("Publishing browser MCP capability", () => {
     await session.dispose();
   });
 
+  test("preserves a nested MCP navigation error before post-result page-boundary checks", async () => {
+    const uploadRoot = await tempDir("publisher-browser-mcp-error-");
+    const harness = browserHarness("about:blank");
+    const faux = fauxProvider({ provider: "publisher-browser-mcp-error" });
+    const { grant: issued } = await grant(uploadRoot, { harness });
+    const host = await createHost(faux, issued);
+    const session = await host.createSession({
+      definition: fixtureDefinition(),
+      scope: { jobId: "job-browser", role: "publishing" },
+    });
+
+    let providerVisibleFailure = "";
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            server: PUBLISHING_BROWSER_MCP_SERVER,
+            tool: "browser_navigate",
+            args: {
+              url:
+                "https://creator.xiaohongshu.com/fixture-mcp-error",
+            },
+          },
+          { id: "nested-navigation-error" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        providerVisibleFailure = JSON.stringify(context.messages.at(-1));
+        expect(providerVisibleFailure).toContain('"isError":true');
+        expect(providerVisibleFailure).toContain(
+          "BROWSER_NAVIGATE_FAILED:fixture nested MCP failure",
+        );
+        expect(providerVisibleFailure).not.toContain(
+          "Publisher browser authority or origin boundary was crossed",
+        );
+        return fauxAssistantMessage(fauxText("NESTED_MCP_ERROR_PRESERVED"));
+      },
+    ]);
+
+    await expect(
+      session.run({
+        prompt:
+          "Navigate to the allowed Creator URL and report the actual browser tool failure.",
+      }),
+    ).resolves.toMatchObject({
+      finalText: "NESTED_MCP_ERROR_PRESERVED",
+    });
+
+    await session.dispose();
+  });
+
   test("redacts a browser result when an allowed click crosses the origin boundary", async () => {
     const uploadRoot = await tempDir("publisher-browser-redirect-origin-");
     const harness = browserHarness();
@@ -515,6 +570,8 @@ describe("Publishing browser MCP capability", () => {
       },
       (context) => {
         providerVisibleRedirectTranscript = JSON.stringify(context.messages);
+        const latest = context.messages.at(-1);
+        expect(JSON.stringify(latest)).toContain('"isError":true');
         return fauxAssistantMessage(fauxText("REDIRECT_RESULT_REDACTED"));
       },
     ]);
