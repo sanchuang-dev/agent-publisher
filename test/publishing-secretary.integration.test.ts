@@ -289,6 +289,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       kind: "prepared_candidate",
       summary: "composer appears prepared",
       semanticMilestone: "image_text_composer_ready",
+      identitySurface: null,
       browserToolCalls: 3,
     });
     expect(host.created).toHaveLength(1);
@@ -327,6 +328,56 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.resumed[0]!.ref).toBe(host.created[0]!.ref);
 
     db.close();
+  });
+
+  test("rejects needs_identity before a bounded human-action surface is named", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-xhs05-invalid-identity-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-invalid-identity",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "身份边界" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(
+      agentResult({
+        kind: "needs_identity",
+        summary: "login page exists",
+        semanticMilestone: "login_page_seen",
+      }),
+    );
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-invalid-identity",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+        }),
+      ).rejects.toThrow(
+        "needs_identity result must name a safe identitySurface",
+      );
+    } finally {
+      db.close();
+    }
   });
 
   test("keeps another Job isolated and returns identity handoff without a publish capability", async () => {
