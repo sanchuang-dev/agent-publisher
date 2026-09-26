@@ -36,6 +36,29 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "https://creator.xiaohongshu.com",
 ] as const;
 
+export type PublishingSecretaryHostFactory = (
+  grant: PublishingBrowserCapabilityGrant,
+) => AgentHost;
+
+export interface PublishingSecretaryServiceDependencies {
+  readonly jobs: Pick<JobRepository, "getById">;
+  readonly bindings: AgentSessionBindingRepository;
+  readonly createHost: PublishingSecretaryHostFactory;
+  readonly uploadRoot: string;
+  readonly resolveAssetPath: AssetPathResolver;
+  readonly allowedOrigins?: readonly string[];
+  readonly runTimeoutMs?: number;
+}
+
+export class PublishingSecretaryResultError extends Error {
+  readonly code = "PUBLISHING_SECRETARY_RESULT_INVALID" as const;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "PublishingSecretaryResultError";
+  }
+}
+
 type PublishingSecretaryBoundedOutcome = Omit<
   PublishingSecretaryExecutionResult,
   "browserToolCalls"
