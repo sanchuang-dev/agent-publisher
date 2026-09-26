@@ -319,13 +319,20 @@ function emitPublishingProgress(
   input: PublishingSecretaryExecutionInput,
   progress: PublishingSecretaryProgress,
 ): void {
-  try {
-    input.onProgress?.(progress);
-  } catch {
+  const warnObserverFailure = () => {
     process.emitWarning(
       "Publishing Secretary progress observer failed; browser execution continues.",
       { code: "PUBLISHING_PROGRESS_OBSERVER_FAILED" },
     );
+  };
+
+  try {
+    const observation = input.onProgress?.(progress);
+    if (observation) {
+      void Promise.resolve(observation).catch(warnObserverFailure);
+    }
+  } catch {
+    warnObserverFailure();
   }
 }
 
