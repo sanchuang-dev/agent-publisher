@@ -297,6 +297,106 @@ test("committed Job creation survives unavailable browser storage", async () => 
 
 
 
+test("Publishing Secretary runtime failure is specific, durable-looking, and stops auto-continue", async () => {
+  const repository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "preparing_publish",
+          currentWorker: "publishing_secretary",
+          currentStep: "publishing_secretary_runtime",
+          phase: "publishing_secretary_runtime_failed",
+          failure: {
+            step: "publishing_secretary_runtime",
+            code: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+            message:
+              "The configured AI runtime rejected the Publishing Secretary model/tool request.",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+  expect(task).toMatchObject({
+    currentStep: "执行秘书运行失败",
+    failure: {
+      step: "执行秘书运行失败",
+      reason: "执行秘书的上游请求被拒绝。",
+      recovery:
+        "已停止自动重试。请根据错误类别检查执行秘书运行时后再重试。",
+    },
+  });
+  expect(shouldAutoContinueTask(task)).toBe(false);
+});
+
+test("renders transitional AGT-08 upstream error aliases without losing diagnostic meaning", async () => {
+  const repository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "preparing_publish",
+          currentWorker: "publishing_secretary",
+          currentStep: "publishing_secretary_runtime",
+          phase: "publishing_secretary_runtime_failed",
+          failure: {
+            step: "publishing_secretary_runtime",
+            code: "PUBLISHER_AI_REQUEST_REJECTED",
+            message: "bounded transitional message",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+  expect(task.failure?.reason).toBe("执行秘书的上游请求被拒绝。");
+  expect(shouldAutoContinueTask(task)).toBe(false);
+});
+
+test("continue preserves bounded run.error when durable failure projection is unavailable", async () => {
+  const fetchImpl = vi.fn(async () =>
+    response({
+      job: projection({
+        status: "preparing_publish",
+        currentWorker: "publishing_secretary",
+        currentStep: "publishing_progress_starting",
+        phase: "publishing_secretary_progress",
+      }),
+      run: {
+        blocked: true,
+        error: {
+          code: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+          message: "bounded backend message",
+        },
+      },
+    }),
+  );
+  const repository = new ApiTaskRepository({
+    fetchImpl: fetchImpl as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.continue("job-real-1");
+  expect(task.failure).toMatchObject({
+    reason: "执行秘书的上游请求被拒绝。",
+    recovery:
+      "本次执行已停止自动重试。请根据错误类别检查当前运行时后再继续。",
+  });
+  expect(shouldAutoContinueTask(task)).toBe(false);
+});
+
 test("auto-continue stops on durable failures and clarification boundaries", async () => {
   const failureRepository = new ApiTaskRepository({
     fetchImpl: vi.fn(async () =>

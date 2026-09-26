@@ -15,7 +15,11 @@ import type {
   CreatePublisherAgentSessionInput,
   ResumePublisherAgentSessionInput,
 } from "../src/agent/definition.js";
-import type { AgentHost, PublisherAgentSession } from "../src/agent/host.js";
+import {
+  AgentSessionError,
+  type AgentHost,
+  type PublisherAgentSession,
+} from "../src/agent/host.js";
 import {
   PublishingSecretaryService,
   authorizeXiaohongshuPrepublishClick,
@@ -490,6 +494,93 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     }
   });
 
+
+  test("persists bounded pre-tool runtime failure and never logs secret-bearing upstream detail", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-runtime-failure-"));
+    roots.push(root);
+    const browser = new FakeAutomationBrowserProvider();
+    const pack = createImageTextMaterialPackFixture();
+    const secret = "sk-never-persist-this";
+    const upstream = Object.assign(
+      new Error("Authorization: Bearer " + secret),
+      { status: 400 },
+    );
+    const execute = vi.fn(async () => {
+      throw new AgentSessionError(
+        "AGENT_SESSION_RUN_FAILED",
+        "Agent session run failed: Authorization: Bearer " + secret,
+        { cause: upstream, runStopped: true },
+      );
+    });
+    const warning = vi
+      .spyOn(process, "emitWarning")
+      .mockImplementation(() => undefined as never);
+    const application = createMvpPrepublishApplication({
+      databasePath: join(root, "app.db"),
+      browserProvider: browser,
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "运行时失败必须可诊断",
+      });
+      const result = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+
+      expect(result).toMatchObject({
+        blocked: true,
+        error: {
+          code: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+          message:
+            "An upstream Publishing Secretary request was rejected.",
+        },
+        projection: {
+          status: "preparing_publish",
+          currentStep: "publishing_secretary_runtime",
+          failure: {
+            step: "publishing_secretary_runtime",
+            code: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+            message:
+              "An upstream Publishing Secretary request was rejected.",
+          },
+        },
+      });
+      expect(
+        application.runtime.jobs.getById(created.id)?.checkpoint,
+      ).toMatchObject({
+        phase: "publishing_secretary_runtime_failed",
+        publishingSecretaryRuntimeStage: "session_run",
+        publishingSecretaryRuntimeCode: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+        publishingSecretaryRuntimeUpstreamStatus: 400,
+      });
+
+      const serializedSteps = JSON.stringify(
+        application.runtime.jobs.getStepsForJob(created.id),
+      );
+      expect(serializedSteps).not.toContain(secret);
+      expect(serializedSteps).not.toContain("Authorization");
+      expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "code=PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+        ),
+        { code: "APP_PUBLISHING_RUNTIME_FAILED" },
+      );
+
+      const reread = application.runtime.orchestrator.getJob(created.id);
+      expect(reread.failure).toMatchObject({
+        step: "publishing_secretary_runtime",
+        code: "PUBLISHING_UPSTREAM_REQUEST_REJECTED",
+      });
+    } finally {
+      warning.mockRestore();
+      await application.stop();
+    }
+  });
 
   test("turns an Agent-prepared QR surface into one durable login handoff and freezes Agent mutation", async () => {
     const root = mkdtempSync(join(tmpdir(), "publisher-xhs05-identity-stop-"));
