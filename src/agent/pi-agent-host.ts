@@ -346,6 +346,23 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       toolExecutions: [...toolExecutions.values()],
     });
 
+    const warnObserverFailure = () => {
+      process.emitWarning(
+        "Agent tool observer failed; execution continues.",
+        { code: "AGENT_TOOL_OBSERVER_FAILED" },
+      );
+    };
+    const observeToolExecution = (evidence: AgentToolExecutionEvidence) => {
+      try {
+        const observation = input.onToolExecution?.(evidence);
+        if (observation) {
+          void Promise.resolve(observation).catch(warnObserverFailure);
+        }
+      } catch {
+        warnObserverFailure();
+      }
+    };
+
     const unsubscribe = this.session.subscribe((event) => {
       eventTypes.push(event.type);
 
@@ -370,14 +387,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
           isError: null,
         };
         toolExecutions.set(event.toolCallId, evidence);
-        try {
-          input.onToolExecution?.(evidence);
-        } catch {
-          process.emitWarning(
-            "Agent tool observer failed; execution continues.",
-            { code: "AGENT_TOOL_OBSERVER_FAILED" },
-          );
-        }
+        observeToolExecution(evidence);
         return;
       }
 
@@ -391,14 +401,7 @@ class PiPublisherAgentSession implements PublisherAgentSession {
           isError: event.isError,
         };
         toolExecutions.set(event.toolCallId, evidence);
-        try {
-          input.onToolExecution?.(evidence);
-        } catch {
-          process.emitWarning(
-            "Agent tool observer failed; execution continues.",
-            { code: "AGENT_TOOL_OBSERVER_FAILED" },
-          );
-        }
+        observeToolExecution(evidence);
       }
     });
 
