@@ -320,6 +320,89 @@ describe("PiAgentHost", () => {
     });
   });
 
+  test("streams observational tool execution before the run finishes", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-tool-observer" });
+    const modelRuntime = await createFauxRuntime(faux);
+    let releaseTool!: () => void;
+    const toolReleased = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    const probe = defineTool({
+      name: "observer_probe",
+      label: "Observer Probe",
+      description: "Pauses so the test can observe an in-flight tool event.",
+      parameters: Type.Object({
+        value: Type.String(),
+      }),
+      async execute(_toolCallId, params) {
+        await toolReleased;
+        return {
+          content: [{ type: "text", text: `observed:${params.value}` }],
+          details: { value: params.value },
+        };
+      },
+    });
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      defaultRunTimeoutMs: 2_000,
+      tools: ["observer_probe"],
+      sessionOptions: {
+        customTools: [probe],
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-tool-observer", role: "content" },
+    });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "observer_probe",
+          { value: "safe-value" },
+          { id: "observer-call" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(fauxText("OBSERVER_DONE")),
+    ]);
+
+    const observed: Array<{
+      readonly completed: boolean;
+      readonly isError: boolean | null;
+    }> = [];
+    let settled = false;
+    const run = session
+      .run({
+        prompt: "Run the observer probe.",
+        onToolExecution: (execution) => {
+          observed.push({
+            completed: execution.completed,
+            isError: execution.isError,
+          });
+        },
+      })
+      .finally(() => {
+        settled = true;
+      });
+
+    for (let attempt = 0; attempt < 50 && observed.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(observed[0]).toEqual({ completed: false, isError: null });
+    expect(settled).toBe(false);
+
+    releaseTool();
+    await expect(run).resolves.toMatchObject({ finalText: "OBSERVER_DONE" });
+    expect(observed.at(-1)).toEqual({ completed: true, isError: false });
+
+    await session.dispose();
+  });
+
   test("preserves completed tool evidence when a later turn exceeds the deadline", async () => {
     const faux = fauxProvider({ provider: "publisher-agent-host-partial-evidence" });
     const modelRuntime = await createFauxRuntime(faux);
