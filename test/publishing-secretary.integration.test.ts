@@ -21,7 +21,10 @@ import {
   authorizeXiaohongshuPrepublishClick,
   createXiaohongshuPublishingBrowserResourceLoader,
 } from "../src/agent/publishing-secretary.js";
-import type { PublishingSecretaryPort } from "../src/agent/publishing-secretary-contract.js";
+import type {
+  PublishingSecretaryPort,
+  PublishingSecretaryProgress,
+} from "../src/agent/publishing-secretary-contract.js";
 import type { AgentSessionRef } from "../src/agent/session-ref.js";
 import type {
   BrowserAutomationAttachmentProvider,
@@ -198,6 +201,29 @@ function agentResult(
   };
 }
 
+function browserToolAgentResult(
+  payload: Record<string, unknown>,
+  browserTools: readonly string[],
+): AgentTaskResult {
+  return {
+    finalText:
+      "PUBLISHING_SECRETARY_RESULT=" + JSON.stringify(payload),
+    eventTypes: [],
+    toolExecutions: browserTools.map((tool, index) => ({
+      toolCallId: "browser-tool-" + index,
+      toolName: "mcp",
+      args: {
+        server: PUBLISHING_BROWSER_MCP_SERVER,
+        tool,
+        targetRef: "SECRET_REF_MUST_NOT_PROJECT",
+        token: "SECRET_TOKEN_MUST_NOT_PROJECT",
+      },
+      completed: true,
+      isError: false,
+    })),
+  };
+}
+
 describe("AGT-07 Publishing Secretary browser execution", () => {
   const roots: string[] = [];
 
@@ -244,6 +270,91 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(definition.mcp?.servers[0]?.includeTools).not.toContain(
       "final_publish",
     );
+  });
+
+  test("maps browser MCP evidence to bounded semantic progress without raw arguments", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-obs01-progress-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-progress",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "bounded progress" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(
+      browserToolAgentResult(
+        {
+          kind: "progress",
+          summary: "bounded progress complete",
+          semanticMilestone: "creator_observed",
+        },
+        [
+          "browser_snapshot",
+          "browser_navigate",
+          "browser_find",
+          "browser_click",
+          "browser_fill_form",
+          "browser_file_upload",
+          "browser_wait_for",
+        ],
+      ),
+    );
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+    const progress: PublishingSecretaryProgress[] = [];
+
+    try {
+      await service.execute({
+        jobId: "job-progress",
+        browserProvider: browser,
+        browserSession: browser.session,
+        materialPack: pack,
+        onProgress: (event) => progress.push(event),
+      });
+
+      expect(
+        [...new Set(progress.map((event) => event.stage))],
+      ).toEqual([
+        "starting",
+        "observing",
+        "navigating",
+        "finding",
+        "acting",
+        "filling",
+        "uploading",
+        "waiting",
+      ]);
+      expect(progress).toContainEqual({
+        stage: "uploading",
+        status: "running",
+      });
+      expect(progress).toContainEqual({
+        stage: "uploading",
+        status: "succeeded",
+      });
+      const serialized = JSON.stringify(progress);
+      expect(serialized).not.toContain("SECRET_REF_MUST_NOT_PROJECT");
+      expect(serialized).not.toContain("SECRET_TOKEN_MUST_NOT_PROJECT");
+      expect(serialized).not.toContain("targetRef");
+      expect(serialized).not.toContain("token");
+    } finally {
+      db.close();
+    }
   });
 
   test("creates one job-scoped session, returns a bounded prepared candidate, and resumes it on the next run", async () => {
