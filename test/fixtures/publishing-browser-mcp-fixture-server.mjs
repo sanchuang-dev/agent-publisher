@@ -63,6 +63,18 @@ function responseFor(message) {
     const name = message.params?.name;
     const args = message.params?.arguments ?? {};
     if (name === "browser_navigate") {
+      if (String(args.url ?? "").includes("/fixture-mcp-error")) {
+        return {
+          ...base,
+          result: {
+            content: [{
+              type: "text",
+              text: "BROWSER_NAVIGATE_FAILED:fixture nested MCP failure",
+            }],
+            isError: true,
+          },
+        };
+      }
       return {
         ...base,
         result: {
