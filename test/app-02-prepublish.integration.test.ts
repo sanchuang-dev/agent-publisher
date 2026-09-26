@@ -10,6 +10,7 @@ import type {
   BrowserProviderHealth,
   BrowserSession,
 } from "../src/browser/provider.js";
+import type { PublishingSecretaryExecutionInput } from "../src/agent/publishing-secretary-contract.js";
 import {
   createMvpPrepublishApplication,
   type MvpPrepublishApplication,
@@ -715,6 +716,88 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
         },
       });
     } finally {
+      await application.stop();
+    }
+  });
+
+  test("publishing progress is durable and streamed before the secretary run finishes", async () => {
+    const temp = makeTempDatabase();
+    cleanupRoots.push(temp.root);
+
+    class AutomationBrowserProvider extends FakeBrowserProvider {
+      async resolveAutomationAttachment(sessionId: string) {
+        return {
+          sessionId,
+          cdpEndpoint: "ws://browser-runtime:9222/devtools/browser/progress",
+        };
+      }
+    }
+
+    const browser = new AutomationBrowserProvider();
+    const { pack } = preparedFixture();
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const execute = vi.fn(async (input: PublishingSecretaryExecutionInput) => {
+      input.onProgress?.({ key: "observing", status: "running" });
+      markStarted();
+      await held;
+      input.onProgress?.({ key: "observing", status: "succeeded" });
+      return {
+        kind: "prepared_candidate" as const,
+        summary: "candidate is ready",
+        semanticMilestone: "composer_ready",
+        browserToolCalls: 1,
+      };
+    });
+    const application = createMvpPrepublishApplication({
+      databasePath: temp.path,
+      browserProvider: browser,
+      browserLiveViewUrl: "/browser-live-view/vnc.html",
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) => "/controlled-assets/" + asset.assetId + ".png",
+    });
+    const seen: string[] = [];
+    let unsubscribe: () => void = () => undefined;
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({ brief: "实时进度" });
+      unsubscribe = application.runtime.events.subscribe(created.id, (projection) => {
+        seen.push(JSON.stringify(projection));
+      });
+      const runPromise = application.runtime.orchestrator.continueJob(created.id);
+      await started;
+
+      const during = application.runtime.orchestrator.getJob(created.id);
+      expect(during.liveView).toEqual({
+        mode: "runtime",
+        url: "/browser-live-view/vnc.html",
+        controlOwner: "agent",
+      });
+      expect(during.timeline).toContainEqual(
+        expect.objectContaining({
+          stepKey: "publishing_progress_observing",
+          status: "running",
+        }),
+      );
+      expect(seen.some((entry) => entry.includes("publishing_progress_observing"))).toBe(true);
+
+      release();
+      const finished = await runPromise;
+      expect(finished.projection.timeline).toContainEqual(
+        expect.objectContaining({
+          stepKey: "publishing_progress_observing",
+          status: "succeeded",
+        }),
+      );
+    } finally {
+      unsubscribe();
       await application.stop();
     }
   });

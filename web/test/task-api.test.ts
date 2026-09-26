@@ -140,6 +140,56 @@ test("waiting_for_login trusts only the backend Live View descriptor", async () 
   expect(task.needsHuman).toBe(true);
 });
 
+test("preparing_publish renders the backend Live View as Agent-owned and exposes semantic progress", async () => {
+  const fetchImpl = vi.fn(async () =>
+    response({
+      job: projection({
+        status: "preparing_publish",
+        currentWorker: "publishing_secretary",
+        currentStep: "publishing_progress_observing",
+        phase: "publishing_secretary_progress",
+        liveView: {
+          mode: "runtime",
+          url: "/browser-live-view/vnc.html?path=browser-live-view/websockify",
+          controlOwner: "agent",
+        },
+        timeline: [
+          {
+            stepKey: "publishing_progress_observing",
+            status: "running",
+            attempt: 1,
+            errorCode: null,
+            errorMessage: null,
+          },
+        ],
+      }),
+    }),
+  );
+  const repository = new ApiTaskRepository({
+    fetchImpl: fetchImpl as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+
+  expect(task.browserLiveViewMode).toBe("runtime");
+  expect(task.browserLiveViewUrl).toBe(
+    "/browser-live-view/vnc.html?path=browser-live-view/websockify",
+  );
+  expect(task.controlOwner).toBe("agent");
+  expect(task.currentStep).toBe("观察当前页面");
+  expect(task.timeline).toContainEqual(
+    expect.objectContaining({
+      label: "观察当前页面",
+      detail: "读取当前发布页面状态",
+      status: "active",
+    }),
+  );
+});
+
 test("SSE projection renders actual controlled material and real approval summary", () => {
   let listener: ((event: MessageEvent<string>) => void) | undefined;
   const close = vi.fn();

@@ -14,6 +14,7 @@ import type {
   AgentTaskInput,
   AgentTaskResult,
   AgentToolExecutionEvidence,
+  AgentToolExecutionEvent,
   CreatePublisherAgentSessionInput,
   ResumePublisherAgentSessionInput,
 } from "./definition.js";
@@ -362,11 +363,19 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       }
 
       if (event.type === "tool_execution_start") {
-        toolExecutions.set(event.toolCallId, {
+        const execution = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
           completed: false,
+          isError: null,
+        } satisfies AgentToolExecutionEvidence;
+        toolExecutions.set(event.toolCallId, execution);
+        this.#notifyToolExecution(input, {
+          phase: "started",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: event.args,
           isError: null,
         });
         return;
@@ -374,11 +383,19 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
       if (event.type === "tool_execution_end") {
         const previous = toolExecutions.get(event.toolCallId);
-        toolExecutions.set(event.toolCallId, {
+        const execution = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: previous?.args,
           completed: true,
+          isError: event.isError,
+        } satisfies AgentToolExecutionEvidence;
+        toolExecutions.set(event.toolCallId, execution);
+        this.#notifyToolExecution(input, {
+          phase: "completed",
+          toolCallId: event.toolCallId,
+          toolName: event.toolName,
+          args: previous?.args,
           isError: event.isError,
         });
       }
@@ -458,6 +475,24 @@ class PiPublisherAgentSession implements PublisherAgentSession {
 
   async dispose(): Promise<void> {
     await this.#invalidate(true);
+  }
+
+  #notifyToolExecution(
+    input: AgentTaskInput,
+    event: AgentToolExecutionEvent,
+  ): void {
+    if (!input.onToolExecution) return;
+
+    try {
+      input.onToolExecution(event);
+    } catch {
+      // Progress delivery is observational. A projection failure must not
+      // change browser authority or the running agent task.
+      process.emitWarning(
+        "Agent tool progress observer failed during an active run.",
+        { code: "AGENT_TOOL_PROGRESS_OBSERVER_FAILED" },
+      );
+    }
   }
 }
 

@@ -49,6 +49,19 @@ export interface AgentSessionScope {
   readonly role: string;
 }
 
+/**
+ * A bounded, observational view of one Pi tool execution. The callback is
+ * intentionally separate from AgentTaskResult so callers can project progress
+ * while a long-running prompt is still active.
+ */
+export interface AgentToolExecutionEvent {
+  readonly phase: "started" | "completed";
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly isError: boolean | null;
+}
+
 export interface CreatePublisherAgentSessionInput {
   readonly definition: AgentDefinition;
   readonly scope: AgentSessionScope;
@@ -70,6 +83,11 @@ export interface AgentTaskInput {
   readonly prompt: string;
   readonly timeoutMs?: number;
   readonly abortTimeoutMs?: number;
+  /**
+   * Observational only. Failures in this callback must never affect the agent
+   * run or browser authority.
+   */
+  readonly onToolExecution?: (event: AgentToolExecutionEvent) => void;
 }
 
 export interface AgentToolExecutionEvidence {
