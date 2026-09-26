@@ -205,7 +205,8 @@ describe("Publishing browser MCP capability", () => {
 
     expect(server.transport.command).toBe(process.execPath);
     expect(server.transport.cwd).toBe(resolve(uploadRoot));
-    expect(server.transport.args).toEqual(
+    const transportArgs = server.transport.args ?? [];
+    expect(transportArgs).toEqual(
       expect.arrayContaining([
         expect.stringContaining("@playwright/mcp/cli.js"),
         "--cdp-endpoint=ws://browser-runtime:9222/devtools/browser/test-browser",
@@ -215,11 +216,11 @@ describe("Publishing browser MCP capability", () => {
         "--no-webmcp",
       ]),
     );
-    expect(server.transport.args).not.toContain(
+    expect(transportArgs).not.toContain(
       "--allow-unrestricted-file-access",
     );
     expect(
-      server.transport.args.some((arg) => arg.startsWith("--allowed-origins=")),
+      transportArgs.some((arg) => arg.startsWith("--allowed-origins=")),
     ).toBe(false);
   });
 
