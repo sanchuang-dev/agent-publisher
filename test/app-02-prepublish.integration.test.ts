@@ -558,6 +558,10 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
       releaseRun();
       const response = await continuation;
       expect(response.status).toBe(200);
+      const completed = (await response.json()) as {
+        job: { liveView: unknown };
+      };
+      expect(completed.job.liveView).toBeNull();
       expect(execute).toHaveBeenCalledOnce();
 
       sse.disconnect();
@@ -867,6 +871,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
         projection: {
           status: "preparing_publish",
           currentStep: "acquire_browser",
+          liveView: null,
           failure: {
             step: "acquire_browser",
             code: "BROWSER_UNAVAILABLE",
