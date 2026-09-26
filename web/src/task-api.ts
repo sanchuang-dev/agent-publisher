@@ -287,6 +287,14 @@ function boundedFailureMessage(code: string | null): string {
     PUBLISHING_UPSTREAM_NOT_FOUND: "执行秘书的上游接口或资源不存在。",
     PUBLISHING_UPSTREAM_UNAVAILABLE: "执行秘书的上游依赖当前不可用。",
     PUBLISHING_UPSTREAM_REQUEST_REJECTED: "执行秘书的上游请求被拒绝。",
+    // Transitional aliases from the unmerged AGT-08 diagnostic iteration.
+    // Keep rendering durable snapshots intelligibly if a branch/pre-release
+    // build persisted one of these codes before the neutral naming landed.
+    PUBLISHER_AI_AUTH_FAILED: "执行秘书的上游请求鉴权被拒绝。",
+    PUBLISHER_AI_RATE_LIMITED: "执行秘书的上游请求暂时被限流。",
+    PUBLISHER_AI_NOT_FOUND: "执行秘书的上游接口或资源不存在。",
+    PUBLISHER_AI_UPSTREAM_UNAVAILABLE: "执行秘书的上游依赖当前不可用。",
+    PUBLISHER_AI_REQUEST_REJECTED: "执行秘书的上游请求被拒绝。",
   };
 
   return code
