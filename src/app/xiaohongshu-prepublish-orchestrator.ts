@@ -8,6 +8,7 @@ import type {
 import type {
   PublishingSecretaryExecutionResult,
   PublishingSecretaryPort,
+  PublishingSecretaryProgress,
 } from "../agent/publishing-secretary-contract.js";
 import {
   JobNotFoundError,
@@ -483,11 +484,30 @@ export class XiaohongshuPrepublishOrchestrator {
           }
 
           const material = this.#requireMaterial(jobId);
+          const executionAttempt = this.#nextStepAttempt(
+            jobId,
+            "publishing_secretary_execution",
+          );
+          this.#recordPublishingSecretaryProgress(
+            jobId,
+            { stage: "starting", status: "running" },
+            executionAttempt,
+          );
           const agentResult = await this.#publishingSecretary.execute({
             jobId,
             browserProvider: automationProvider,
             browserSession: session,
             materialPack: material.pack,
+            onProgress: (progress) => {
+              if (progress.stage === "starting" && progress.status === "running") {
+                return;
+              }
+              this.#recordPublishingSecretaryProgress(
+                jobId,
+                progress,
+                executionAttempt,
+              );
+            },
           });
 
           if (agentResult.kind === "needs_identity") {
@@ -513,7 +533,11 @@ export class XiaohongshuPrepublishOrchestrator {
             };
           }
 
-          this.#recordPublishingSecretaryResult(jobId, agentResult);
+          this.#recordPublishingSecretaryResult(
+            jobId,
+            agentResult,
+            executionAttempt,
+          );
 
           return {
             projection: this.#publish(jobId),
@@ -737,9 +761,47 @@ export class XiaohongshuPrepublishOrchestrator {
     }
   }
 
+  #recordPublishingSecretaryProgress(
+    jobId: string,
+    progress: PublishingSecretaryProgress,
+    attempt: number,
+  ): void {
+    const job = this.#requireJob(jobId);
+    if (job.status !== "preparing_publish") return;
+
+    const now = this.#now().toISOString();
+    const stepKey =
+      progress.stage === "starting"
+        ? "publishing_secretary_execution"
+        : "publishing_secretary_" + progress.stage;
+    this.#jobs.commitCheckpoint(jobId, {
+      status: "preparing_publish",
+      checkpoint: {
+        phase: "publishing_secretary_running",
+        publishingSecretaryProgressStage: progress.stage,
+        publishingSecretaryProgressStatus: progress.status,
+      },
+      step: {
+        id: this.#createId(),
+        stepKey,
+        status: progress.status,
+        attempt,
+        outputJson: JSON.stringify({
+          stage: progress.stage,
+          status: progress.status,
+        }),
+        ...(progress.status === "running"
+          ? { startedAt: now }
+          : { finishedAt: now }),
+      },
+    });
+    this.#publish(jobId);
+  }
+
   #recordPublishingSecretaryResult(
     jobId: string,
     result: PublishingSecretaryExecutionResult,
+    attempt: number,
   ): void {
     const job = this.#requireJob(jobId);
     if (job.status !== "preparing_publish") {
@@ -761,10 +823,7 @@ export class XiaohongshuPrepublishOrchestrator {
         id: this.#createId(),
         stepKey: "publishing_secretary_execution",
         status: failed ? "failed" : "succeeded",
-        attempt: this.#nextStepAttempt(
-          jobId,
-          "publishing_secretary_execution",
-        ),
+        attempt,
         outputJson: JSON.stringify({
           kind: result.kind,
           summary: result.summary,

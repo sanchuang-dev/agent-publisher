@@ -107,7 +107,16 @@ class ScriptedSession implements PublisherAgentSession {
 
   async run(input: AgentTaskInput): Promise<AgentTaskResult> {
     this.prompts.push(input.prompt);
-    return this.nextResult();
+    const result = this.nextResult();
+    for (const execution of result.toolExecutions) {
+      input.onToolExecution?.({
+        ...execution,
+        completed: false,
+        isError: null,
+      });
+      input.onToolExecution?.(execution);
+    }
+    return result;
   }
 
   async dispose(): Promise<void> {

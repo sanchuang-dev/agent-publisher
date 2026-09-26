@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { ImageTextMaterialPack } from "../materials/contracts.js";
 import type { AssetPathResolver } from "../platforms/xiaohongshu/image-text-prepare.js";
 import type { JobRepository } from "../contracts/job.js";
+import type { AgentToolExecutionEvidence } from "./definition.js";
 import type { AgentSessionBindingRepository } from "./job-session-binding.js";
 import { JobAgentSessionService } from "./job-session-service.js";
 import type { AgentHost } from "./host.js";
@@ -12,6 +13,7 @@ import type {
   PublishingSecretaryExecutionResult,
   PublishingSecretaryIdentitySurface,
   PublishingSecretaryPort,
+  PublishingSecretaryProgress,
   PublishingSecretaryResultKind,
 } from "./publishing-secretary-contract.js";
 import {
@@ -265,6 +267,68 @@ function buildTaskPrompt(
   ].join("\n");
 }
 
+function publishingProgress(
+  execution: AgentToolExecutionEvidence,
+): PublishingSecretaryProgress | null {
+  if (execution.toolName !== "mcp") return null;
+  const args = execution.args;
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return null;
+  }
+  const record = args as {
+    readonly server?: unknown;
+    readonly tool?: unknown;
+  };
+  if (
+    record.server !== PUBLISHING_BROWSER_MCP_SERVER ||
+    typeof record.tool !== "string"
+  ) {
+    return null;
+  }
+
+  const stage =
+    record.tool === "browser_snapshot"
+      ? "observing"
+      : record.tool === "browser_navigate"
+        ? "navigating"
+        : record.tool === "browser_find"
+          ? "finding"
+          : record.tool === "browser_click"
+            ? "acting"
+            : record.tool === "browser_type" ||
+                record.tool === "browser_fill_form"
+              ? "filling"
+              : record.tool === "browser_file_upload"
+                ? "uploading"
+                : record.tool === "browser_wait_for"
+                  ? "waiting"
+                  : null;
+  if (!stage) return null;
+
+  return {
+    stage,
+    status: !execution.completed
+      ? "running"
+      : execution.isError
+        ? "failed"
+        : "succeeded",
+  };
+}
+
+function emitPublishingProgress(
+  input: PublishingSecretaryExecutionInput,
+  progress: PublishingSecretaryProgress,
+): void {
+  try {
+    input.onProgress?.(progress);
+  } catch {
+    process.emitWarning(
+      "Publishing Secretary progress observer failed; browser execution continues.",
+      { code: "PUBLISHING_PROGRESS_OBSERVER_FAILED" },
+    );
+  }
+}
+
 export async function createXiaohongshuPublishingBrowserResourceLoader(
   input: PiResourceLoaderFactoryInput,
   grant: PublishingBrowserCapabilityGrant,
@@ -341,6 +405,10 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
         });
 
     try {
+      emitPublishingProgress(input, {
+        stage: "starting",
+        status: "running",
+      });
       const run = await session.run({
         prompt: buildTaskPrompt(
           input,
@@ -350,6 +418,14 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
         ...(this.#runTimeoutMs === undefined
           ? {}
           : { timeoutMs: this.#runTimeoutMs }),
+        onToolExecution: (execution) => {
+          const progress = publishingProgress(execution);
+          if (progress) emitPublishingProgress(input, progress);
+        },
+      });
+      emitPublishingProgress(input, {
+        stage: "starting",
+        status: "succeeded",
       });
       const parsed = parseResultPayload(run.finalText);
       const browserToolCalls = run.toolExecutions.filter((execution) => {

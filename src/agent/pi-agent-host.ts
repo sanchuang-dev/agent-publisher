@@ -362,25 +362,43 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       }
 
       if (event.type === "tool_execution_start") {
-        toolExecutions.set(event.toolCallId, {
+        const evidence: AgentToolExecutionEvidence = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
           completed: false,
           isError: null,
-        });
+        };
+        toolExecutions.set(event.toolCallId, evidence);
+        try {
+          input.onToolExecution?.(evidence);
+        } catch {
+          process.emitWarning(
+            "Agent tool observer failed; execution continues.",
+            { code: "AGENT_TOOL_OBSERVER_FAILED" },
+          );
+        }
         return;
       }
 
       if (event.type === "tool_execution_end") {
         const previous = toolExecutions.get(event.toolCallId);
-        toolExecutions.set(event.toolCallId, {
+        const evidence: AgentToolExecutionEvidence = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: previous?.args,
           completed: true,
           isError: event.isError,
-        });
+        };
+        toolExecutions.set(event.toolCallId, evidence);
+        try {
+          input.onToolExecution?.(evidence);
+        } catch {
+          process.emitWarning(
+            "Agent tool observer failed; execution continues.",
+            { code: "AGENT_TOOL_OBSERVER_FAILED" },
+          );
+        }
       }
     });
 

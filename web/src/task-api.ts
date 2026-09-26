@@ -1,7 +1,3 @@
-import {
-  getLiveViewDescriptor,
-  readLiveViewRuntimeConfig,
-} from "./live-view-adapter.js";
 import type {
   PublishMode,
   TaskAssignmentInput,
@@ -55,7 +51,7 @@ export interface ApiJobProjection {
   readonly liveView: {
     readonly mode: "runtime" | "unavailable";
     readonly url: string | null;
-    readonly controlOwner: "human";
+    readonly controlOwner: "agent" | "human";
   } | null;
   readonly approval: {
     readonly title: string;
@@ -116,6 +112,46 @@ const stepMeta: Readonly<
     worker: "publishing_secretary",
     label: "准备并校验表单",
     detail: "上传物料、填写表单并回读校验",
+  },
+  publishing_secretary_execution: {
+    worker: "publishing_secretary",
+    label: "启动执行秘书",
+    detail: "接管当前浏览器任务并开始观察页面",
+  },
+  publishing_secretary_observing: {
+    worker: "publishing_secretary",
+    label: "观察当前页面",
+    detail: "读取页面现状，判断下一步安全动作",
+  },
+  publishing_secretary_navigating: {
+    worker: "publishing_secretary",
+    label: "导航页面",
+    detail: "进入任务所需的小红书页面",
+  },
+  publishing_secretary_finding: {
+    worker: "publishing_secretary",
+    label: "寻找页面入口",
+    detail: "根据当前页面寻找下一步入口",
+  },
+  publishing_secretary_acting: {
+    worker: "publishing_secretary",
+    label: "操作页面",
+    detail: "执行一个受控页面动作并等待结果",
+  },
+  publishing_secretary_filling: {
+    worker: "publishing_secretary",
+    label: "填写内容",
+    detail: "填写当前发布表单内容",
+  },
+  publishing_secretary_uploading: {
+    worker: "publishing_secretary",
+    label: "上传素材",
+    detail: "把已准备的受控素材上传到当前页面",
+  },
+  publishing_secretary_waiting: {
+    worker: "publishing_secretary",
+    label: "等待页面更新",
+    detail: "等待页面完成加载或状态变化",
   },
 };
 
@@ -248,21 +284,16 @@ function mapJobProjection(
   const clarificationRequired =
     job.humanAction?.type === "clarification_required";
   const state = clarificationRequired ? "failed" : fixtureState(job.status);
-  const agentRuntime =
-    state === "preparing_publish"
-      ? getLiveViewDescriptor(
-          "preparing_publish",
-          readLiveViewRuntimeConfig(import.meta.env).liveViewUrl,
-        )
-      : undefined;
-  const takeoverRuntime =
-    state === "waiting_for_login"
-      ? getLiveViewDescriptor(
-          "waiting_for_login",
-          job.liveView?.mode === "runtime" ? job.liveView.url ?? undefined : undefined,
-        )
-      : undefined;
-  const liveView = takeoverRuntime ?? agentRuntime;
+  const liveView = job.liveView
+    ? {
+        mode:
+          job.liveView.mode === "runtime" && job.liveView.url
+            ? ("runtime" as const)
+            : ("blocked" as const),
+        url: job.liveView.url ?? undefined,
+        controlOwner: job.liveView.controlOwner,
+      }
+    : undefined;
 
   const material = job.material
     ? {

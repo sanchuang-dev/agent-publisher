@@ -27,11 +27,27 @@ export interface PublishingSecretaryExecutionResult {
   readonly browserToolCalls: number;
 }
 
+export type PublishingSecretaryProgressStage =
+  | "starting"
+  | "observing"
+  | "navigating"
+  | "finding"
+  | "acting"
+  | "filling"
+  | "uploading"
+  | "waiting";
+
+export interface PublishingSecretaryProgress {
+  readonly stage: PublishingSecretaryProgressStage;
+  readonly status: "running" | "succeeded" | "failed";
+}
+
 export interface PublishingSecretaryExecutionInput {
   readonly jobId: string;
   readonly browserProvider: BrowserAutomationAttachmentProvider;
   readonly browserSession: BrowserSession;
   readonly materialPack: ImageTextMaterialPack;
+  readonly onProgress?: (progress: PublishingSecretaryProgress) => void;
 }
 
 export interface PublishingSecretaryPort {
