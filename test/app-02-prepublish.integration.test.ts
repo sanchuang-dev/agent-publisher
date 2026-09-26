@@ -10,6 +10,7 @@ import type {
   BrowserProviderHealth,
   BrowserSession,
 } from "../src/browser/provider.js";
+import type { PublishingSecretaryExecutionInput } from "../src/agent/publishing-secretary-contract.js";
 import {
   createMvpPrepublishApplication,
   type MvpPrepublishApplication,
@@ -478,7 +479,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
     const released = new Promise<void>((resolve) => {
       releaseRun = resolve;
     });
-    const execute = vi.fn(async (input) => {
+    const execute = vi.fn(async (input: PublishingSecretaryExecutionInput) => {
       input.onProgress?.({ stage: "observing", status: "running" });
       input.onProgress?.({ stage: "navigating", status: "running" });
       input.onProgress?.({ stage: "finding", status: "running" });
