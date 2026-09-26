@@ -1,6 +1,6 @@
 ---
 name: xiaohongshu-publishing
-description: Platform guidance for a bounded Publishing Secretary preparing Xiaohongshu Creator content without owning identity, approval, or final publication.
+description: Platform guidance for a bounded Publishing Secretary preparing Xiaohongshu Creator content without performing human identity actions or owning approval/final publication.
 ---
 
 # Xiaohongshu Publishing
@@ -118,7 +118,7 @@ Use a bounded observe-act-observe loop:
 
 1. observe the current state again;
 2. compare what actually happened with the working hypothesis and note what the result taught you;
-3. distinguish a hard boundary (identity, unknown draft, approval/final publication, or another irreversible risk) from an ordinary page/navigation mismatch;
+3. distinguish a hard boundary (a prepared human-only identity action such as QR scan/CAPTCHA/MFA/OTP/device verification, unknown draft, approval/final publication, or another irreversible risk) from an ordinary login/page/navigation mismatch;
 4. for an ordinary mismatch, revise the working hypothesis and choose one materially different bounded safe action supported by the current observation;
 5. observe the result again and update the hypothesis before choosing another action.
 
