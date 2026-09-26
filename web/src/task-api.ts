@@ -55,7 +55,7 @@ export interface ApiJobProjection {
   readonly liveView: {
     readonly mode: "runtime" | "unavailable";
     readonly url: string | null;
-    readonly controlOwner: "human";
+    readonly controlOwner: "agent" | "human";
   } | null;
   readonly approval: {
     readonly title: string;
@@ -116,6 +116,46 @@ const stepMeta: Readonly<
     worker: "publishing_secretary",
     label: "准备并校验表单",
     detail: "上传物料、填写表单并回读校验",
+  },
+  publishing_progress_starting: {
+    worker: "publishing_secretary",
+    label: "启动执行秘书",
+    detail: "建立受控浏览器执行循环",
+  },
+  publishing_progress_observing: {
+    worker: "publishing_secretary",
+    label: "观察当前页面",
+    detail: "读取当前发布页面状态",
+  },
+  publishing_progress_navigating: {
+    worker: "publishing_secretary",
+    label: "导航发布页面",
+    detail: "在受控的小红书页面内寻找工作入口",
+  },
+  publishing_progress_finding: {
+    worker: "publishing_secretary",
+    label: "寻找页面控件",
+    detail: "根据当前页面证据定位下一步安全操作",
+  },
+  publishing_progress_acting: {
+    worker: "publishing_secretary",
+    label: "执行页面操作",
+    detail: "执行已授权的页面动作并重新观察结果",
+  },
+  publishing_progress_filling: {
+    worker: "publishing_secretary",
+    label: "填写发布内容",
+    detail: "填写文案或表单字段，不执行最终发布",
+  },
+  publishing_progress_uploading: {
+    worker: "publishing_secretary",
+    label: "上传发布物料",
+    detail: "上传受控素材并等待页面反馈",
+  },
+  publishing_progress_waiting: {
+    worker: "publishing_secretary",
+    label: "等待页面反馈",
+    detail: "等待平台完成当前页面处理",
   },
 };
 
@@ -248,13 +288,27 @@ function mapJobProjection(
   const clarificationRequired =
     job.humanAction?.type === "clarification_required";
   const state = clarificationRequired ? "failed" : fixtureState(job.status);
-  const agentRuntime =
+  const configuredAgentRuntime =
     state === "preparing_publish"
       ? getLiveViewDescriptor(
           "preparing_publish",
           readLiveViewRuntimeConfig(import.meta.env).liveViewUrl,
         )
       : undefined;
+  const agentRuntime =
+    state === "preparing_publish" && job.liveView
+      ? {
+          url:
+            job.liveView.mode === "runtime" && job.liveView.url
+              ? job.liveView.url
+              : getLiveViewDescriptor("preparing_publish").url,
+          controlOwner: job.liveView.controlOwner,
+          mode:
+            job.liveView.mode === "runtime" && job.liveView.url
+              ? ("runtime" as const)
+              : ("placeholder" as const),
+        }
+      : configuredAgentRuntime;
   const takeoverRuntime =
     state === "waiting_for_login"
       ? getLiveViewDescriptor(

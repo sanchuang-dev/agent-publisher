@@ -4,6 +4,7 @@ import type { ImageTextMaterialPack } from "../materials/contracts.js";
 import type { AssetPathResolver } from "../platforms/xiaohongshu/image-text-prepare.js";
 import type { JobRepository } from "../contracts/job.js";
 import type { AgentSessionBindingRepository } from "./job-session-binding.js";
+import type { AgentToolExecutionEvent } from "./definition.js";
 import { JobAgentSessionService } from "./job-session-service.js";
 import type { AgentHost } from "./host.js";
 import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
@@ -11,11 +12,14 @@ import type {
   PublishingSecretaryExecutionInput,
   PublishingSecretaryExecutionResult,
   PublishingSecretaryIdentitySurface,
+  PublishingSecretaryProgressEvent,
+  PublishingSecretaryProgressKey,
   PublishingSecretaryPort,
   PublishingSecretaryResultKind,
 } from "./publishing-secretary-contract.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
+  PUBLISHING_BROWSER_MCP_TOOLS,
   createPublishingBrowserGuardExtension,
   createPublishingBrowserMcpProfile,
   issuePublishingBrowserCapabilityGrant,
@@ -265,6 +269,66 @@ function buildTaskPrompt(
   ].join("\n");
 }
 
+function recordLike(value: unknown): Readonly<Record<string, unknown>> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function publishingBrowserTool(
+  event: AgentToolExecutionEvent,
+): string | null {
+  if (event.toolName !== "mcp") return null;
+
+  const args = recordLike(event.args);
+  if (args?.server !== PUBLISHING_BROWSER_MCP_SERVER) return null;
+
+  const tool = args.tool;
+  return typeof tool === "string" &&
+    (PUBLISHING_BROWSER_MCP_TOOLS as readonly string[]).includes(tool)
+    ? tool
+    : null;
+}
+
+function semanticProgressKey(
+  event: AgentToolExecutionEvent,
+): PublishingSecretaryProgressKey | null {
+  const tool = publishingBrowserTool(event);
+  if (!tool) return null;
+
+  const keyByTool: Readonly<Record<string, PublishingSecretaryProgressKey>> = {
+    browser_snapshot: "observing",
+    browser_find: "finding",
+    browser_navigate: "navigating",
+    browser_click: "acting",
+    browser_type: "filling",
+    browser_fill_form: "filling",
+    browser_file_upload: "uploading",
+    browser_wait_for: "waiting",
+  };
+
+  return keyByTool[tool] ?? "acting";
+}
+
+function emitProgress(
+  input: PublishingSecretaryExecutionInput,
+  event: PublishingSecretaryProgressEvent,
+): void {
+  if (!input.onProgress) return;
+
+  try {
+    input.onProgress(event);
+  } catch {
+    // Progress delivery is observational. The browser run remains authoritative
+    // even if persistence or SSE delivery is temporarily unavailable.
+    process.emitWarning(
+      "Publishing Secretary progress observer failed during an active run.",
+      { code: "PUBLISHING_SECRETARY_PROGRESS_OBSERVER_FAILED" },
+    );
+  }
+}
+
 export async function createXiaohongshuPublishingBrowserResourceLoader(
   input: PiResourceLoaderFactoryInput,
   grant: PublishingBrowserCapabilityGrant,
@@ -341,16 +405,39 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
         });
 
     try {
-      const run = await session.run({
-        prompt: buildTaskPrompt(
-          input,
-          uploadFiles,
-          this.#allowedOrigins,
-        ),
-        ...(this.#runTimeoutMs === undefined
-          ? {}
-          : { timeoutMs: this.#runTimeoutMs }),
-      });
+      emitProgress(input, { key: "starting", status: "running" });
+      let run: Awaited<ReturnType<typeof session.run>>;
+      try {
+        run = await session.run({
+          prompt: buildTaskPrompt(
+            input,
+            uploadFiles,
+            this.#allowedOrigins,
+          ),
+          ...(this.#runTimeoutMs === undefined
+            ? {}
+            : { timeoutMs: this.#runTimeoutMs }),
+          onToolExecution: (event) => {
+            const key = semanticProgressKey(event);
+            if (!key) return;
+
+            emitProgress(input, {
+              key,
+              status:
+                event.phase === "started"
+                  ? "running"
+                  : event.isError
+                    ? "failed"
+                    : "succeeded",
+            });
+          },
+        });
+      } catch (error) {
+        emitProgress(input, { key: "starting", status: "failed" });
+        throw error;
+      }
+
+      emitProgress(input, { key: "starting", status: "succeeded" });
       const parsed = parseResultPayload(run.finalText);
       const browserToolCalls = run.toolExecutions.filter((execution) => {
         if (execution.toolName !== "mcp") return false;

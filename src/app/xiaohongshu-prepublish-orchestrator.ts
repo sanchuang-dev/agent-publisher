@@ -7,6 +7,7 @@ import type {
 } from "../browser/provider.js";
 import type {
   PublishingSecretaryExecutionResult,
+  PublishingSecretaryProgressEvent,
   PublishingSecretaryPort,
 } from "../agent/publishing-secretary-contract.js";
 import {
@@ -46,6 +47,7 @@ type LoginServicePort = Pick<
 type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
+const PUBLISHING_PROGRESS_STEP_PREFIX = "publishing_progress_";
 
 const boundedMaterialFailureStages = [
   "material_plan",
@@ -488,6 +490,9 @@ export class XiaohongshuPrepublishOrchestrator {
             browserProvider: automationProvider,
             browserSession: session,
             materialPack: material.pack,
+            onProgress: (progress) => {
+              this.#recordPublishingSecretaryProgress(jobId, progress);
+            },
           });
 
           if (agentResult.kind === "needs_identity") {
@@ -781,6 +786,64 @@ export class XiaohongshuPrepublishOrchestrator {
         finishedAt: now,
       },
     });
+  }
+
+  #recordPublishingSecretaryProgress(
+    jobId: string,
+    progress: PublishingSecretaryProgressEvent,
+  ): void {
+    const job = this.#jobs.getById(jobId);
+    if (!job || job.status !== "preparing_publish") {
+      return;
+    }
+
+    // A running tool and its terminal event share the same durable attempt.
+    // Pi currently executes one browser tool at a time, so the latest running
+    // attempt for each semantic key is the bounded correlation point.
+    const stepKey = PUBLISHING_PROGRESS_STEP_PREFIX + progress.key;
+    const steps = this.#jobs.getStepsForJob(jobId);
+    const latest = [...steps]
+      .reverse()
+      .find((step) => step.stepKey === stepKey);
+    const attempt =
+      progress.status === "running" || !latest || latest.status !== "running"
+        ? this.#nextStepAttempt(jobId, stepKey)
+        : latest.attempt;
+    const now = this.#now().toISOString();
+
+    try {
+      this.#jobs.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: {
+          ...(job.checkpoint ?? {}),
+          phase: "publishing_secretary_progress",
+          publishingSecretaryProgress: progress.key,
+        },
+        step: {
+          id: this.#createId(),
+          stepKey,
+          status: progress.status,
+          attempt,
+          outputJson: JSON.stringify({ progressKey: progress.key }),
+          ...(progress.status === "failed"
+            ? {
+                errorCode: "PUBLISHING_SECRETARY_TOOL_FAILED",
+                errorMessage: "The Publishing Secretary browser step stopped safely.",
+              }
+            : {}),
+          startedAt: progress.status === "running" ? now : null,
+          finishedAt: progress.status === "running" ? null : now,
+        },
+      });
+      this.#publish(jobId);
+    } catch {
+      // Progress is observational. A stale job or persistence hiccup must not
+      // revoke browser authority or change the agent's execution semantics.
+      process.emitWarning(
+        "Publishing Secretary progress could not be persisted.",
+        { code: "APP_PUBLISHING_PROGRESS_PERSIST_FAILED" },
+      );
+    }
   }
 
   #getMaterial(jobId: string): PersistedPrepublishMaterial | null {

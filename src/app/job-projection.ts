@@ -63,7 +63,7 @@ export interface JobProjection {
   readonly liveView: {
     readonly mode: "runtime" | "unavailable";
     readonly url: string | null;
-    readonly controlOwner: "human";
+    readonly controlOwner: "agent" | "human";
   } | null;
   readonly approval: JobApprovalProjection | null;
   readonly failure: {
@@ -307,6 +307,8 @@ export class JobProjectionService {
       job.status === "waiting_for_login" &&
       action?.type === "login_required" &&
       action.status === "open";
+    const agentPreparingPublish = job.status === "preparing_publish";
+    const liveViewOwner = waitingForLogin ? "human" : "agent";
 
     return {
       id: job.id,
@@ -327,11 +329,11 @@ export class JobProjectionService {
         errorMessage: step.errorMessage,
       })),
       humanAction: projectHumanAction(action),
-      liveView: waitingForLogin
+      liveView: waitingForLogin || agentPreparingPublish
         ? {
             mode: this.#browserLiveViewUrl ? "runtime" : "unavailable",
             url: this.#browserLiveViewUrl ?? null,
-            controlOwner: "human",
+            controlOwner: liveViewOwner,
           }
         : null,
       approval: projectApproval(action),

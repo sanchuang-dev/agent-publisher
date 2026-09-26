@@ -403,6 +403,74 @@ describe("PiAgentHost", () => {
     });
   });
 
+  test("streams observational tool execution callbacks without affecting the run", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-progress" });
+    const modelRuntime = await createFauxRuntime(faux);
+    const sideEffectProbe = defineTool({
+      name: "side_effect_probe",
+      label: "Side Effect Probe",
+      description: "Records deterministic progress evidence.",
+      parameters: Type.Object({ value: Type.String() }),
+      async execute(_toolCallId, params) {
+        return {
+          content: [{ type: "text", text: `completed:${params.value}` }],
+          details: { value: params.value },
+        };
+      },
+    });
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      defaultRunTimeoutMs: 2_000,
+      tools: ["side_effect_probe"],
+      sessionOptions: {
+        customTools: [sideEffectProbe],
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-progress", role: "publishing" },
+    });
+    const events: Array<{ phase: string; toolName: string; isError: boolean | null }> = [];
+
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "side_effect_probe",
+          { value: "visible" },
+          { id: "progress-call" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(fauxText("DONE")),
+    ]);
+
+    await expect(
+      session.run({
+        prompt: "Run one observable tool.",
+        onToolExecution: (event) => {
+          events.push({
+            phase: event.phase,
+            toolName: event.toolName,
+            isError: event.isError,
+          });
+          if (event.phase === "started") {
+            throw new Error("observer failures are isolated");
+          }
+        },
+      }),
+    ).resolves.toMatchObject({ finalText: "DONE" });
+
+    expect(events).toEqual([
+      { phase: "started", toolName: "side_effect_probe", isError: null },
+      { phase: "completed", toolName: "side_effect_probe", isError: false },
+    ]);
+    await session.dispose();
+  });
+
   test("does not treat abort-fulfilled prompt settlement as successful completion without a final assistant message", async () => {
     const faux = fauxProvider({ provider: "publisher-agent-host-timeout-race" });
     const modelRuntime = await createFauxRuntime(faux);
