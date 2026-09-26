@@ -165,12 +165,17 @@ class ScriptedHost implements AgentHost {
 }
 
 function agentResult(
-  payload: Record<string, unknown>,
+  signal: string | null,
   toolNames: readonly string[] = ["mcp", "mcp", "mcp"],
+  prose = "Publishing Secretary completed the bounded browser turn.",
 ): AgentTaskResult {
   return {
-    finalText:
-      "PUBLISHING_SECRETARY_RESULT=" + JSON.stringify(payload),
+    finalText: [
+      prose,
+      ...(signal === null
+        ? []
+        : ["PUBLISHING_SECRETARY_SIGNAL=" + signal]),
+    ].join("\n"),
     eventTypes: [],
     toolExecutions: toolNames.map((toolName, index) => ({
       toolCallId: "tool-" + index,
@@ -260,20 +265,8 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     }
 
     const host = new ScriptedHost();
-    host.queue(
-      agentResult({
-        kind: "prepared_candidate",
-        summary: "composer appears prepared",
-        semanticMilestone: "image_text_composer_ready",
-      }),
-    );
-    host.queue(
-      agentResult({
-        kind: "progress",
-        summary: "re-observed the existing candidate",
-        semanticMilestone: "candidate_reobserved",
-      }),
-    );
+    host.queue(agentResult("prepared_candidate"));
+    host.queue(agentResult(null));
 
     const service = new PublishingSecretaryService({
       jobs,
@@ -291,8 +284,9 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     });
     expect(first).toEqual({
       kind: "prepared_candidate",
-      summary: "composer appears prepared",
-      semanticMilestone: "image_text_composer_ready",
+      summary:
+        "Publishing Secretary believes the current page is ready for Publisher verification.",
+      semanticMilestone: "prepared_candidate",
       identitySurface: null,
       browserToolCalls: 3,
     });
@@ -315,7 +309,16 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.created[0]!.prompts[0]).toContain(
       "A login page or login button is not itself a human-action boundary",
     );
-    expect(host.created[0]!.prompts[0]).toContain("identitySurface=qr_ready");
+    expect(host.created[0]!.prompts[0]).toContain(
+      "PUBLISHING_SECRETARY_SIGNAL=qr_ready",
+    );
+    expect(host.created[0]!.prompts[0]).toContain(
+      "no special output format is required",
+    );
+    expect(host.created[0]!.prompts[0]).toContain("Do not return JSON");
+    expect(host.created[0]!.prompts[0]).not.toContain(
+      "PUBLISHING_SECRETARY_RESULT=",
+    );
     expect(host.created[0]!.definition.mcp?.servers[0]?.includeTools).toEqual(
       PUBLISHING_BROWSER_MCP_TOOLS,
     );
@@ -332,6 +335,106 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     expect(host.resumed[0]!.ref).toBe(host.created[0]!.ref);
 
     db.close();
+  });
+
+  test("treats natural completion after successful browser work as progress without requiring JSON", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-natural-progress-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-natural-progress",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "自然收口" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(
+      agentResult(
+        null,
+        ["mcp"],
+        "I observed the page and made one bounded safe step.",
+      ),
+    );
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-natural-progress",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+        }),
+      ).resolves.toMatchObject({
+        kind: "progress",
+        summary:
+          "Publishing Secretary completed bounded browser work and yielded for the next run.",
+        semanticMilestone: "browser_progress_observed",
+        browserToolCalls: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test("does not invent progress when a run ends naturally without successful browser evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-no-browser-progress-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-no-browser-progress",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "不能假装进展" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(agentResult(null, [], "I did not use the browser."));
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-no-browser-progress",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+        }),
+      ).resolves.toMatchObject({
+        kind: "failed",
+        semanticMilestone: "no_browser_progress",
+        browserToolCalls: 0,
+      });
+    } finally {
+      db.close();
+    }
   });
 
   test("rejects needs_identity before a bounded human-action surface is named", async () => {
@@ -353,13 +456,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     }
 
     const host = new ScriptedHost();
-    host.queue(
-      agentResult({
-        kind: "needs_identity",
-        summary: "login page exists",
-        semanticMilestone: "login_page_seen",
-      }),
-    );
+    host.queue(agentResult("needs_identity"));
     const service = new PublishingSecretaryService({
       jobs,
       bindings,
@@ -377,7 +474,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
           materialPack: pack,
         }),
       ).rejects.toThrow(
-        "needs_identity result must name a safe identitySurface",
+        "unsupported semantic signal",
       );
     } finally {
       db.close();
@@ -407,23 +504,12 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
     const host = new ScriptedHost();
     host.queue(
       agentResult(
-        {
-          kind: "needs_identity",
-          summary: "do not persist QR payload: secret-example",
-          semanticMilestone: "untrusted identity detail",
-          identitySurface: "qr_ready",
-          qrPayload: "secret-example",
-        },
+        "qr_ready",
         ["mcp"],
+        "do not persist QR payload: secret-example",
       ),
     );
-    host.queue(
-      agentResult({
-        kind: "progress",
-        summary: "job b has its own browser context",
-        semanticMilestone: "creator_observed",
-      }),
-    );
+    host.queue(agentResult(null));
 
     const service = new PublishingSecretaryService({
       jobs,
