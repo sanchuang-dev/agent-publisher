@@ -766,36 +766,45 @@ export class XiaohongshuPrepublishOrchestrator {
     progress: PublishingSecretaryProgress,
     attempt: number,
   ): void {
-    const job = this.#requireJob(jobId);
-    if (job.status !== "preparing_publish") return;
+    try {
+      const job = this.#requireJob(jobId);
+      if (job.status !== "preparing_publish") return;
 
-    const now = this.#now().toISOString();
-    const stepKey =
-      progress.stage === "starting"
-        ? "publishing_secretary_execution"
-        : "publishing_secretary_" + progress.stage;
-    this.#jobs.commitCheckpoint(jobId, {
-      status: "preparing_publish",
-      checkpoint: {
-        phase: "publishing_secretary_running",
-        publishingSecretaryProgressStage: progress.stage,
-        publishingSecretaryProgressStatus: progress.status,
-      },
-      step: {
-        id: this.#createId(),
-        stepKey,
-        status: progress.status,
-        attempt,
-        outputJson: JSON.stringify({
-          stage: progress.stage,
+      const now = this.#now().toISOString();
+      const stepKey =
+        progress.stage === "starting"
+          ? "publishing_secretary_execution"
+          : "publishing_secretary_" + progress.stage;
+      this.#jobs.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: {
+          phase: "publishing_secretary_running",
+          publishingSecretaryProgressStage: progress.stage,
+          publishingSecretaryProgressStatus: progress.status,
+        },
+        step: {
+          id: this.#createId(),
+          stepKey,
           status: progress.status,
-        }),
-        ...(progress.status === "running"
-          ? { startedAt: now }
-          : { finishedAt: now }),
-      },
-    });
-    this.#publish(jobId);
+          attempt,
+          outputJson: JSON.stringify({
+            stage: progress.stage,
+            status: progress.status,
+          }),
+          ...(progress.status === "running"
+            ? { startedAt: now }
+            : { finishedAt: now }),
+        },
+      });
+      this.#publish(jobId);
+    } catch {
+      // Progress is observational. Persistence/projection failure must not
+      // interrupt browser authority or change irreversible-action semantics.
+      process.emitWarning(
+        "Publishing Secretary progress could not be projected; browser execution continues.",
+        { code: "APP_PUBLISHING_PROGRESS_OBSERVER_FAILED" },
+      );
+    }
   }
 
   #recordPublishingSecretaryResult(
