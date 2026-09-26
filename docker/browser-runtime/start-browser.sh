@@ -115,6 +115,7 @@ gosu browser chromium \
   --user-data-dir="${profile_dir}" \
   --no-first-run \
   --no-default-browser-check \
+  --disable-session-crashed-bubble \
   --disable-background-networking \
   about:blank &
 chromium_pid=$!

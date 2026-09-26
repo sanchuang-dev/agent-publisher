@@ -26,6 +26,8 @@ import {
 } from "../src/agent/content-secretary.js";
 import { JobAgentSessionService } from "../src/agent/job-session-service.js";
 import {
+  DEFAULT_CONTENT_SECRETARY_RUN_TIMEOUT_MS,
+  DEFAULT_PUBLISHING_SECRETARY_RUN_TIMEOUT_MS,
   PUBLISHER_AI_API_KEY_ENV,
   PUBLISHER_AI_BASE_URL_ENV,
   PUBLISHER_AI_MODEL_ENV,
@@ -81,6 +83,11 @@ async function createFauxRuntime(providerName: string) {
 }
 
 describe("Publisher runtime AI configuration", () => {
+  test("keeps Content Secretary bounded at two minutes while Publishing Secretary gets a ten-minute browser window", () => {
+    expect(DEFAULT_CONTENT_SECRETARY_RUN_TIMEOUT_MS).toBe(120_000);
+    expect(DEFAULT_PUBLISHING_SECRETARY_RUN_TIMEOUT_MS).toBe(600_000);
+  });
+
   test("requires all three explicit Publisher AI environment values", () => {
     const base = {
       [PUBLISHER_AI_BASE_URL_ENV]: "https://gateway.example.test/v1",
