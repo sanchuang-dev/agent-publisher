@@ -21,6 +21,10 @@ type HumanTakeoverState = Extract<
   { readonly kind: "login_required" | "challenge" }
 >;
 
+export type XiaohongshuPreparedIdentitySurface =
+  | "qr_ready"
+  | "verification_required";
+
 function browserProfileFingerprint(session: BrowserSession): string {
   return createHash("sha256").update(session.profileRef).digest("hex");
 }
@@ -94,6 +98,12 @@ export interface EnsureXiaohongshuLoginInput {
   readonly session: BrowserSession;
 }
 
+export interface EnterPreparedXiaohongshuHumanTakeoverInput {
+  readonly jobId: string;
+  readonly session: BrowserSession;
+  readonly identitySurface: XiaohongshuPreparedIdentitySurface;
+}
+
 export class XiaohongshuLoginService {
   readonly #jobs: JobRepository;
   readonly #actionRequests: ActionRequestRepository;
@@ -117,6 +127,47 @@ export class XiaohongshuLoginService {
       ((page) => inspectXiaohongshuPublishEntry(page));
     this.#createId = dependencies.createId ?? randomUUID;
     this.#now = dependencies.now ?? (() => new Date());
+  }
+
+  enterPreparedHumanTakeover(
+    input: EnterPreparedXiaohongshuHumanTakeoverInput,
+  ): XiaohongshuEnsureLoginResult {
+    const job = this.#jobs.getById(input.jobId);
+    if (!job) {
+      throw new JobNotFoundError(input.jobId);
+    }
+    if (job.platform !== "xiaohongshu") {
+      throw new XiaohongshuLoginFlowInvariantError(
+        input.jobId,
+        `platform is ${job.platform}, not xiaohongshu`,
+      );
+    }
+    if (job.status !== "preparing_publish") {
+      throw new XiaohongshuLoginFlowInvariantError(
+        input.jobId,
+        `job is ${job.status}, expected preparing_publish`,
+      );
+    }
+
+    const openAction = this.#actionRequests.getCurrentOpenForJob(input.jobId);
+    if (openAction) {
+      throw new XiaohongshuLoginFlowInvariantError(
+        input.jobId,
+        `browser mutation is blocked while human action ${openAction.type} is open`,
+      );
+    }
+
+    const state: HumanTakeoverState =
+      input.identitySurface === "qr_ready"
+        ? { kind: "login_required" }
+        : { kind: "challenge" };
+
+    return this.#enterHumanTakeover(
+      input.jobId,
+      input.session,
+      state,
+      input.identitySurface,
+    );
   }
 
   async ensureLogin(
@@ -271,6 +322,7 @@ export class XiaohongshuLoginService {
     jobId: string,
     session: BrowserSession,
     state: HumanTakeoverState,
+    identitySurface?: XiaohongshuPreparedIdentitySurface,
   ): XiaohongshuEnsureLoginResult {
     const attempt = this.#nextEnsureLoginAttempt(jobId);
     const now = this.#now().toISOString();
@@ -281,6 +333,9 @@ export class XiaohongshuLoginService {
         platform: "xiaohongshu",
         phase: "ensure_login",
         entryState: state.kind,
+        ...(identitySurface === undefined
+          ? {}
+          : { identitySurface }),
         browserProfileFingerprint: browserProfileFingerprint(session),
       },
       step: {
@@ -294,9 +349,17 @@ export class XiaohongshuLoginService {
         id: this.#createId(),
         payload: {
           platform: "xiaohongshu",
-          reason: state.kind,
+          reason: identitySurface ?? state.kind,
+          ...(identitySurface === undefined
+            ? {}
+            : { identitySurface }),
           humanControl: "live_browser",
-          instruction: "Complete login or verification in the live browser.",
+          instruction:
+            identitySurface === "qr_ready"
+              ? "Scan the QR code in the live browser to continue."
+              : identitySurface === "verification_required"
+                ? "Complete the identity verification shown in the live browser."
+                : "Complete login or verification in the live browser.",
         },
       },
     });
