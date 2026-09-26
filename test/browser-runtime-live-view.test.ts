@@ -107,6 +107,7 @@ test("browser startup script uses the stable internal Live View transport contra
   expect(script).toMatch(/-rfbport "\$\{vnc_port\}"/);
   expect(script).toMatch(/--remote-debugging-address=127\.0\.0\.1/);
   expect(script).toMatch(/--remote-debugging-port=9223/);
+  expect(script).toMatch(/--disable-session-crashed-bubble/);
   expect(script).toMatch(/\bgosu browser socat[\s\S]*TCP-LISTEN:9222[\s\S]*TCP:127\.0\.0\.1:9223/);
   expect(script).toMatch(/\bgosu browser websockify\b/);
   expect(script).toMatch(/--web=\/usr\/share\/novnc\//);

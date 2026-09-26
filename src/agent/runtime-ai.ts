@@ -28,6 +28,8 @@ export const PUBLISHER_OPENAI_COMPATIBLE_PROVIDER_ID =
 
 const DEFAULT_CONTEXT_WINDOW = 128_000;
 const DEFAULT_MAX_TOKENS = 4_096;
+export const DEFAULT_CONTENT_SECRETARY_RUN_TIMEOUT_MS = 120_000;
+export const DEFAULT_PUBLISHING_SECRETARY_RUN_TIMEOUT_MS = 600_000;
 
 export interface PublisherAiConfig {
   readonly baseUrl: string;
@@ -238,7 +240,8 @@ export function createPublisherContentSecretaryHost(
     model: runtime.model,
     modelRuntime: runtime.modelRuntime,
     sessionDirectory: options.sessionDirectory,
-    defaultRunTimeoutMs: options.defaultRunTimeoutMs ?? 120_000,
+    defaultRunTimeoutMs:
+      options.defaultRunTimeoutMs ?? DEFAULT_CONTENT_SECRETARY_RUN_TIMEOUT_MS,
     defaultAbortTimeoutMs: options.defaultAbortTimeoutMs ?? 5_000,
     defaultDisposeTimeoutMs: options.defaultDisposeTimeoutMs ?? 5_000,
     tools: CONTENT_SECRETARY_ALLOWED_TOOLS,
@@ -272,7 +275,9 @@ export function createPublisherPublishingSecretaryHost(
     model: runtime.model,
     modelRuntime: runtime.modelRuntime,
     sessionDirectory: options.sessionDirectory,
-    defaultRunTimeoutMs: options.defaultRunTimeoutMs ?? 120_000,
+    defaultRunTimeoutMs:
+      options.defaultRunTimeoutMs ??
+      DEFAULT_PUBLISHING_SECRETARY_RUN_TIMEOUT_MS,
     defaultAbortTimeoutMs: options.defaultAbortTimeoutMs ?? 5_000,
     defaultDisposeTimeoutMs: options.defaultDisposeTimeoutMs ?? 5_000,
     tools: XIAOHONGSHU_PUBLISHING_LOCAL_TOOLS,
