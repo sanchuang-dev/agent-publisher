@@ -47,7 +47,9 @@ export interface PublishingSecretaryExecutionInput {
   readonly browserProvider: BrowserAutomationAttachmentProvider;
   readonly browserSession: BrowserSession;
   readonly materialPack: ImageTextMaterialPack;
-  readonly onProgress?: (progress: PublishingSecretaryProgress) => void;
+  readonly onProgress?: (
+    progress: PublishingSecretaryProgress,
+  ) => void | Promise<void>;
 }
 
 export interface PublishingSecretaryPort {
