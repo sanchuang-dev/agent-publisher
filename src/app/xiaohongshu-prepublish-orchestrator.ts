@@ -178,27 +178,27 @@ function boundedPublishingRuntimeDiagnostic(
     const aiRequestCode =
       error.code === "AGENT_SESSION_RUN_FAILED" && upstreamStatus !== null
         ? upstreamStatus === 401 || upstreamStatus === 403
-          ? "PUBLISHER_AI_AUTH_FAILED"
+          ? "PUBLISHING_UPSTREAM_AUTH_FAILED"
           : upstreamStatus === 429
-            ? "PUBLISHER_AI_RATE_LIMITED"
+            ? "PUBLISHING_UPSTREAM_RATE_LIMITED"
             : upstreamStatus === 404
-              ? "PUBLISHER_AI_NOT_FOUND"
+              ? "PUBLISHING_UPSTREAM_NOT_FOUND"
               : upstreamStatus >= 500
-                ? "PUBLISHER_AI_UPSTREAM_UNAVAILABLE"
-                : "PUBLISHER_AI_REQUEST_REJECTED"
+                ? "PUBLISHING_UPSTREAM_UNAVAILABLE"
+                : "PUBLISHING_UPSTREAM_REQUEST_REJECTED"
         : null;
 
     const aiMessages: Readonly<Record<string, string>> = {
-      PUBLISHER_AI_AUTH_FAILED:
-        "The configured AI runtime rejected Publisher authentication.",
-      PUBLISHER_AI_RATE_LIMITED:
-        "The configured AI runtime rate-limited the Publishing Secretary request.",
-      PUBLISHER_AI_NOT_FOUND:
-        "The configured AI runtime could not find the requested model or endpoint.",
-      PUBLISHER_AI_UPSTREAM_UNAVAILABLE:
-        "The configured AI runtime is currently unavailable.",
-      PUBLISHER_AI_REQUEST_REJECTED:
-        "The configured AI runtime rejected the Publishing Secretary model/tool request.",
+      PUBLISHING_UPSTREAM_AUTH_FAILED:
+        "An upstream Publishing Secretary request rejected authentication.",
+      PUBLISHING_UPSTREAM_RATE_LIMITED:
+        "An upstream Publishing Secretary request was rate-limited.",
+      PUBLISHING_UPSTREAM_NOT_FOUND:
+        "An upstream Publishing Secretary endpoint or resource was not found.",
+      PUBLISHING_UPSTREAM_UNAVAILABLE:
+        "An upstream Publishing Secretary dependency is currently unavailable.",
+      PUBLISHING_UPSTREAM_REQUEST_REJECTED:
+        "An upstream Publishing Secretary request was rejected.",
     };
 
     const diagnosticCode = aiRequestCode ?? error.code;
@@ -387,16 +387,16 @@ function safeErrorMessage(error: unknown): string {
       "The Publishing Secretary session could not be disposed cleanly.",
     PUBLISHING_SECRETARY_RUNTIME_FAILED:
       "The Publishing Secretary runtime stopped before returning a structured result.",
-    PUBLISHER_AI_AUTH_FAILED:
-      "The configured AI runtime rejected Publisher authentication.",
-    PUBLISHER_AI_RATE_LIMITED:
-      "The configured AI runtime rate-limited the Publishing Secretary request.",
-    PUBLISHER_AI_NOT_FOUND:
-      "The configured AI runtime could not find the requested model or endpoint.",
-    PUBLISHER_AI_UPSTREAM_UNAVAILABLE:
-      "The configured AI runtime is currently unavailable.",
-    PUBLISHER_AI_REQUEST_REJECTED:
-      "The configured AI runtime rejected the Publishing Secretary model/tool request.",
+    PUBLISHING_UPSTREAM_AUTH_FAILED:
+      "An upstream Publishing Secretary request rejected authentication.",
+    PUBLISHING_UPSTREAM_RATE_LIMITED:
+      "An upstream Publishing Secretary request was rate-limited.",
+    PUBLISHING_UPSTREAM_NOT_FOUND:
+      "An upstream Publishing Secretary endpoint or resource was not found.",
+    PUBLISHING_UPSTREAM_UNAVAILABLE:
+      "An upstream Publishing Secretary dependency is currently unavailable.",
+    PUBLISHING_UPSTREAM_REQUEST_REJECTED:
+      "An upstream Publishing Secretary request was rejected.",
   };
 
   return (

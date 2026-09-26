@@ -282,11 +282,11 @@ function boundedFailureMessage(code: string | null): string {
     AGENT_SESSION_SHUTDOWN_FAILED: "执行秘书会话关闭失败。",
     AGENT_SESSION_DISPOSE_FAILED: "执行秘书会话清理失败。",
     PUBLISHING_SECRETARY_RUNTIME_FAILED: "执行秘书运行时在返回结果前停止。",
-    PUBLISHER_AI_AUTH_FAILED: "AI 服务拒绝了当前鉴权信息。",
-    PUBLISHER_AI_RATE_LIMITED: "AI 服务暂时限流了执行秘书请求。",
-    PUBLISHER_AI_NOT_FOUND: "AI 服务找不到当前模型或接口。",
-    PUBLISHER_AI_UPSTREAM_UNAVAILABLE: "AI 服务当前不可用。",
-    PUBLISHER_AI_REQUEST_REJECTED: "AI 服务拒绝了执行秘书的模型 / 工具请求。",
+    PUBLISHING_UPSTREAM_AUTH_FAILED: "执行秘书的上游请求鉴权被拒绝。",
+    PUBLISHING_UPSTREAM_RATE_LIMITED: "执行秘书的上游请求暂时被限流。",
+    PUBLISHING_UPSTREAM_NOT_FOUND: "执行秘书的上游接口或资源不存在。",
+    PUBLISHING_UPSTREAM_UNAVAILABLE: "执行秘书的上游依赖当前不可用。",
+    PUBLISHING_UPSTREAM_REQUEST_REJECTED: "执行秘书的上游请求被拒绝。",
   };
 
   return code
