@@ -1,3 +1,4 @@
+import { getLiveViewDescriptor } from "./live-view-adapter.js";
 import type {
   PublishMode,
   TaskAssignmentInput,
@@ -284,16 +285,21 @@ function mapJobProjection(
   const clarificationRequired =
     job.humanAction?.type === "clarification_required";
   const state = clarificationRequired ? "failed" : fixtureState(job.status);
-  const liveView = job.liveView
-    ? {
-        mode:
-          job.liveView.mode === "runtime" && job.liveView.url
-            ? ("runtime" as const)
-            : ("blocked" as const),
-        url: job.liveView.url ?? undefined,
-        controlOwner: job.liveView.controlOwner,
-      }
-    : undefined;
+  const liveViewState =
+    state === "preparing_publish"
+      ? "preparing_publish"
+      : state === "waiting_for_login"
+        ? "waiting_for_login"
+        : undefined;
+  const liveView =
+    liveViewState && job.liveView
+      ? getLiveViewDescriptor(
+          liveViewState,
+          job.liveView.mode === "runtime"
+            ? job.liveView.url ?? undefined
+            : undefined,
+        )
+      : undefined;
 
   const material = job.material
     ? {
