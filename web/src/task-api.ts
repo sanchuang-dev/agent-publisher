@@ -117,6 +117,11 @@ const stepMeta: Readonly<
     label: "准备并校验表单",
     detail: "上传物料、填写表单并回读校验",
   },
+  publishing_secretary_runtime: {
+    worker: "publishing_secretary",
+    label: "执行秘书运行失败",
+    detail: "执行秘书未能完成当前受控运行",
+  },
   publishing_progress_starting: {
     worker: "publishing_secretary",
     label: "启动执行秘书",
@@ -265,6 +270,18 @@ function boundedFailureMessage(code: string | null): string {
     PLATFORM_UPLOAD_FAILED: "平台报告素材上传失败。",
     PLATFORM_UPLOAD_TIMEOUT: "素材上传未在安全等待时间内完成。",
     ASSET_RESOLUTION_FAILED: "一个或多个受控素材当前无法读取。",
+    AGENT_SESSION_INITIALIZATION_FAILED: "执行秘书会话初始化失败。",
+    AGENT_SESSION_RESUME_FAILED: "执行秘书会话恢复失败。",
+    AGENT_SESSION_NOT_FOUND: "执行秘书的持久会话不存在或不可读取。",
+    AGENT_SESSION_INCOMPATIBLE: "执行秘书的持久会话与当前运行时不兼容。",
+    AGENT_SESSION_RUN_FAILED: "执行秘书的模型 / 工具运行失败。",
+    AGENT_SESSION_TIMEOUT: "执行秘书运行超过安全时限。",
+    AGENT_SESSION_ABORT_UNCONFIRMED: "执行秘书超时后未能确认安全停止。",
+    AGENT_SESSION_BUSY: "执行秘书会话已有任务正在运行。",
+    AGENT_SESSION_DISPOSED: "执行秘书会话已失效，需要重新建立。",
+    AGENT_SESSION_SHUTDOWN_FAILED: "执行秘书会话关闭失败。",
+    AGENT_SESSION_DISPOSE_FAILED: "执行秘书会话清理失败。",
+    PUBLISHING_SECRETARY_RUNTIME_FAILED: "执行秘书运行时在返回结果前停止。",
   };
 
   return code
@@ -428,7 +445,9 @@ function mapJobProjection(
             recovery:
               job.humanAction?.instruction ??
               job.humanAction?.reason ??
-              "保留已提交状态，可检查当前任务后安全重试。",
+              (job.failure.step === "publishing_secretary_runtime"
+                ? "已停止自动重试。请根据错误类别检查执行秘书运行时后再重试。"
+                : "保留已提交状态，可检查当前任务后安全重试。"),
           },
         }
       : syntheticFailure
@@ -533,7 +552,20 @@ export class ApiTaskRepository implements TaskRepository {
     }>("/jobs/" + encodeURIComponent(jobId) + "/continue", {
       method: "POST",
     });
-    return mapJobProjection(payload.job, this.#brief(jobId));
+    const task = mapJobProjection(payload.job, this.#brief(jobId));
+    if (!payload.run.error || task.failure) {
+      return task;
+    }
+
+    return {
+      ...task,
+      failure: {
+        step: task.currentStep,
+        reason: boundedFailureMessage(payload.run.error.code),
+        recovery:
+          "本次执行已停止自动重试。请根据错误类别检查当前运行时后再继续。",
+      },
+    };
   }
 
   subscribe(jobId: string, listener: (task: TaskFixture) => void): () => void {

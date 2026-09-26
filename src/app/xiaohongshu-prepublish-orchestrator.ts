@@ -10,6 +10,7 @@ import type {
   PublishingSecretaryProgressEvent,
   PublishingSecretaryPort,
 } from "../agent/publishing-secretary-contract.js";
+import { AgentSessionError } from "../agent/host.js";
 import {
   JobNotFoundError,
   type ActionRequestRepository,
@@ -47,6 +48,7 @@ type LoginServicePort = Pick<
 type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
+const PUBLISHING_RUNTIME_STEP_KEY = "publishing_secretary_runtime";
 const PUBLISHING_PROGRESS_STEP_PREFIX = "publishing_progress_";
 
 const boundedMaterialFailureStages = [
@@ -62,6 +64,138 @@ interface BoundedMaterialFailureDiagnostic {
   readonly stage: BoundedMaterialFailureStage;
   readonly code: string;
 }
+interface BoundedPublishingRuntimeDiagnostic {
+  readonly stage:
+    | "session_initialization"
+    | "session_resume"
+    | "session_run"
+    | "session_timeout"
+    | "session_cleanup"
+    | "runtime";
+  readonly code: string;
+  readonly message: string;
+  readonly causeKind: string | null;
+  readonly upstreamStatus: number | null;
+}
+
+function boundedCauseKind(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== "object" || current === null) return null;
+    const candidate = current as {
+      readonly name?: unknown;
+      readonly cause?: unknown;
+    };
+    if (
+      typeof candidate.name === "string" &&
+      /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(candidate.name) &&
+      candidate.name !== "AgentSessionError" &&
+      candidate.name !== "Error"
+    ) {
+      return candidate.name;
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
+function boundedUpstreamStatus(error: unknown): number | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== "object" || current === null) return null;
+    const candidate = current as {
+      readonly status?: unknown;
+      readonly statusCode?: unknown;
+      readonly cause?: unknown;
+    };
+    const raw =
+      typeof candidate.status === "number"
+        ? candidate.status
+        : candidate.statusCode;
+    if (
+      typeof raw === "number" &&
+      Number.isInteger(raw) &&
+      raw >= 400 &&
+      raw <= 599
+    ) {
+      return raw;
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
+function boundedPublishingRuntimeDiagnostic(
+  error: unknown,
+): BoundedPublishingRuntimeDiagnostic {
+  const causeKind = boundedCauseKind(error);
+  const upstreamStatus = boundedUpstreamStatus(error);
+
+  if (error instanceof AgentSessionError) {
+    const stage: BoundedPublishingRuntimeDiagnostic["stage"] =
+      error.code === "AGENT_SESSION_INITIALIZATION_FAILED"
+        ? "session_initialization"
+        : error.code === "AGENT_SESSION_RESUME_FAILED" ||
+            error.code === "AGENT_SESSION_NOT_FOUND" ||
+            error.code === "AGENT_SESSION_INCOMPATIBLE"
+          ? "session_resume"
+          : error.code === "AGENT_SESSION_TIMEOUT" ||
+              error.code === "AGENT_SESSION_ABORT_UNCONFIRMED"
+            ? "session_timeout"
+            : error.code === "AGENT_SESSION_SHUTDOWN_FAILED" ||
+                error.code === "AGENT_SESSION_DISPOSE_FAILED" ||
+                error.code === "AGENT_SESSION_DISPOSED"
+              ? "session_cleanup"
+              : "session_run";
+
+    const messages: Readonly<Record<string, string>> = {
+      AGENT_SESSION_INITIALIZATION_FAILED:
+        "The Publishing Secretary session could not initialize.",
+      AGENT_SESSION_RESUME_FAILED:
+        "The Publishing Secretary session could not resume.",
+      AGENT_SESSION_NOT_FOUND:
+        "The persisted Publishing Secretary session could not be found.",
+      AGENT_SESSION_INCOMPATIBLE:
+        "The persisted Publishing Secretary session is incompatible with the current runtime.",
+      AGENT_SESSION_RUN_FAILED:
+        upstreamStatus === null
+          ? "The Publishing Secretary model/tool run failed before completion."
+          : "The Publishing Secretary model/tool request was rejected by the configured AI runtime.",
+      AGENT_SESSION_TIMEOUT:
+        "The Publishing Secretary run exceeded its safe execution deadline.",
+      AGENT_SESSION_ABORT_UNCONFIRMED:
+        "The Publishing Secretary run timed out and local stop could not be confirmed.",
+      AGENT_SESSION_BUSY:
+        "The Publishing Secretary session is already running another task.",
+      AGENT_SESSION_DISPOSED:
+        "The Publishing Secretary session was already disposed.",
+      AGENT_SESSION_SHUTDOWN_FAILED:
+        "The Publishing Secretary session could not shut down cleanly.",
+      AGENT_SESSION_DISPOSE_FAILED:
+        "The Publishing Secretary session could not be disposed cleanly.",
+    };
+
+    return {
+      stage,
+      code: error.code,
+      message:
+        messages[error.code] ??
+        "The Publishing Secretary runtime stopped before returning a structured result.",
+      causeKind,
+      upstreamStatus,
+    };
+  }
+
+  return {
+    stage: "runtime",
+    code: "PUBLISHING_SECRETARY_RUNTIME_FAILED",
+    message:
+      "The Publishing Secretary runtime stopped before returning a structured result.",
+    causeKind,
+    upstreamStatus,
+  };
+}
+
 
 function boundedMaterialFailureDiagnostic(
   error: unknown,
@@ -201,6 +335,30 @@ function safeErrorMessage(error: unknown): string {
       "One or more controlled material assets could not be resolved.",
     JOB_ALREADY_RUNNING:
       "This job is already being continued by another request.",
+    AGENT_SESSION_INITIALIZATION_FAILED:
+      "The Publishing Secretary session could not initialize.",
+    AGENT_SESSION_RESUME_FAILED:
+      "The Publishing Secretary session could not resume.",
+    AGENT_SESSION_NOT_FOUND:
+      "The persisted Publishing Secretary session could not be found.",
+    AGENT_SESSION_INCOMPATIBLE:
+      "The persisted Publishing Secretary session is incompatible with the current runtime.",
+    AGENT_SESSION_RUN_FAILED:
+      "The Publishing Secretary model/tool run failed before completion.",
+    AGENT_SESSION_TIMEOUT:
+      "The Publishing Secretary run exceeded its safe execution deadline.",
+    AGENT_SESSION_ABORT_UNCONFIRMED:
+      "The Publishing Secretary timed out and local stop could not be confirmed.",
+    AGENT_SESSION_BUSY:
+      "The Publishing Secretary session is already running another task.",
+    AGENT_SESSION_DISPOSED:
+      "The Publishing Secretary session was already disposed.",
+    AGENT_SESSION_SHUTDOWN_FAILED:
+      "The Publishing Secretary session could not shut down cleanly.",
+    AGENT_SESSION_DISPOSE_FAILED:
+      "The Publishing Secretary session could not be disposed cleanly.",
+    PUBLISHING_SECRETARY_RUNTIME_FAILED:
+      "The Publishing Secretary runtime stopped before returning a structured result.",
   };
 
   return (
@@ -485,15 +643,45 @@ export class XiaohongshuPrepublishOrchestrator {
           }
 
           const material = this.#requireMaterial(jobId);
-          const agentResult = await this.#publishingSecretary.execute({
-            jobId,
-            browserProvider: automationProvider,
-            browserSession: session,
-            materialPack: material.pack,
-            onProgress: (progress) => {
-              this.#recordPublishingSecretaryProgress(jobId, progress);
-            },
-          });
+          let agentResult: PublishingSecretaryExecutionResult;
+          try {
+            agentResult = await this.#publishingSecretary.execute({
+              jobId,
+              browserProvider: automationProvider,
+              browserSession: session,
+              materialPack: material.pack,
+              onProgress: (progress) => {
+                this.#recordPublishingSecretaryProgress(jobId, progress);
+              },
+            });
+          } catch (error) {
+            const diagnostic = boundedPublishingRuntimeDiagnostic(error);
+            this.#recordPublishingSecretaryRuntimeFailure(jobId, diagnostic);
+            process.emitWarning(
+              [
+                "Publishing Secretary runtime stopped before a structured result.",
+                "job=" + jobId,
+                "stage=" + diagnostic.stage,
+                "code=" + diagnostic.code,
+                ...(diagnostic.causeKind
+                  ? ["cause=" + diagnostic.causeKind]
+                  : []),
+                ...(diagnostic.upstreamStatus === null
+                  ? []
+                  : ["upstreamStatus=" + diagnostic.upstreamStatus]),
+              ].join(" "),
+              { code: "APP_PUBLISHING_RUNTIME_FAILED" },
+            );
+
+            return {
+              projection: this.#publish(jobId),
+              blocked: true,
+              error: {
+                code: diagnostic.code,
+                message: diagnostic.message,
+              },
+            };
+          }
 
           if (agentResult.kind === "needs_identity") {
             const identitySurface = agentResult.identitySurface;
@@ -738,6 +926,60 @@ export class XiaohongshuPrepublishOrchestrator {
       process.emitWarning(
         "Browser acquisition failure could not be persisted for APP-02.",
         { code: "APP_BROWSER_FAILURE_PERSIST_FAILED" },
+      );
+    }
+  }
+
+  #recordPublishingSecretaryRuntimeFailure(
+    jobId: string,
+    diagnostic: BoundedPublishingRuntimeDiagnostic,
+  ): void {
+    const job = this.#requireJob(jobId);
+    if (job.status !== "preparing_publish") {
+      return;
+    }
+
+    const now = this.#now().toISOString();
+    try {
+      this.#jobs.commitCheckpoint(jobId, {
+        status: "preparing_publish",
+        checkpoint: {
+          ...(job.checkpoint ?? {}),
+          phase: "publishing_secretary_runtime_failed",
+          publishingSecretaryRuntimeStage: diagnostic.stage,
+          publishingSecretaryRuntimeCode: diagnostic.code,
+          publishingSecretaryRuntimeCauseKind:
+            diagnostic.causeKind ?? "unknown",
+          ...(diagnostic.upstreamStatus === null
+            ? {}
+            : {
+                publishingSecretaryRuntimeUpstreamStatus:
+                  diagnostic.upstreamStatus,
+              }),
+        },
+        step: {
+          id: this.#createId(),
+          stepKey: PUBLISHING_RUNTIME_STEP_KEY,
+          status: "failed",
+          attempt: this.#nextStepAttempt(
+            jobId,
+            PUBLISHING_RUNTIME_STEP_KEY,
+          ),
+          errorCode: diagnostic.code,
+          errorMessage: diagnostic.message,
+          outputJson: JSON.stringify({
+            stage: diagnostic.stage,
+            causeKind: diagnostic.causeKind,
+            upstreamStatus: diagnostic.upstreamStatus,
+          }),
+          finishedAt: now,
+        },
+      });
+      this.#publish(jobId);
+    } catch {
+      process.emitWarning(
+        "Publishing Secretary runtime failure could not be persisted.",
+        { code: "APP_PUBLISHING_RUNTIME_FAILURE_PERSIST_FAILED" },
       );
     }
   }
