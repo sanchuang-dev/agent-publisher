@@ -127,6 +127,13 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     expect(mandatoryPrompt).toContain(
       "recovery may use multiple loops",
     );
+    expect(mandatoryPrompt).toContain(
+      "human should not have to locate the login button",
+    );
+    expect(mandatoryPrompt).toContain(
+      "not** by itself the human boundary",
+    );
+    expect(mandatoryPrompt).toContain("qr_ready");
     expect(xiaohongshuPublishingDefinition.systemPrompt).toContain(
       "Ordinary page ambiguity is a reason to re-observe",
     );
@@ -271,6 +278,15 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     await expect(
       runStartingState(
         "START=IMAGE_TEXT_COMPOSER; current composer appears fresh.",
+      ),
+    ).resolves.toMatchObject({
+      finalText: "GUIDANCE_AVAILABLE",
+      toolExecutions: [],
+    });
+
+    await expect(
+      runStartingState(
+        "START=LOGGED_OUT_CREATOR; login UI is visible but no QR human-action surface is ready yet.",
       ),
     ).resolves.toMatchObject({
       finalText: "GUIDANCE_AVAILABLE",
