@@ -14,7 +14,7 @@ import {
   defineTool,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 
 import type { AgentDefinition } from "../src/agent/definition.js";
 import { PiAgentHost } from "../src/agent/pi-agent-host.js";
@@ -318,6 +318,99 @@ describe("PiAgentHost", () => {
       code: "AGENT_SESSION_DISPOSED",
       runStopped: true,
     });
+  });
+
+  test("streams observational tool execution before the run finishes", async () => {
+    const faux = fauxProvider({ provider: "publisher-agent-host-tool-observer" });
+    const modelRuntime = await createFauxRuntime(faux);
+    let releaseTool!: () => void;
+    const toolReleased = new Promise<void>((resolve) => {
+      releaseTool = resolve;
+    });
+    const probe = defineTool({
+      name: "observer_probe",
+      label: "Observer Probe",
+      description: "Pauses so the test can observe an in-flight tool event.",
+      parameters: Type.Object({
+        value: Type.String(),
+      }),
+      async execute(_toolCallId, params) {
+        await toolReleased;
+        return {
+          content: [{ type: "text", text: `observed:${params.value}` }],
+          details: { value: params.value },
+        };
+      },
+    });
+    const host = new PiAgentHost({
+      model: faux.getModel(),
+      modelRuntime,
+      defaultRunTimeoutMs: 2_000,
+      tools: ["observer_probe"],
+      sessionOptions: {
+        customTools: [probe],
+        thinkingLevel: "off",
+      },
+      createResourceLoader: ({ systemPrompt }) =>
+        createResourceLoader(systemPrompt),
+    });
+    const session = await host.createSession({
+      definition,
+      scope: { jobId: "job-tool-observer", role: "content" },
+    });
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "observer_probe",
+          { value: "safe-value" },
+          { id: "observer-call" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage(fauxText("OBSERVER_DONE")),
+    ]);
+
+    const observed: Array<{
+      readonly completed: boolean;
+      readonly isError: boolean | null;
+    }> = [];
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    let settled = false;
+    const run = session
+      .run({
+        prompt: "Run the observer probe.",
+        onToolExecution: async (execution) => {
+          observed.push({
+            completed: execution.completed,
+            isError: execution.isError,
+          });
+          if (execution.completed) {
+            throw new Error("fixture async observer rejection");
+          }
+        },
+      })
+      .finally(() => {
+        settled = true;
+      });
+
+    for (let attempt = 0; attempt < 50 && observed.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(observed[0]).toEqual({ completed: false, isError: null });
+    expect(settled).toBe(false);
+
+    releaseTool();
+    await expect(run).resolves.toMatchObject({ finalText: "OBSERVER_DONE" });
+    await Promise.resolve();
+    expect(observed.at(-1)).toEqual({ completed: true, isError: false });
+    expect(warning).toHaveBeenCalledWith(
+      "Agent tool observer failed; execution continues.",
+      { code: "AGENT_TOOL_OBSERVER_FAILED" },
+    );
+
+    warning.mockRestore();
+    await session.dispose();
   });
 
   test("preserves completed tool evidence when a later turn exceeds the deadline", async () => {

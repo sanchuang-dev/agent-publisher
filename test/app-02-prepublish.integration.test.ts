@@ -10,6 +10,7 @@ import type {
   BrowserProviderHealth,
   BrowserSession,
 } from "../src/browser/provider.js";
+import type { PublishingSecretaryExecutionInput } from "../src/agent/publishing-secretary-contract.js";
 import {
   createMvpPrepublishApplication,
   type MvpPrepublishApplication,
@@ -54,6 +55,15 @@ class FakeBrowserProvider implements BrowserProvider {
 
   async health(): Promise<BrowserProviderHealth> {
     return { status: "reachable" };
+  }
+
+  async resolveAutomationAttachment(sessionId: string) {
+    expect(sessionId).toBe(this.session.id);
+    return {
+      sessionId,
+      cdpEndpoint:
+        "ws://browser-runtime:9222/devtools/browser/app-02-observability",
+    };
   }
 }
 
@@ -456,6 +466,169 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
     }
   });
 
+  test("streams bounded Publishing Secretary progress over SSE before the run finishes", async () => {
+    const temp = makeTempDatabase();
+    cleanupRoots.push(temp.root);
+    const browser = new FakeBrowserProvider();
+    const { pack } = preparedFixture();
+    let releaseRun!: () => void;
+    let markEntered!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      markEntered = resolve;
+    });
+    const released = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const execute = vi.fn(async (input: PublishingSecretaryExecutionInput) => {
+      input.onProgress?.({ stage: "observing", status: "running" });
+      input.onProgress?.({ stage: "navigating", status: "running" });
+      input.onProgress?.({ stage: "finding", status: "running" });
+      input.onProgress?.({ stage: "acting", status: "running" });
+      input.onProgress?.({ stage: "filling", status: "running" });
+      input.onProgress?.({ stage: "uploading", status: "running" });
+      input.onProgress?.({ stage: "waiting", status: "running" });
+      markEntered();
+      await released;
+      input.onProgress?.({ stage: "waiting", status: "succeeded" });
+      return {
+        kind: "progress" as const,
+        summary: "bounded progress fixture",
+        semanticMilestone: "creator_observed",
+        identitySurface: null,
+        browserToolCalls: 7,
+      };
+    });
+    const application = createMvpPrepublishApplication({
+      databasePath: temp.path,
+      browserProvider: browser,
+      browserLiveViewUrl:
+        "/browser-live-view/vnc.html?path=browser-live-view/websockify",
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) =>
+        "/controlled-assets/" + asset.assetId + ".png",
+    });
+    const origin = await application.start({ host: "127.0.0.1", port: 0 });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "observe the live Publishing Secretary run",
+      });
+      const sse = await connectSse(
+        origin + "/api/jobs/" + encodeURIComponent(created.id) + "/events",
+      );
+      let continueSettled = false;
+      const continuation = fetch(
+        origin + "/api/jobs/" + encodeURIComponent(created.id) + "/continue",
+        { method: "POST" },
+      ).finally(() => {
+        continueSettled = true;
+      });
+
+      await entered;
+      await waitFor(() => {
+        const stream = sse.chunks.join("");
+        return (
+          stream.includes('"stepKey":"publishing_secretary_observing"') &&
+          stream.includes('"stepKey":"publishing_secretary_uploading"') &&
+          stream.includes('"stepKey":"publishing_secretary_waiting"') &&
+          stream.includes('"controlOwner":"agent"') &&
+          stream.includes(
+            '"url":"/browser-live-view/vnc.html?path=browser-live-view/websockify"',
+          )
+        );
+      });
+
+      expect(continueSettled).toBe(false);
+      const inFlightStream = sse.chunks.join("");
+      for (const stepKey of [
+        "publishing_secretary_observing",
+        "publishing_secretary_navigating",
+        "publishing_secretary_finding",
+        "publishing_secretary_acting",
+        "publishing_secretary_filling",
+        "publishing_secretary_uploading",
+        "publishing_secretary_waiting",
+      ]) {
+        expect(inFlightStream).toContain(`"stepKey":"${stepKey}"`);
+      }
+      expect(inFlightStream).not.toContain("browser-runtime:9222");
+      expect(inFlightStream).not.toContain("devtools/browser");
+
+      releaseRun();
+      const response = await continuation;
+      expect(response.status).toBe(200);
+      const completed = (await response.json()) as {
+        job: { liveView: unknown };
+      };
+      expect(completed.job.liveView).toBeNull();
+      expect(execute).toHaveBeenCalledOnce();
+
+      sse.disconnect();
+      await sse.closed;
+    } finally {
+      releaseRun();
+      await application.stop();
+    }
+  });
+
+  test("progress projection failure stays observational and does not block browser execution", async () => {
+    const temp = makeTempDatabase();
+    cleanupRoots.push(temp.root);
+    const browser = new FakeBrowserProvider();
+    const { pack } = preparedFixture();
+    const execute = vi.fn(async () => ({
+      kind: "progress" as const,
+      summary: "execution survived observer failure",
+      semanticMilestone: "creator_observed",
+      identitySurface: null,
+      browserToolCalls: 1,
+    }));
+    const application = createMvpPrepublishApplication({
+      databasePath: temp.path,
+      browserProvider: browser,
+      browserLiveViewUrl: "/browser-live-view/vnc.html",
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) =>
+        "/controlled-assets/" + asset.assetId + ".png",
+    });
+    const originalCommit =
+      application.runtime.jobs.commitCheckpoint.bind(application.runtime.jobs);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    vi.spyOn(application.runtime.jobs, "commitCheckpoint").mockImplementation(
+      (jobId, input) => {
+        if (input.checkpoint.phase === "publishing_secretary_running") {
+          throw new Error("fixture projection storage failure");
+        }
+        return originalCommit(jobId, input);
+      },
+    );
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "observer failure must not seize control",
+      });
+      const result = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(result.error).toBeNull();
+      expect(result.projection).toMatchObject({
+        status: "preparing_publish",
+        phase: "publishing_secretary_progress",
+      });
+      expect(warning).toHaveBeenCalledWith(
+        "Publishing Secretary progress could not be projected; browser execution continues.",
+        { code: "APP_PUBLISHING_PROGRESS_OBSERVER_FAILED" },
+      );
+    } finally {
+      warning.mockRestore();
+      await application.stop();
+    }
+  });
+
   test("sensitive Live View URLs are never projected to the Web boundary", async () => {
     const temp = makeTempDatabase();
     cleanupRoots.push(temp.root);
@@ -698,6 +871,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
         projection: {
           status: "preparing_publish",
           currentStep: "acquire_browser",
+          liveView: null,
           failure: {
             step: "acquire_browser",
             code: "BROWSER_UNAVAILABLE",

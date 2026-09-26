@@ -140,6 +140,70 @@ test("waiting_for_login trusts only the backend Live View descriptor", async () 
   expect(task.needsHuman).toBe(true);
 });
 
+test("preparing_publish uses the backend same-origin Live View and renders bounded semantic progress", async () => {
+  const semanticKeys = [
+    "publishing_secretary_observing",
+    "publishing_secretary_navigating",
+    "publishing_secretary_finding",
+    "publishing_secretary_acting",
+    "publishing_secretary_filling",
+    "publishing_secretary_uploading",
+    "publishing_secretary_waiting",
+  ] as const;
+  const fetchImpl = vi.fn(async () =>
+    response({
+      job: projection({
+        status: "preparing_publish",
+        currentWorker: "publishing_secretary",
+        currentStep: "publishing_secretary_uploading",
+        phase: "publishing_secretary_running",
+        liveView: {
+          mode: "runtime",
+          url: "/browser-live-view/vnc.html?path=browser-live-view/websockify",
+          controlOwner: "agent",
+        },
+        timeline: semanticKeys.map((stepKey, index) => ({
+          stepKey,
+          status: index === semanticKeys.length - 1 ? "running" : "succeeded",
+          attempt: 1,
+          errorCode: null,
+          errorMessage: null,
+        })),
+      }),
+    }),
+  );
+  const repository = new ApiTaskRepository({
+    fetchImpl: fetchImpl as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+
+  expect(task).toMatchObject({
+    state: "preparing_publish",
+    browserLiveViewMode: "runtime",
+    browserLiveViewUrl:
+      "/browser-live-view/vnc.html?path=browser-live-view/websockify",
+    controlOwner: "agent",
+    currentStep: "上传素材",
+  });
+  expect(task.timeline.map((step) => step.label)).toEqual([
+    "观察当前页面",
+    "导航页面",
+    "寻找页面入口",
+    "操作页面",
+    "填写内容",
+    "上传素材",
+    "等待页面更新",
+  ]);
+  expect(task.timeline.every((step) => step.detail !== "Publisher 已提交该步骤状态。")).toBe(
+    true,
+  );
+});
+
 test("SSE projection renders actual controlled material and real approval summary", () => {
   let listener: ((event: MessageEvent<string>) => void) | undefined;
   const close = vi.fn();

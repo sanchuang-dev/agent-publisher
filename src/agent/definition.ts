@@ -70,6 +70,13 @@ export interface AgentTaskInput {
   readonly prompt: string;
   readonly timeoutMs?: number;
   readonly abortTimeoutMs?: number;
+  /**
+   * Observational only. Implementations must never let a broken observer
+   * change Agent execution or external-side-effect semantics.
+   */
+  readonly onToolExecution?: (
+    execution: AgentToolExecutionEvidence,
+  ) => void | Promise<void>;
 }
 
 export interface AgentToolExecutionEvidence {

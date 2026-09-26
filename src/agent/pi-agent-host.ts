@@ -346,6 +346,23 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       toolExecutions: [...toolExecutions.values()],
     });
 
+    const warnObserverFailure = () => {
+      process.emitWarning(
+        "Agent tool observer failed; execution continues.",
+        { code: "AGENT_TOOL_OBSERVER_FAILED" },
+      );
+    };
+    const observeToolExecution = (evidence: AgentToolExecutionEvidence) => {
+      try {
+        const observation = input.onToolExecution?.(evidence);
+        if (observation) {
+          void Promise.resolve(observation).catch(warnObserverFailure);
+        }
+      } catch {
+        warnObserverFailure();
+      }
+    };
+
     const unsubscribe = this.session.subscribe((event) => {
       eventTypes.push(event.type);
 
@@ -362,25 +379,29 @@ class PiPublisherAgentSession implements PublisherAgentSession {
       }
 
       if (event.type === "tool_execution_start") {
-        toolExecutions.set(event.toolCallId, {
+        const evidence: AgentToolExecutionEvidence = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
           completed: false,
           isError: null,
-        });
+        };
+        toolExecutions.set(event.toolCallId, evidence);
+        observeToolExecution(evidence);
         return;
       }
 
       if (event.type === "tool_execution_end") {
         const previous = toolExecutions.get(event.toolCallId);
-        toolExecutions.set(event.toolCallId, {
+        const evidence: AgentToolExecutionEvidence = {
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: previous?.args,
           completed: true,
           isError: event.isError,
-        });
+        };
+        toolExecutions.set(event.toolCallId, evidence);
+        observeToolExecution(evidence);
       }
     });
 
