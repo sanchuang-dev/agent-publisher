@@ -88,6 +88,7 @@ test("browser-runtime image includes noVNC dependencies and lifecycle healthchec
   expect(dockerfile).toMatch(/\bx11vnc\b/);
   expect(dockerfile).toMatch(/\bnovnc\b/);
   expect(dockerfile).toMatch(/\bsocat\b/);
+  expect(dockerfile).toMatch(/\butil-linux\b/);
   expect(dockerfile).toMatch(/\bwebsockify\b/);
   expect(dockerfile).toMatch(/COPY health-browser\.sh \/usr\/local\/bin\/health-browser/);
   expect(dockerfile).toMatch(/EXPOSE 6080 9222/);
@@ -121,6 +122,31 @@ test("browser startup script supervises all critical processes", () => {
     expect(script).toMatch(new RegExp(`${processVariable}_pid`));
   }
 });
+
+test("browser startup holds an exclusive profile lease before clearing stale Chromium singleton artifacts", () => {
+  const script = read("docker/browser-runtime/start-browser.sh");
+
+  expect(script).toMatch(
+    /profile_lease_file="\$\{profile_dir\}\/\.publisher-browser-runtime\.lock"/,
+  );
+  expect(script).toMatch(/exec 9>"\$\{profile_lease_file\}"/);
+  expect(script).toMatch(/if ! flock -n 9; then/);
+  expect(script).toMatch(
+    /for singleton_name in SingletonLock SingletonCookie SingletonSocket; do/,
+  );
+
+  const leaseIndex = script.indexOf("flock -n 9");
+  const cleanupIndex = script.indexOf(
+    "for singleton_name in SingletonLock SingletonCookie SingletonSocket",
+  );
+  const chromiumIndex = script.indexOf("gosu browser chromium");
+
+  expect(leaseIndex).toBeGreaterThanOrEqual(0);
+  expect(cleanupIndex).toBeGreaterThan(leaseIndex);
+  expect(chromiumIndex).toBeGreaterThan(cleanupIndex);
+  expect(script).not.toMatch(/rm -rf "\$\{profile_dir\}"/);
+});
+
 
 test("healthcheck rejects missing or zombie critical processes before probing endpoints", () => {
   const healthScript = read("docker/browser-runtime/health-browser.sh");

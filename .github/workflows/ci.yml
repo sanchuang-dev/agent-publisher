@@ -94,6 +94,47 @@ jobs:
           docker compose exec -T browser-runtime curl -fsS -X PUT \
             'http://127.0.0.1:9222/json/new?data:text/html,%3Ctitle%3Ebrowser-runtime-ci%3C/title%3E' >/dev/null
 
+      - name: Verify stale Chromium profile lock recovery across forced recreate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker compose exec -T browser-runtime sh -lc             'printf brw-runtime-persistent > /data/profile/brw-runtime-ci-marker'
+
+          docker compose stop browser-runtime
+
+          docker compose run --rm --no-deps --entrypoint sh browser-runtime -lc '
+            set -eu
+            ln -sfn stale-container-999999 /data/profile/SingletonLock
+            ln -sfn stale-cookie /data/profile/SingletonCookie
+            ln -sfn /tmp/stale-browser-runtime/SingletonSocket /data/profile/SingletonSocket
+          '
+
+          docker compose up -d --no-build --force-recreate browser-runtime
+
+          container_id="$(docker compose ps -q browser-runtime)"
+          test -n "$container_id"
+
+          for attempt in $(seq 1 60); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id")"
+            if [ "$status" = "healthy" ]; then
+              break
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker compose logs browser-runtime
+              exit 1
+            fi
+            sleep 2
+          done
+
+          test "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy"
+          docker compose exec -T browser-runtime             grep -q '^brw-runtime-persistent$' /data/profile/brw-runtime-ci-marker
+
+          recovery_logs="$(docker compose logs browser-runtime)"
+          grep -q 'removing stale Chromium SingletonLock' <<<"$recovery_logs"
+          grep -q 'removing stale Chromium SingletonCookie' <<<"$recovery_logs"
+          grep -q 'removing stale Chromium SingletonSocket' <<<"$recovery_logs"
+
       - name: Verify sandbox boundary and live-view endpoint
         shell: bash
         run: |
