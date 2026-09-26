@@ -307,7 +307,9 @@ export class JobProjectionService {
       job.status === "waiting_for_login" &&
       action?.type === "login_required" &&
       action.status === "open";
-    const agentExecuting = job.status === "preparing_publish";
+    const agentExecuting =
+      job.status === "preparing_publish" &&
+      job.checkpoint?.phase === "publishing_secretary_running";
 
     return {
       id: job.id,
