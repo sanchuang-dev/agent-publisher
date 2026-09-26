@@ -208,7 +208,7 @@ function boundedPublishingRuntimeDiagnostic(
       message:
         aiMessages[diagnosticCode] ??
         messages[error.code] ??
-        "The Publishing Secretary runtime stopped before returning a structured result.",
+        "The Publishing Secretary runtime stopped before returning a bounded outcome.",
       causeKind,
       upstreamStatus,
     };
@@ -218,7 +218,7 @@ function boundedPublishingRuntimeDiagnostic(
     stage: "runtime",
     code: "PUBLISHING_SECRETARY_RUNTIME_FAILED",
     message:
-      "The Publishing Secretary runtime stopped before returning a structured result.",
+      "The Publishing Secretary runtime stopped before returning a bounded outcome.",
     causeKind,
     upstreamStatus,
   };
@@ -386,7 +386,7 @@ function safeErrorMessage(error: unknown): string {
     AGENT_SESSION_DISPOSE_FAILED:
       "The Publishing Secretary session could not be disposed cleanly.",
     PUBLISHING_SECRETARY_RUNTIME_FAILED:
-      "The Publishing Secretary runtime stopped before returning a structured result.",
+      "The Publishing Secretary runtime stopped before returning a bounded outcome.",
     PUBLISHING_UPSTREAM_AUTH_FAILED:
       "An upstream Publishing Secretary request rejected authentication.",
     PUBLISHING_UPSTREAM_RATE_LIMITED:
@@ -697,7 +697,7 @@ export class XiaohongshuPrepublishOrchestrator {
             this.#recordPublishingSecretaryRuntimeFailure(jobId, diagnostic);
             process.emitWarning(
               [
-                "Publishing Secretary runtime stopped before a structured result.",
+                "Publishing Secretary runtime stopped before a bounded outcome.",
                 "job=" + jobId,
                 "stage=" + diagnostic.stage,
                 "code=" + diagnostic.code,

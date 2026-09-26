@@ -11,11 +11,9 @@ import type { PiResourceLoaderFactoryInput } from "./pi-agent-host.js";
 import type {
   PublishingSecretaryExecutionInput,
   PublishingSecretaryExecutionResult,
-  PublishingSecretaryIdentitySurface,
   PublishingSecretaryProgressEvent,
   PublishingSecretaryProgressKey,
   PublishingSecretaryPort,
-  PublishingSecretaryResultKind,
 } from "./publishing-secretary-contract.js";
 import {
   PUBLISHING_BROWSER_MCP_SERVER,
@@ -33,148 +31,102 @@ import {
   createXiaohongshuPublishingResourceLoader,
 } from "./xiaohongshu-publishing-skill.js";
 
-const RESULT_MARKER = "PUBLISHING_SECRETARY_RESULT=";
+const RESULT_SIGNAL_MARKER = "PUBLISHING_SECRETARY_SIGNAL=";
 const DEFAULT_ALLOWED_ORIGINS = [
   "https://creator.xiaohongshu.com",
 ] as const;
-const MAX_RESULT_TEXT = 500;
 
-export type PublishingSecretaryHostFactory = (
-  grant: PublishingBrowserCapabilityGrant,
-) => AgentHost;
+type PublishingSecretaryBoundedOutcome = Omit<
+  PublishingSecretaryExecutionResult,
+  "browserToolCalls"
+>;
 
-export interface PublishingSecretaryServiceDependencies {
-  readonly jobs: Pick<JobRepository, "getById">;
-  readonly bindings: AgentSessionBindingRepository;
-  readonly createHost: PublishingSecretaryHostFactory;
-  readonly uploadRoot: string;
-  readonly resolveAssetPath: AssetPathResolver;
-  readonly allowedOrigins?: readonly string[];
-  readonly runTimeoutMs?: number;
+function semanticSignal(finalText: string): string | null {
+  for (const line of finalText.split(/\r?\n/).reverse()) {
+    const normalized = line.trim();
+    if (!normalized.startsWith(RESULT_SIGNAL_MARKER)) continue;
+    return normalized.slice(RESULT_SIGNAL_MARKER.length).trim();
+  }
+  return null;
 }
 
-export class PublishingSecretaryResultError extends Error {
-  readonly code = "PUBLISHING_SECRETARY_RESULT_INVALID" as const;
+function interpretRunOutcome(
+  finalText: string,
+  successfulBrowserToolCalls: number,
+): PublishingSecretaryBoundedOutcome {
+  const signal = semanticSignal(finalText);
 
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "PublishingSecretaryResultError";
-  }
-}
-
-function boundedText(value: unknown, label: string): string {
-  if (typeof value !== "string") {
-    throw new PublishingSecretaryResultError(
-      `Publishing Secretary result ${label} must be a string.`,
-    );
-  }
-
-  const normalized = value.trim();
-  if (!normalized || normalized.length > MAX_RESULT_TEXT) {
-    throw new PublishingSecretaryResultError(
-      `Publishing Secretary result ${label} must contain 1-${MAX_RESULT_TEXT} characters.`,
-    );
-  }
-  return normalized;
-}
-
-function parseResultPayload(finalText: string): {
-  readonly kind: PublishingSecretaryResultKind;
-  readonly summary: string;
-  readonly semanticMilestone: string | null;
-  readonly identitySurface: PublishingSecretaryIdentitySurface | null;
-} {
-  const markerIndex = finalText.lastIndexOf(RESULT_MARKER);
-  if (markerIndex < 0) {
-    throw new PublishingSecretaryResultError(
-      "Publishing Secretary did not return the required structured result marker.",
-    );
-  }
-
-  const raw = finalText
-    .slice(markerIndex + RESULT_MARKER.length)
-    .split(/\r?\n/, 1)[0]
-    ?.trim();
-
-  if (!raw) {
-    throw new PublishingSecretaryResultError(
-      "Publishing Secretary returned an empty structured result.",
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new PublishingSecretaryResultError(
-      "Publishing Secretary returned invalid structured JSON.",
-      { cause: error },
-    );
-  }
-
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new PublishingSecretaryResultError(
-      "Publishing Secretary structured result must be an object.",
-    );
-  }
-
-  const record = parsed as Record<string, unknown>;
-  const kind = record.kind;
-  if (
-    kind !== "progress" &&
-    kind !== "needs_identity" &&
-    kind !== "prepared_candidate" &&
-    kind !== "needs_clarification" &&
-    kind !== "failed"
-  ) {
-    throw new PublishingSecretaryResultError(
-      "Publishing Secretary returned an unsupported result kind.",
-    );
-  }
-
-  const rawIdentitySurface = record.identitySurface;
-  const identitySurface =
-    rawIdentitySurface === "qr_ready" ||
-    rawIdentitySurface === "verification_required"
-      ? rawIdentitySurface
-      : null;
-
-  if (kind === "needs_identity") {
-    if (!identitySurface) {
-      throw new PublishingSecretaryResultError(
-        "Publishing Secretary needs_identity result must name a safe identitySurface.",
-      );
+  if (!signal) {
+    if (successfulBrowserToolCalls > 0) {
+      return {
+        kind: "progress",
+        summary:
+          "Publishing Secretary completed bounded browser work and yielded for the next run.",
+        semanticMilestone: "browser_progress_observed",
+        identitySurface: null,
+      };
     }
 
     return {
-      kind,
+      kind: "failed",
       summary:
-        identitySurface === "qr_ready"
-          ? "QR login is ready for authorized human action."
-          : "Identity verification is ready for authorized human action.",
-      semanticMilestone: identitySurface,
-      identitySurface,
+        "Publishing Secretary returned without any successful browser action or terminal page signal.",
+      semanticMilestone: "no_browser_progress",
+      identitySurface: null,
     };
   }
 
-  if (rawIdentitySurface !== undefined && rawIdentitySurface !== null) {
+  if (successfulBrowserToolCalls === 0) {
     throw new PublishingSecretaryResultError(
-      "Publishing Secretary identitySurface is only valid for needs_identity.",
+      "Publishing Secretary semantic signal requires current successful browser evidence.",
     );
   }
 
-  const milestone =
-    record.semanticMilestone === undefined ||
-    record.semanticMilestone === null
-      ? null
-      : boundedText(record.semanticMilestone, "semanticMilestone");
-
-  return {
-    kind,
-    summary: boundedText(record.summary, "summary"),
-    semanticMilestone: milestone,
-    identitySurface: null,
-  };
+  switch (signal) {
+    case "qr_ready":
+      return {
+        kind: "needs_identity",
+        summary: "QR login is ready for authorized human action.",
+        semanticMilestone: "qr_ready",
+        identitySurface: "qr_ready",
+      };
+    case "verification_required":
+      return {
+        kind: "needs_identity",
+        summary:
+          "Identity verification is ready for authorized human action.",
+        semanticMilestone: "verification_required",
+        identitySurface: "verification_required",
+      };
+    case "prepared_candidate":
+      return {
+        kind: "prepared_candidate",
+        summary:
+          "Publishing Secretary believes the current page is ready for Publisher verification.",
+        semanticMilestone: "prepared_candidate",
+        identitySurface: null,
+      };
+    case "needs_clarification":
+      return {
+        kind: "needs_clarification",
+        summary:
+          "Publishing Secretary stopped because the current page needs human clarification.",
+        semanticMilestone: "needs_clarification",
+        identitySurface: null,
+      };
+    case "failed":
+      return {
+        kind: "failed",
+        summary:
+          "Publishing Secretary found no materially different safe browser path.",
+        semanticMilestone: "safe_paths_exhausted",
+        identitySurface: null,
+      };
+    default:
+      throw new PublishingSecretaryResultError(
+        "Publishing Secretary returned an unsupported semantic signal.",
+      );
+  }
 }
 
 const forbiddenObservedClick =
@@ -254,18 +206,16 @@ function buildTaskPrompt(
     "Do not ask Publisher code which UI control to click. Current page evidence and the reviewed Xiaohongshu Skill guide the route.",
     "Never execute final publication, delete/clear/overwrite unknown content, or bypass QR scan, CAPTCHA, MFA, OTP, device verification, or equivalent identity challenges.",
     "A login page or login button is not itself a human-action boundary. Within the granted Creator origin, you may safely navigate the login UI, choose or switch login methods, and prefer a visible QR/scanning login method when available.",
-    "Return needs_identity only after a true human-action surface is visibly ready. Use identitySurface=qr_ready when a QR code is ready to scan; use identitySurface=verification_required when CAPTCHA/MFA/OTP/device verification or another human-only challenge is already presented.",
-    "Do not include QR contents, one-time codes, cookies, storage state, account identifiers, tokens, or other credential material in the result.",
-    "If the composer already contains content of unknown ownership, stop and return needs_clarification.",
-    "If the accepted material appears fully prepared, return prepared_candidate. Publisher will verify it independently in #107; do not self-approve.",
-    "If safe progress is possible but this run stops before a terminal outcome, return progress.",
-    "If no materially different safe path remains, return failed.",
+    "Do not return JSON, a schema object, or a machine-written summary. Focus on observing and operating the browser.",
+    "When a QR code is visibly ready for the authorized human, stop and add one final line: PUBLISHING_SECRETARY_SIGNAL=qr_ready",
+    "When CAPTCHA, MFA, OTP, device verification, or another human-only identity challenge is visibly ready, stop and add one final line: PUBLISHING_SECRETARY_SIGNAL=verification_required",
+    "Do not include QR contents, one-time codes, cookies, storage state, account identifiers, tokens, or other credential material in your response.",
+    "If the composer contains content of unknown ownership, stop and add one final line: PUBLISHING_SECRETARY_SIGNAL=needs_clarification",
+    "If the accepted material appears fully prepared, stop and add one final line: PUBLISHING_SECRETARY_SIGNAL=prepared_candidate. Publisher will verify it independently in #107; do not self-approve.",
+    "If no materially different safe path remains, stop and add one final line: PUBLISHING_SECRETARY_SIGNAL=failed",
+    "For ordinary bounded progress, no special output format is required. Stop naturally after making safe progress; Publisher will infer progress from browser-tool evidence.",
     "Accepted material and controlled upload paths:",
     JSON.stringify(material),
-    "Finish with exactly one final marker line and no hidden reasoning after it:",
-    'PUBLISHING_SECRETARY_RESULT={"kind":"prepared_candidate","summary":"bounded user-safe summary","semanticMilestone":"optional semantic milestone","identitySurface":null}',
-    'For needs_identity use exactly identitySurface "qr_ready" or "verification_required".',
-    "Allowed kind values: progress, needs_identity, prepared_candidate, needs_clarification, failed.",
   ].join("\n");
 }
 
@@ -438,21 +388,40 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
       }
 
       emitProgress(input, { key: "starting", status: "succeeded" });
-      const parsed = parseResultPayload(run.finalText);
-      const browserToolCalls = run.toolExecutions.filter((execution) => {
+      const browserExecutions = run.toolExecutions.filter((execution) => {
         if (execution.toolName !== "mcp") return false;
         const args = execution.args;
+        if (
+          typeof args !== "object" ||
+          args === null ||
+          Array.isArray(args)
+        ) {
+          return false;
+        }
+        const record = args as {
+          readonly server?: unknown;
+          readonly tool?: unknown;
+        };
         return (
-          typeof args === "object" &&
-          args !== null &&
-          !Array.isArray(args) &&
-          (args as { readonly server?: unknown }).server ===
-            PUBLISHING_BROWSER_MCP_SERVER
+          record.server === PUBLISHING_BROWSER_MCP_SERVER &&
+          typeof record.tool === "string" &&
+          (PUBLISHING_BROWSER_MCP_TOOLS as readonly string[]).includes(
+            record.tool,
+          )
         );
-      }).length;
+      });
+      const browserToolCalls = browserExecutions.length;
+      const successfulBrowserToolCalls = browserExecutions.filter(
+        (execution) =>
+          execution.completed && execution.isError === false,
+      ).length;
+      const outcome = interpretRunOutcome(
+        run.finalText,
+        successfulBrowserToolCalls,
+      );
 
       return {
-        ...parsed,
+        ...outcome,
         browserToolCalls,
       };
     } finally {
