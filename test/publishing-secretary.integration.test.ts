@@ -534,18 +534,18 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       expect(result).toMatchObject({
         blocked: true,
         error: {
-          code: "AGENT_SESSION_RUN_FAILED",
+          code: "PUBLISHER_AI_REQUEST_REJECTED",
           message:
-            "The Publishing Secretary model/tool request was rejected by the configured AI runtime.",
+            "The configured AI runtime rejected the Publishing Secretary model/tool request.",
         },
         projection: {
           status: "preparing_publish",
           currentStep: "publishing_secretary_runtime",
           failure: {
             step: "publishing_secretary_runtime",
-            code: "AGENT_SESSION_RUN_FAILED",
+            code: "PUBLISHER_AI_REQUEST_REJECTED",
             message:
-              "The Publishing Secretary model/tool request was rejected by the configured AI runtime.",
+              "The configured AI runtime rejected the Publishing Secretary model/tool request.",
           },
         },
       });
@@ -554,7 +554,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       ).toMatchObject({
         phase: "publishing_secretary_runtime_failed",
         publishingSecretaryRuntimeStage: "session_run",
-        publishingSecretaryRuntimeCode: "AGENT_SESSION_RUN_FAILED",
+        publishingSecretaryRuntimeCode: "PUBLISHER_AI_REQUEST_REJECTED",
         publishingSecretaryRuntimeUpstreamStatus: 400,
       });
 
@@ -566,7 +566,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       expect(JSON.stringify(warning.mock.calls)).not.toContain(secret);
       expect(warning).toHaveBeenCalledWith(
         expect.stringContaining(
-          "code=AGENT_SESSION_RUN_FAILED",
+          "code=PUBLISHER_AI_REQUEST_REJECTED",
         ),
         { code: "APP_PUBLISHING_RUNTIME_FAILED" },
       );
@@ -574,7 +574,7 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       const reread = application.runtime.orchestrator.getJob(created.id);
       expect(reread.failure).toMatchObject({
         step: "publishing_secretary_runtime",
-        code: "AGENT_SESSION_RUN_FAILED",
+        code: "PUBLISHER_AI_REQUEST_REJECTED",
       });
     } finally {
       warning.mockRestore();
