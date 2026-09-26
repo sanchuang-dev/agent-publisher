@@ -193,10 +193,11 @@ test("1440px MVP shell exposes every fixture state and required work surface", a
   await page.getByText("平台确认").waitFor({ state: "visible" });
 });
 
-test("real Web assignment reaches APP-02 waiting_for_approval without publish", async (t) => {
+test("real Web approval reaches deterministic publish evidence without relying on fixture UI state", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "agent-publisher-f3-real-ui-"));
   const databasePath = join(root, "app.db");
   const pack = createImageTextMaterialPackFixture();
+  let publishCalls = 0;
   const prepared = {
     platform: "xiaohongshu" as const,
     mode: "image_text" as const,
@@ -241,6 +242,16 @@ test("real Web assignment reaches APP-02 waiting_for_approval without publish", 
         bodyLength: prepared.bodyLength,
         tags: prepared.tags,
         imageCount: prepared.imageCount,
+      }),
+      publishPage: async ({ onMutationStarted }) => {
+        await onMutationStarted?.();
+        publishCalls += 1;
+      },
+      verifyPublishResult: async () => ({
+        kind: "published",
+        resultUrl: "https://www.xiaohongshu.com/explore/websmoke123",
+        contentId: "websmoke123",
+        confirmationRef: "xhs-result-page",
       }),
     },
   });
@@ -306,11 +317,28 @@ test("real Web assignment reaches APP-02 waiting_for_approval without publish", 
   });
 
   const publishButton = page.getByRole("button", { name: "批准发布" });
-  assert.equal(await publishButton.isDisabled(), true);
+  assert.equal(await publishButton.isDisabled(), false);
   assert.equal(
-    await page.getByText("当前仅到审批前，最终发布尚未启用。").count(),
+    await page
+      .getByText(
+        "批准后将执行一次不可逆发布；结果不确定时只核验，不会自动再次发布。",
+      )
+      .count(),
     1,
   );
+
+  const jobId = decodeURIComponent(
+    page.url().match(/#\/task\/([^/?#]+)/)?.[1] ?? "",
+  );
+  assert.notEqual(jobId, "");
+  assert.equal(
+    application.runtime.externalActions.getByKey(
+      jobId,
+      "publish:xiaohongshu:final",
+    ),
+    null,
+  );
+  assert.equal(application.runtime.evidence.getByJob(jobId).length, 0);
 
   const durableUrl = page.url();
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -324,6 +352,27 @@ test("real Web assignment reaches APP-02 waiting_for_approval without publish", 
   });
 
   await assertThreeColumnLayout(page);
+
+  await page.getByRole("button", { name: "批准发布" }).click();
+  await page.getByText("发布已完成").waitFor({
+    state: "visible",
+    timeout: 10_000,
+  });
+  await page.getByText("结果地址").waitFor({ state: "visible" });
+  await page.getByText(
+    "https://www.xiaohongshu.com/explore/websmoke123",
+    { exact: true },
+  ).waitFor({ state: "visible" });
+
+  assert.equal(publishCalls, 1);
+  assert.equal(
+    application.runtime.externalActions.getByKey(
+      jobId,
+      "publish:xiaohongshu:final",
+    )?.status,
+    "succeeded",
+  );
+  assert.equal(application.runtime.evidence.getByJob(jobId).length, 3);
 });
 
 test("runtime config supports interactive takeover then revokes input on agent resume", async (t) => {

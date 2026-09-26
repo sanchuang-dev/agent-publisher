@@ -228,39 +228,9 @@ function TaskDetail({
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let unsubscribe: () => void = () => undefined;
     const repository = fixtureState ? fixtureTaskRepository : taskRepository;
     const key = fixtureState ?? taskId;
-
-    const scheduleContinue = (current: TaskFixture) => {
-      if (fixtureState || cancelled) return;
-
-      if (!shouldAutoContinueTask(current)) {
-        return;
-      }
-
-      const status = current.backendStatus;
-      const delay = status === "waiting_for_login" ? 2500 : 120;
-      timer = setTimeout(() => {
-        void taskRepository
-          .continue(taskId)
-          .then((next) => {
-            if (cancelled) return;
-            setTask(next);
-            setLoadError(null);
-            scheduleContinue(next);
-          })
-          .catch((error: unknown) => {
-            if (cancelled) return;
-            setLoadError(
-              error instanceof Error
-                ? error.message
-                : "继续任务失败，请检查 APP-02 runtime。",
-            );
-          });
-      }, delay);
-    };
 
     void repository
       .get(key)
@@ -276,7 +246,6 @@ function TaskDetail({
               setLoadError(null);
             }
           });
-          scheduleContinue(loaded);
         }
       })
       .catch((error: unknown) => {
@@ -291,10 +260,41 @@ function TaskDetail({
 
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
       unsubscribe();
     };
   }, [fixtureState, taskId]);
+
+  useEffect(() => {
+    if (fixtureState || !task || !shouldAutoContinueTask(task)) {
+      return;
+    }
+
+    const status = task.backendStatus;
+    const delay =
+      status === "waiting_for_login" ||
+      status === "waiting_for_approval" ||
+      status === "publishing"
+        ? 2500
+        : 120;
+
+    const timer = setTimeout(() => {
+      void taskRepository
+        .continue(taskId)
+        .then((next) => {
+          setTask(next);
+          setLoadError(null);
+        })
+        .catch((error: unknown) => {
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "继续任务失败，请检查 APP-02 runtime。",
+          );
+        });
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [fixtureState, task, taskId]);
 
   if (!task) {
     return (
@@ -396,7 +396,13 @@ function TaskDetail({
         </aside>
 
         <Timeline task={task} />
-        <WorkSurface task={task} />
+        <WorkSurface
+          task={task}
+          onTaskUpdate={(next) => {
+            setTask(next);
+            setLoadError(null);
+          }}
+        />
       </div>
     </main>
   );
@@ -512,7 +518,13 @@ function WorkerTimeline({
   );
 }
 
-function WorkSurface({ task }: { task: TaskFixture }) {
+function WorkSurface({
+  task,
+  onTaskUpdate,
+}: {
+  task: TaskFixture;
+  onTaskUpdate: (task: TaskFixture) => void;
+}) {
   const kind = getWorkSurfaceKind(task.state);
 
   if (kind === "material") {
@@ -553,7 +565,9 @@ function WorkSurface({ task }: { task: TaskFixture }) {
     return <Browser task={task} takeover={kind === "takeover"} />;
   }
 
-  if (kind === "approval") return <Approval task={task} />;
+  if (kind === "approval") {
+    return <Approval task={task} onTaskUpdate={onTaskUpdate} />;
+  }
   if (kind === "evidence") return <Evidence task={task} />;
   return <Failure task={task} />;
 }
@@ -679,15 +693,43 @@ function Browser({
   );
 }
 
-function Approval({ task }: { task: TaskFixture }) {
+function Approval({
+  task,
+  onTaskUpdate,
+}: {
+  task: TaskFixture;
+  onTaskUpdate: (task: TaskFixture) => void;
+}) {
   const approval = task.approval!;
+  const [submitting, setSubmitting] = useState(false);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const isRealRuntime = task.runtimeSource === "api";
+
+  const approve = () => {
+    if (!isRealRuntime || submitting) return;
+    setSubmitting(true);
+    setApprovalError(null);
+    void taskRepository
+      .approve(task.id, approval.actionId)
+      .then((next) => {
+        onTaskUpdate(next);
+      })
+      .catch((error: unknown) => {
+        setApprovalError(
+          error instanceof Error
+            ? error.message
+            : "批准发布失败，请检查当前任务状态。",
+        );
+      })
+      .finally(() => setSubmitting(false));
+  };
 
   return (
     <aside className="work-surface">
       <Card
         eyebrow="发布审批"
         title="执行秘书已准备好发布"
-        description="真实审批摘要已准备完成；F3-01 只停在这里，不提供最终发布动作。"
+        description="批准后只允许执行一次最终发布；结果不确定时系统只核验，不会自动再次点击发布。"
       >
         <div className="approval-summary">
           {task.materialProvenance?.source === "controlled_smoke" && (
@@ -719,10 +761,20 @@ function Approval({ task }: { task: TaskFixture }) {
               <p key={warning}>{warning}</p>
             ))}
           </div>
+          {approvalError && <div className="warning-box"><p>{approvalError}</p></div>}
           <div className="approval-actions">
             <button className="secondary-button" disabled>返回修改</button>
-            <button className="primary-button" disabled>
-              批准发布
+            <button
+              className="primary-button"
+              type="button"
+              disabled={!isRealRuntime || submitting}
+              onClick={approve}
+            >
+              {!isRealRuntime
+                ? "Fixture 不执行发布"
+                : submitting
+                  ? "正在写入批准…"
+                  : "批准发布"}
             </button>
           </div>
         </div>
@@ -757,6 +809,27 @@ function Evidence({ task }: { task: TaskFixture }) {
 
 function Failure({ task }: { task: TaskFixture }) {
   const failure = task.failure!;
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const canVerifyPublish =
+    task.runtimeSource === "api" &&
+    failure.code === "PUBLISH_RESULT_UNKNOWN";
+
+  const verifyPublishResult = () => {
+    if (!canVerifyPublish || retrying) return;
+    setRetrying(true);
+    setRetryError(null);
+    void taskRepository
+      .continue(task.id)
+      .catch((error: unknown) => {
+        setRetryError(
+          error instanceof Error
+            ? error.message
+            : "重新核验发布结果失败，请稍后重试。",
+        );
+      })
+      .finally(() => setRetrying(false));
+  };
 
   return (
     <aside className="work-surface">
@@ -781,8 +854,18 @@ function Failure({ task }: { task: TaskFixture }) {
             <dd>{failure.recovery}</dd>
           </div>
         </dl>
-        <button className="secondary-button" disabled>
-          从该步骤重试
+        {retryError && <div className="warning-box"><p>{retryError}</p></div>}
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={!canVerifyPublish || retrying}
+          onClick={verifyPublishResult}
+        >
+          {canVerifyPublish
+            ? retrying
+              ? "正在核验…"
+              : "重新核验结果"
+            : "从该步骤重试"}
         </button>
       </Card>
     </aside>

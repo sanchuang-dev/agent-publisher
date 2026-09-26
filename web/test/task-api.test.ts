@@ -311,6 +311,36 @@ test("auto-continue stops on durable failures and clarification boundaries", asy
   expect(shouldAutoContinueTask(clarificationTask)).toBe(false);
 });
 
+test("resolved approval and publishing states are safe auto-resume boundaries", async () => {
+  const resolvedApproval = projection({
+    status: "waiting_for_approval",
+    currentWorker: "publishing_secretary",
+    phase: "prepared_for_approval",
+    needsHuman: false,
+    humanAction: null,
+  });
+  const publishing = projection({
+    status: "publishing",
+    currentWorker: "publishing_secretary",
+    phase: "publish_authorized",
+    needsHuman: false,
+    humanAction: null,
+  });
+
+  for (const job of [resolvedApproval, publishing]) {
+    const repository = new ApiTaskRepository({
+      fetchImpl: vi.fn(async () => response({ job })) as unknown as typeof fetch,
+      storage: null,
+      eventSourceFactory: () => {
+        throw new Error("SSE not used in this test");
+      },
+    });
+
+    const task = await repository.get("job-real-1");
+    expect(shouldAutoContinueTask(task)).toBe(true);
+  }
+});
+
 test("waiting_for_login remains the one human-action state that is polled for resume", async () => {
   const repository = new ApiTaskRepository({
     fetchImpl: vi.fn(async () =>

@@ -64,6 +64,16 @@ export interface ApiJobProjection {
     readonly imageCount: number;
     readonly warningCodes: readonly string[];
   } | null;
+  readonly evidence?: readonly {
+    readonly kind:
+      | "result_url"
+      | "content_id"
+      | "confirmation_ref"
+      | "artifact_uri";
+    readonly uri: string | null;
+    readonly value: string | null;
+    readonly createdAt: string;
+  }[];
   readonly failure: {
     readonly step: string;
     readonly code: string | null;
@@ -140,8 +150,9 @@ function fixtureState(status: ApiJobStatus): TaskFixture["state"] {
       return "waiting_for_approval";
     case "succeeded":
       return "succeeded";
-    case "failed":
     case "publishing":
+      return "preparing_publish";
+    case "failed":
       return "failed";
   }
 }
@@ -159,7 +170,7 @@ function statusLabel(status: ApiJobStatus): string {
     case "waiting_for_approval":
       return "等待批准";
     case "publishing":
-      return "发布阶段已锁定";
+      return "正在发布";
     case "succeeded":
       return "已完成";
     case "failed":
@@ -174,6 +185,7 @@ function currentStepLabel(job: ApiJobProjection): string {
   if (job.status === "created") return "任务已创建，等待开始";
   if (job.status === "waiting_for_login") return "等待你完成扫码 / 2FA / 设备验证";
   if (job.status === "waiting_for_approval") return "发布表单已准备完成，等待最终签署";
+  if (job.status === "publishing") return "正在执行批准后的单次发布 / 结果验证";
   if (job.status === "failed") return "任务在安全边界内停止";
   if (job.status === "succeeded") return "任务已完成";
   return job.phase || "正在处理";
@@ -225,6 +237,11 @@ function boundedFailureMessage(code: string | null): string {
     PLATFORM_UPLOAD_FAILED: "平台报告素材上传失败。",
     PLATFORM_UPLOAD_TIMEOUT: "素材上传未在安全等待时间内完成。",
     ASSET_RESOLUTION_FAILED: "一个或多个受控素材当前无法读取。",
+    PUBLISH_APPROVAL_REQUIRED: "尚未写入有效的最终发布批准。",
+    PUBLISH_STATE_INVALID: "发布状态与持久化副作用记录不一致，需要检查。",
+    PUBLISH_UI_CHANGED: "小红书最终发布控件与当前确定性流程不一致。",
+    PUBLISH_FAILED: "小红书发布未被确认。",
+    PUBLISH_RESULT_UNKNOWN: "发布结果不确定；必须先核验，系统不会自动再次发布。",
   };
 
   return code
@@ -247,7 +264,12 @@ function mapJobProjection(
 ): TaskFixture {
   const clarificationRequired =
     job.humanAction?.type === "clarification_required";
-  const state = clarificationRequired ? "failed" : fixtureState(job.status);
+  const state =
+    clarificationRequired || job.failure
+      ? "failed"
+      : job.status === "waiting_for_approval" && !job.needsHuman
+        ? "preparing_publish"
+        : fixtureState(job.status);
   const agentRuntime =
     state === "preparing_publish"
       ? getLiveViewDescriptor(
@@ -293,12 +315,6 @@ function mapJobProjection(
           recovery:
             job.humanAction?.instruction ??
             "请检查当前页面状态，并按提示确认后再继续。",
-        }
-      : job.status === "publishing"
-      ? {
-          step: "最终发布",
-          reason: "任务已进入 F3-01 不拥有的最终发布阶段。",
-          recovery: "当前 Web 切片不会继续执行发布；请由 #53 所有的流程处理。",
         }
       : job.status === "failed"
         ? {
@@ -355,26 +371,45 @@ function mapJobProjection(
     ...(job.approval
       ? {
           approval: {
+            actionId: job.humanAction?.id ?? "",
             accountName: "当前登录会话",
             copySummary:
               "正文 " + job.approval.bodyLength + " 字 · 已由执行秘书回读校验",
             mediaSummary: job.approval.imageCount + " 张图片 · 已就绪",
             warnings: [
               ...job.approval.warningCodes.map(warningLabel),
-              "当前仅到审批前，最终发布尚未启用。",
+              "批准后将执行一次不可逆发布；结果不确定时只核验，不会自动再次发布。",
             ],
           },
+        }
+      : {}),
+    ...((job.evidence ?? []).length > 0
+      ? {
+          evidence: (job.evidence ?? []).map((item) => ({
+            label:
+              item.kind === "result_url"
+                ? "结果地址"
+                : item.kind === "content_id"
+                  ? "内容 ID"
+                  : item.kind === "artifact_uri"
+                    ? "页面证据"
+                    : "平台确认",
+            value: item.uri ?? item.value ?? item.createdAt,
+          })),
         }
       : {}),
     ...(job.failure
       ? {
           failure: {
+            ...(job.failure.code === null ? {} : { code: job.failure.code }),
             step: stepLabel(job.failure.step),
             reason: boundedFailureMessage(job.failure.code),
             recovery:
-              job.humanAction?.instruction ??
-              job.humanAction?.reason ??
-              "保留已提交状态，可检查当前任务后安全重试。",
+              job.failure.code === "PUBLISH_RESULT_UNKNOWN"
+                ? "只重新核验平台结果；不会自动再次点击发布。"
+                : job.humanAction?.instruction ??
+                  job.humanAction?.reason ??
+                  "保留已提交状态，可检查当前任务后安全重试。",
           },
         }
       : syntheticFailure
@@ -404,6 +439,10 @@ export function shouldAutoContinueTask(task: TaskFixture): boolean {
     return task.needsHuman;
   }
 
+  if (status === "waiting_for_approval" && !task.needsHuman) {
+    return true;
+  }
+
   if (task.needsHuman) {
     return false;
   }
@@ -411,7 +450,8 @@ export function shouldAutoContinueTask(task: TaskFixture): boolean {
   return (
     status === "created" ||
     status === "preparing_materials" ||
-    status === "preparing_publish"
+    status === "preparing_publish" ||
+    status === "publishing"
   );
 }
 
@@ -479,6 +519,24 @@ export class ApiTaskRepository implements TaskRepository {
     }>("/jobs/" + encodeURIComponent(jobId) + "/continue", {
       method: "POST",
     });
+    return mapJobProjection(payload.job, this.#brief(jobId));
+  }
+
+
+  async approve(jobId: string, actionId: string): Promise<TaskFixture> {
+    if (!actionId) {
+      throw new ApiTaskError(409, "当前任务缺少可用的发布审批记录。");
+    }
+
+    const payload = await this.#request<{ job: ApiJobProjection }>(
+      "/actions/" + encodeURIComponent(actionId) + "/resolve",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ approved: true }),
+      },
+    );
+
     return mapJobProjection(payload.job, this.#brief(jobId));
   }
 

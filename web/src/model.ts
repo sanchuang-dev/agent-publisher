@@ -64,13 +64,14 @@ export interface TaskFixture {
   browserLiveViewMode?: LiveViewMode;
   controlOwner?: ControlOwner;
   approval?: {
+    actionId: string;
     accountName: string;
     copySummary: string;
     mediaSummary: string;
     warnings: string[];
   };
   evidence?: Array<{ label: string; value: string }>;
-  failure?: { step: string; reason: string; recovery: string };
+  failure?: { code?: string; step: string; reason: string; recovery: string };
 }
 
 export type WorkSurfaceKind =
@@ -245,6 +246,7 @@ export function getTaskFixture(
     ...(state === "waiting_for_approval"
       ? {
           approval: {
+            actionId: "fixture-approval",
             accountName: "公司小红书",
             copySummary: "介绍委派、监督、人工接管与发布审批体验。",
             mediaSummary:
@@ -292,6 +294,7 @@ export interface TaskRepository {
   get(id: string): Promise<TaskFixture>;
   assign(input: TaskAssignmentInput): Promise<TaskFixture>;
   continue(id: string): Promise<TaskFixture>;
+  approve(id: string, actionId: string): Promise<TaskFixture>;
   subscribe(id: string, listener: (task: TaskFixture) => void): () => void;
 }
 
@@ -332,6 +335,10 @@ export class FixtureTaskRepository implements TaskRepository {
   }
 
   async continue(id: string): Promise<TaskFixture> {
+    return this.get(id);
+  }
+
+  async approve(id: string): Promise<TaskFixture> {
     return this.get(id);
   }
 

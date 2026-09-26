@@ -10,6 +10,7 @@ import type {
   PublishingSecretaryPort,
 } from "../agent/publishing-secretary-contract.js";
 import {
+  getCheckpointActionRequestId,
   JobNotFoundError,
   type ActionRequestRepository,
   type Job,
@@ -24,6 +25,7 @@ import type {
   XiaohongshuPrepareForApprovalResult,
   XiaohongshuPrepareService,
 } from "../platforms/xiaohongshu/prepare-service.js";
+import type { XiaohongshuPublishService } from "../platforms/xiaohongshu/publish-service.js";
 import { JobProjectionEventBus } from "./job-events.js";
 import {
   JobProjectionService,
@@ -44,6 +46,10 @@ type LoginServicePort = Pick<
   "ensureLogin" | "enterPreparedHumanTakeover"
 >;
 type PrepareServicePort = Pick<XiaohongshuPrepareService, "prepareForApproval">;
+type PublishServicePort = Pick<
+  XiaohongshuPublishService,
+  "authorizeAfterApproval" | "publishAfterApproval"
+>;
 
 const BROWSER_ACQUIRE_STEP_KEY = "acquire_browser";
 
@@ -106,6 +112,7 @@ export interface XiaohongshuPrepublishOrchestratorDependencies {
   readonly publishingSecretary?: PublishingSecretaryPort;
   readonly login: LoginServicePort;
   readonly prepare: PrepareServicePort;
+  readonly publish: PublishServicePort;
   readonly materialSource: PrepublishMaterialSource;
   readonly projections: JobProjectionService;
   readonly events: JobProjectionEventBus;
@@ -140,6 +147,15 @@ export class PrepublishJobBusyError extends Error {
   constructor(readonly jobId: string) {
     super(`A pre-publish run is already active for job ${jobId}.`);
     this.name = "PrepublishJobBusyError";
+  }
+}
+
+export class PrepublishApprovalActionError extends Error {
+  readonly code = "APPROVAL_ACTION_INVALID" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "PrepublishApprovalActionError";
   }
 }
 
@@ -199,6 +215,16 @@ function safeErrorMessage(error: unknown): string {
       "One or more controlled material assets could not be resolved.",
     JOB_ALREADY_RUNNING:
       "This job is already being continued by another request.",
+    PUBLISH_APPROVAL_REQUIRED:
+      "A durable affirmative publish approval is required.",
+    PUBLISH_STATE_INVALID:
+      "The durable publish state is inconsistent and requires inspection.",
+    PUBLISH_UI_CHANGED:
+      "The Xiaohongshu publish control no longer matches the supported deterministic flow.",
+    PUBLISH_FAILED:
+      "Xiaohongshu publication was not confirmed.",
+    PUBLISH_RESULT_UNKNOWN:
+      "The publication result is uncertain; verification is required before any further mutation.",
   };
 
   return (
@@ -288,6 +314,7 @@ export class XiaohongshuPrepublishOrchestrator {
   readonly #publishingSecretary: PublishingSecretaryPort | undefined;
   readonly #login: LoginServicePort;
   readonly #prepare: PrepareServicePort;
+  readonly #publishService: PublishServicePort;
   readonly #materialSource: PrepublishMaterialSource;
   readonly #projections: JobProjectionService;
   readonly #events: JobProjectionEventBus;
@@ -302,6 +329,7 @@ export class XiaohongshuPrepublishOrchestrator {
     this.#publishingSecretary = dependencies.publishingSecretary;
     this.#login = dependencies.login;
     this.#prepare = dependencies.prepare;
+    this.#publishService = dependencies.publish;
     this.#materialSource = dependencies.materialSource;
     this.#projections = dependencies.projections;
     this.#events = dependencies.events;
@@ -333,6 +361,48 @@ export class XiaohongshuPrepublishOrchestrator {
     return this.#projections.get(jobId);
   }
 
+
+  resolveApproval(
+    actionRequestId: string,
+    approved: boolean,
+  ): JobProjection {
+    const action = this.#actionRequests.getById(actionRequestId);
+    if (!action) {
+      throw new PrepublishApprovalActionError(
+        "The requested approval action does not exist.",
+      );
+    }
+    if (action.type !== "approval_required" || action.status !== "open") {
+      throw new PrepublishApprovalActionError(
+        "Only the current open approval_required action can be resolved here.",
+      );
+    }
+
+    const job = this.#jobs.getById(action.jobId);
+    if (!job) {
+      throw new JobNotFoundError(action.jobId);
+    }
+    if (
+      job.status !== "waiting_for_approval" ||
+      !job.checkpoint ||
+      getCheckpointActionRequestId(job.checkpoint) !== action.id
+    ) {
+      throw new PrepublishApprovalActionError(
+        "The approval action is not bound to the Job's current prepared checkpoint.",
+      );
+    }
+
+    if (!approved) {
+      throw new PrepublishApprovalActionError(
+        "PUB-02 accepts only affirmative publish approval.",
+      );
+    }
+
+    this.#actionRequests.resolve(action.id, { approved: true });
+    this.#publishService.authorizeAfterApproval(job.id);
+    return this.#publish(job.id);
+  }
+
   async continueJob(jobId: string): Promise<ContinuePrepublishResult> {
     if (this.#activeJobs.has(jobId)) {
       throw new PrepublishJobBusyError(jobId);
@@ -348,20 +418,12 @@ export class XiaohongshuPrepublishOrchestrator {
     try {
       let job = initial;
 
-      if (
-        job.status === "waiting_for_approval" ||
-        job.status === "failed" ||
-        job.status === "succeeded"
-      ) {
+      if (job.status === "failed" || job.status === "succeeded") {
         return {
           projection: this.#publish(jobId),
           blocked: job.status !== "succeeded",
           error: null,
         };
-      }
-
-      if (job.status === "publishing") {
-        throw new UnsupportedPrepublishStateError(jobId, job.status);
       }
 
       const currentAction = this.#actionRequests.getCurrentOpenForJob(jobId);
@@ -377,6 +439,60 @@ export class XiaohongshuPrepublishOrchestrator {
           blocked: true,
           error: null,
         };
+      }
+
+
+      if (
+        job.status === "waiting_for_approval" ||
+        job.status === "publishing"
+      ) {
+        let session: BrowserSession | null = null;
+
+        try {
+          if (job.status === "waiting_for_approval") {
+            this.#publishService.authorizeAfterApproval(jobId);
+            job = this.#jobs.getById(jobId)!;
+            this.#publish(jobId);
+          }
+
+          try {
+            session = await this.#browserProvider.acquire({});
+          } catch (error) {
+            throw new PrepublishBrowserUnavailableError({ cause: error });
+          }
+
+          await this.#publishService.publishAfterApproval({
+            jobId,
+            session,
+          });
+
+          const projection = this.#publish(jobId);
+          return {
+            projection,
+            blocked: projection.status !== "succeeded",
+            error: null,
+          };
+        } catch (error) {
+          return {
+            projection: this.#publish(jobId),
+            blocked: true,
+            error: {
+              code: errorCode(error),
+              message: safeErrorMessage(error),
+            },
+          };
+        } finally {
+          if (session) {
+            try {
+              await this.#browserProvider.release(session.id);
+            } catch {
+              process.emitWarning(
+                "Browser session cleanup failed after PUB-02 state was committed.",
+                { code: "PUB_BROWSER_RELEASE_FAILED" },
+              );
+            }
+          }
+        }
       }
 
       if (

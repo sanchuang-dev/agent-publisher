@@ -1,5 +1,6 @@
 import type { FastifyServerOptions } from "fastify";
 
+import { createActionRoutes } from "../api/routes/actions.js";
 import { createJobEventRoutes } from "../api/routes/job-events.js";
 import { createJobRoutes } from "../api/routes/jobs.js";
 import { SseConnectionRegistry } from "../api/sse.js";
@@ -17,8 +18,14 @@ import {
   XiaohongshuPrepareService,
   type XiaohongshuPrepareServiceDependencies,
 } from "../platforms/xiaohongshu/prepare-service.js";
+import {
+  XiaohongshuPublishService,
+  type XiaohongshuPublishServiceDependencies,
+} from "../platforms/xiaohongshu/publish-service.js";
 import { ActionRequestRepository } from "../storage/action-request-repository.js";
 import { openDatabase } from "../storage/db.js";
+import { EvidenceRepository } from "../storage/evidence-repository.js";
+import { ExternalActionRepository } from "../storage/external-action-repository.js";
 import { JobRepository } from "../storage/job-repository.js";
 import {
   createApplication,
@@ -44,12 +51,16 @@ export interface CreateMvpPrepublishApplicationOptions {
     readonly inspectEntry?: XiaohongshuLoginServiceDependencies["inspectEntry"];
     readonly preparePage?: XiaohongshuPrepareServiceDependencies["preparePage"];
     readonly verifyPreparedPage?: XiaohongshuPrepareServiceDependencies["verifyPreparedPage"];
+    readonly publishPage?: XiaohongshuPublishServiceDependencies["publishPage"];
+    readonly verifyPublishResult?: XiaohongshuPublishServiceDependencies["verifyResult"];
   };
 }
 
 export interface MvpPrepublishRuntime {
   readonly jobs: JobRepository;
   readonly actionRequests: ActionRequestRepository;
+  readonly externalActions: ExternalActionRepository;
+  readonly evidence: EvidenceRepository;
   readonly projections: JobProjectionService;
   readonly events: JobProjectionEventBus;
   readonly orchestrator: XiaohongshuPrepublishOrchestrator;
@@ -69,6 +80,8 @@ export function createMvpPrepublishApplication(
   );
   const jobs = new JobRepository(db);
   const actionRequests = new ActionRequestRepository(db);
+  const externalActions = new ExternalActionRepository(db);
+  const evidence = new EvidenceRepository(db);
   const runInTransaction = <T>(work: () => T): T => db.transaction(work)();
   const jobControl = new JobControlService({
     jobs,
@@ -105,10 +118,25 @@ export function createMvpPrepublishApplication(
       : { verifyPreparedPage: options.xiaohongshu.verifyPreparedPage }),
   });
 
+  const publish = new XiaohongshuPublishService({
+    jobs,
+    actionRequests,
+    jobControl,
+    externalActions,
+    evidence,
+    ...(options.xiaohongshu?.publishPage === undefined
+      ? {}
+      : { publishPage: options.xiaohongshu.publishPage }),
+    ...(options.xiaohongshu?.verifyPublishResult === undefined
+      ? {}
+      : { verifyResult: options.xiaohongshu.verifyPublishResult }),
+  });
+
   const events = new JobProjectionEventBus();
   const projections = new JobProjectionService({
     jobs,
     actionRequests,
+    evidence,
     ...(options.browserLiveViewUrl === undefined
       ? {}
       : { browserLiveViewUrl: options.browserLiveViewUrl }),
@@ -122,6 +150,7 @@ export function createMvpPrepublishApplication(
       : { publishingSecretary: options.publishingSecretary }),
     login,
     prepare,
+    publish,
     materialSource: options.materialSource,
     projections,
     events,
@@ -132,6 +161,7 @@ export function createMvpPrepublishApplication(
     dependencies: { sseConnections },
     routeModules: {
       jobs: createJobRoutes(orchestrator),
+      actions: createActionRoutes(orchestrator),
       events: createJobEventRoutes({
         events,
         projections,
@@ -155,6 +185,8 @@ export function createMvpPrepublishApplication(
     runtime: {
       jobs,
       actionRequests,
+      externalActions,
+      evidence,
       projections,
       events,
       orchestrator,

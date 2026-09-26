@@ -41,9 +41,13 @@ class FakeBrowserProvider implements BrowserProvider {
 
   acquireCalls = 0;
   releaseCalls = 0;
+  failAcquire = false;
 
   async acquire(): Promise<BrowserSession> {
     this.acquireCalls += 1;
+    if (this.failAcquire) {
+      throw new Error("fixture browser unavailable");
+    }
     return this.session;
   }
 
@@ -114,6 +118,15 @@ function createTestApplication(input: {
         bodyLength: prepared.bodyLength,
         tags: prepared.tags,
         imageCount: prepared.imageCount,
+      }),
+      publishPage: async ({ onMutationStarted }) => {
+        await onMutationStarted?.();
+      },
+      verifyPublishResult: async () => ({
+        kind: "published",
+        resultUrl: "https://www.xiaohongshu.com/explore/app02pub123",
+        contentId: "app02pub123",
+        confirmationRef: "xhs-result-page",
       }),
     },
   });
@@ -660,6 +673,89 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
     }
   });
 
+  test("resolved approval survives browser acquisition failure and resumes without re-approval", async () => {
+    const temp = makeTempDatabase();
+    cleanupRoots.push(temp.root);
+    const browser = new FakeBrowserProvider();
+    const state: { value: XiaohongshuEntryState } = {
+      value: { kind: "authenticated" },
+    };
+    const application = createTestApplication({
+      databasePath: temp.path,
+      browser,
+      state,
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "approval must survive temporary browser loss",
+      });
+
+      const prepared = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(prepared.projection.status).toBe("waiting_for_approval");
+      const approvalId = prepared.projection.humanAction?.id;
+      expect(approvalId).toBeTruthy();
+
+      const approved = application.runtime.orchestrator.resolveApproval(
+        approvalId!,
+        true,
+      );
+      expect(approved).toMatchObject({
+        status: "publishing",
+        needsHuman: false,
+      });
+      expect(
+        application.runtime.externalActions.getByKey(
+          created.id,
+          "publish:xiaohongshu:final",
+        ),
+      ).toMatchObject({
+        status: "prepared",
+      });
+
+      browser.failAcquire = true;
+      const blocked = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(blocked).toMatchObject({
+        blocked: true,
+        error: { code: "BROWSER_UNAVAILABLE" },
+        projection: {
+          status: "publishing",
+          needsHuman: false,
+        },
+      });
+      expect(
+        application.runtime.externalActions.getByKey(
+          created.id,
+          "publish:xiaohongshu:final",
+        )?.status,
+      ).toBe("prepared");
+      expect(application.runtime.evidence.getByJob(created.id)).toEqual([]);
+
+      browser.failAcquire = false;
+      const resumed = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+      expect(resumed).toMatchObject({
+        blocked: false,
+        error: null,
+        projection: { status: "succeeded" },
+      });
+      expect(
+        application.runtime.externalActions.getByKey(
+          created.id,
+          "publish:xiaohongshu:final",
+        )?.status,
+      ).toBe("succeeded");
+      expect(application.runtime.evidence.getByJob(created.id)).toHaveLength(3);
+    } finally {
+      await application.stop();
+    }
+  });
+
   test("browser acquisition failure is durable and remains visible after reread", async () => {
     const temp = makeTempDatabase();
     cleanupRoots.push(temp.root);
@@ -719,7 +815,7 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
     }
   });
 
-  test("API rejects unsupported modes and exposes no final-publish route", async () => {
+  test("API rejects unsupported modes, exposes no direct publish route, and binds approval to continue", async () => {
     const temp = makeTempDatabase();
     cleanupRoots.push(temp.root);
     const browser = new FakeBrowserProvider();
@@ -778,6 +874,46 @@ describe("APP-02 real Job API and Xiaohongshu pre-publish orchestration", () => 
       expect(application.runtime.jobs.getById(jobId)?.status).not.toBe(
         "publishing",
       );
+
+      const approvalActionId = run.json().job.humanAction.id as string;
+      const negativeResolve = await application.server.inject({
+        method: "POST",
+        url: "/api/actions/" + approvalActionId + "/resolve",
+        payload: { approved: false },
+      });
+      expect(negativeResolve.statusCode).toBe(400);
+      expect(
+        application.runtime.actionRequests.getById(approvalActionId)?.status,
+      ).toBe("open");
+
+      const resolve = await application.server.inject({
+        method: "POST",
+        url: "/api/actions/" + approvalActionId + "/resolve",
+        payload: { approved: true },
+      });
+      expect(resolve.statusCode).toBe(200);
+      expect(resolve.json().job).toMatchObject({
+        status: "publishing",
+        needsHuman: false,
+      });
+
+      const publishOnce = await application.server.inject({
+        method: "POST",
+        url: "/api/jobs/" + jobId + "/continue",
+      });
+      expect(publishOnce.statusCode).toBe(200);
+      expect(publishOnce.json().job).toMatchObject({
+        status: "succeeded",
+        needsHuman: false,
+      });
+      expect(publishOnce.json().job.evidence).toHaveLength(3);
+      expect(
+        application.runtime.externalActions.getByKey(
+          jobId,
+          "publish:xiaohongshu:final",
+        )?.status,
+      ).toBe("succeeded");
+      expect(application.runtime.evidence.getByJob(jobId)).toHaveLength(3);
     } finally {
       await application.stop();
     }
