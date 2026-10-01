@@ -37,8 +37,8 @@ const publisherSafetySkillPath = fileURLToPath(
   new URL("../../skills/publisher-safety/SKILL.md", import.meta.url),
 );
 
-const playwrightMcpCliPath = fileURLToPath(
-  new URL("../../node_modules/@playwright/mcp/cli.js", import.meta.url),
+const publishingBrowserMcpServerPath = fileURLToPath(
+  new URL("../../scripts/publishing-browser-mcp-server.mjs", import.meta.url),
 );
 
 const publishingBrowserGrantBrand = Symbol("publishing-browser-grant");
@@ -85,6 +85,7 @@ export interface PublishingBrowserCapabilityGrant {
   readonly browserSession: BrowserSession;
   readonly browserSessionId: string;
   readonly cdpEndpoint: string;
+  readonly pageRef: string;
   readonly allowedOrigins: readonly string[];
   readonly uploadRoot: string;
   readonly authorizeClick: PublishingBrowserClickAuthorizer;
@@ -93,6 +94,7 @@ export interface PublishingBrowserCapabilityGrant {
 interface NormalizedPublishingBrowserGrant
   extends PublishingBrowserCapabilityGrant {
   readonly cdpEndpoint: string;
+  readonly pageRef: string;
   readonly allowedOrigins: readonly string[];
   readonly uploadRoot: string;
 }
@@ -191,6 +193,7 @@ function normalizeGrant(
     jobId,
     browserSessionId,
     cdpEndpoint: normalizeCdpEndpoint(grant.cdpEndpoint),
+    pageRef: required(grant.pageRef, "Publishing browser page ref"),
     allowedOrigins,
     uploadRoot: resolve(
       required(grant.uploadRoot, "Publishing browser upload root"),
@@ -220,6 +223,7 @@ export async function issuePublishingBrowserCapabilityGrant(
     browserSession: input.browserSession,
     browserSessionId: input.browserSession.id,
     cdpEndpoint: attachment.cdpEndpoint,
+    pageRef: attachment.pageRef,
     allowedOrigins: input.allowedOrigins,
     uploadRoot: input.uploadRoot,
     authorizeClick: input.authorizeClick,
@@ -244,6 +248,11 @@ async function assertActiveProviderAttachment(
   ) {
     throw new Error(
       "Publisher browser grant no longer matches the BrowserProvider-owned automation endpoint",
+    );
+  }
+  if (attachment.pageRef !== grant.pageRef) {
+    throw new Error(
+      "Publisher browser grant no longer matches the BrowserProvider-owned page",
     );
   }
 }
@@ -331,12 +340,9 @@ export function createPublishingBrowserMcpProfile(
           kind: "stdio",
           command: process.execPath,
           args: [
-            playwrightMcpCliPath,
+            publishingBrowserMcpServerPath,
             `--cdp-endpoint=${grant.cdpEndpoint}`,
-            "--block-service-workers",
-            "--codegen=none",
-            "--image-responses=omit",
-            "--no-webmcp",
+            `--page-ref=${grant.pageRef}`,
           ],
           // Playwright MCP restricts file access to cwd/workspace roots unless
           // explicitly configured otherwise. Publisher additionally verifies
@@ -367,10 +373,13 @@ function currentAllowedPageUrl(
     throw new Error("Publisher browser session page is closed");
   }
 
-  const activePages = page.context().pages().filter((candidate) => !candidate.isClosed());
-  if (activePages.length !== 1 || activePages[0] !== page) {
+  const activePages = page
+    .context()
+    .pages()
+    .filter((candidate) => !candidate.isClosed());
+  if (!activePages.includes(page)) {
     throw new Error(
-      "Publisher browser grant no longer owns the single active browser page",
+      "Publisher browser grant no longer owns its Job-bound browser page",
     );
   }
 

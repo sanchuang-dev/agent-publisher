@@ -24,7 +24,7 @@ if (process.env.XHS_REAL_ACCOUNT_SMOKE !== "1") {
 }
 
 const provider = new DockerCdpBrowserProvider();
-const session = await provider.acquire({});
+const session = await provider.acquire({ jobId: "xiaohongshu-login-smoke" });
 
 try {
   const currentUrl = session.page.url();

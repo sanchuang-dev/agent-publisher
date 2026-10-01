@@ -20,11 +20,11 @@ async function main(): Promise<void> {
   console.log("[session-constraint-smoke] health=reachable");
 
   // Phase 1: acquire a session then attempt a concurrent second acquire.
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "session-constraint-smoke" });
   console.log(`[session-constraint-smoke] first-session id=${first.id}`);
 
   try {
-    await provider.acquire({});
+    await provider.acquire({ jobId: "session-constraint-smoke" });
     throw new Error(
       "Expected second acquire to throw but it succeeded — single-session constraint is missing",
     );
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   await provider.release(first.id);
   console.log("[session-constraint-smoke] first-session released");
 
-  const second = await provider.acquire({});
+  const second = await provider.acquire({ jobId: "session-constraint-smoke" });
   console.log(`[session-constraint-smoke] second-session id=${second.id}`);
   await provider.release(second.id);
   console.log(

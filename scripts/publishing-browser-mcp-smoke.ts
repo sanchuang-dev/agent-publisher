@@ -178,7 +178,7 @@ async function main(): Promise<void> {
     });
     modelRuntime.registerNativeProvider(faux.provider);
 
-    browserSession = await browserProvider.acquire({});
+    browserSession = await browserProvider.acquire({ jobId: "publishing-browser-mcp-smoke" });
     const grant = await issuePublishingBrowserCapabilityGrant({
       jobId: "brw01-docker-smoke",
       browserProvider,

@@ -7,11 +7,36 @@ import {
   DockerCdpBrowserProvider,
 } from "../src/browser/providers/docker-cdp.js";
 
-function pageStub(options: { closed?: boolean; onClose?: () => void } = {}): Page {
+function pageStub(options: {
+  closed?: boolean;
+  onClose?: () => void;
+  onBringToFront?: () => void;
+  initialUrl?: string;
+} = {}): Page {
+  let closed = options.closed ?? false;
+  let windowName = "";
+  let url = options.initialUrl ?? "about:blank";
+
   return {
-    isClosed: () => options.closed ?? false,
+    isClosed: () => closed,
     close: async () => {
+      closed = true;
       options.onClose?.();
+    },
+    bringToFront: async () => {
+      options.onBringToFront?.();
+    },
+    evaluate: async (_pageFunction: unknown, arg?: unknown) => {
+      if (typeof arg === "string") {
+        windowName = arg;
+        return undefined;
+      }
+      return windowName;
+    },
+    url: () => url,
+    goto: async (nextUrl: string) => {
+      url = nextUrl;
+      return null;
     },
   } as unknown as Page;
 }
@@ -28,6 +53,9 @@ function contextStub(options: {
     pages: () => pages,
     newPage: async () => {
       options.onNewPage?.();
+      if (!pages.includes(newPage)) {
+        pages.push(newPage);
+      }
       return newPage;
     },
   } as unknown as BrowserContext;
@@ -203,20 +231,23 @@ test("health reports unavailable when Playwright cannot attach", async () => {
   });
 });
 
-test("acquire reuses an existing usable page and release disconnects the Playwright CDP attachment", async () => {
-  let pageCloseCalls = 0;
+test("a new Job ignores unbound existing pages and gets a fresh task page", async () => {
+  let existingPageCloseCalls = 0;
   let newPageCalls = 0;
   let browserCloseCalls = 0;
 
   const existingPage = pageStub({
+    initialUrl: "https://creator.xiaohongshu.com/login",
     onClose: () => {
-      pageCloseCalls += 1;
+      existingPageCloseCalls += 1;
     },
   });
+  const createdPage = pageStub();
   const browser = browserStub({
     contexts: [
       contextStub({
         pages: [existingPage],
+        newPage: createdPage,
         onNewPage: () => {
           newPageCalls += 1;
         },
@@ -228,16 +259,58 @@ test("acquire reuses an existing usable page and release disconnects the Playwri
   });
 
   const provider = providerWithConnection({ browsers: [browser] });
-  const session = await provider.acquire({});
+  const session = await provider.acquire({ jobId: "job-new" });
 
-  expect(session.page).toBe(existingPage);
+  expect(session.page).toBe(createdPage);
+  expect(session.page.url()).toBe("about:blank");
   expect(session.profileRef).toBe("browser-profile");
-  expect(newPageCalls).toBe(0);
+  expect(newPageCalls).toBe(1);
 
   await provider.release(session.id);
 
   expect(browserCloseCalls).toBe(1);
-  expect(pageCloseCalls).toBe(0);
+  expect(existingPageCloseCalls).toBe(0);
+});
+
+test("sequential Jobs isolate task pages while same-Job reacquire restores its own page", async () => {
+  const sharedPages: Page[] = [pageStub()];
+  const jobAPage = pageStub();
+  const jobBPage = pageStub();
+
+  const provider = providerWithConnection({
+    browsers: [
+      browserStub({
+        contexts: [contextStub({ pages: sharedPages, newPage: jobAPage })],
+      }),
+      browserStub({
+        contexts: [contextStub({ pages: sharedPages, newPage: jobBPage })],
+      }),
+      browserStub({
+        contexts: [contextStub({ pages: sharedPages })],
+      }),
+    ],
+  });
+
+  const firstA = await provider.acquire({ jobId: "job-a" });
+  expect(firstA.page).toBe(jobAPage);
+  await firstA.page.goto("https://creator.xiaohongshu.com/login");
+  await provider.release(firstA.id);
+
+  const firstB = await provider.acquire({ jobId: "job-b" });
+  expect(firstB.page).toBe(jobBPage);
+  expect(firstB.page).not.toBe(firstA.page);
+  expect(firstB.page.url()).toBe("about:blank");
+  expect(firstB.profileRef).toBe(firstA.profileRef);
+  await firstB.page.goto("https://creator.xiaohongshu.com/publish");
+  await provider.release(firstB.id);
+
+  const resumedA = await provider.acquire({ jobId: "job-a" });
+  expect(resumedA.page).toBe(jobAPage);
+  expect(resumedA.page.url()).toBe(
+    "https://creator.xiaohongshu.com/login",
+  );
+  expect(resumedA.profileRef).toBe(firstA.profileRef);
+  await provider.release(resumedA.id);
 });
 
 test("automation attachment is minted only for the active session owned by this provider", async () => {
@@ -245,7 +318,7 @@ test("automation attachment is minted only for the active session owned by this 
     resolveEndpoint: async () =>
       "ws://172.18.0.2:9222/devtools/browser/owned-session",
   });
-  const session = await provider.acquire({});
+  const session = await provider.acquire({ jobId: "job-browser-test" });
 
   await expect(
     provider.resolveAutomationAttachment(session.id),
@@ -282,7 +355,7 @@ test("acquire creates a page when the existing browser context has no usable pag
   });
 
   const provider = providerWithConnection({ browsers: [browser] });
-  const session = await provider.acquire({});
+  const session = await provider.acquire({ jobId: "job-browser-test" });
 
   expect(session.page).toBe(createdPage);
   expect(newPageCalls).toBe(1);
@@ -311,10 +384,10 @@ test("release permits a later acquire to establish a fresh Playwright CDP attach
     ],
   });
 
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(first.id);
 
-  const second = await provider.acquire({});
+  const second = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(second.id);
 
   expect(firstCloseCalls).toBe(1);
@@ -342,13 +415,13 @@ test("failed acquire releases the single-session reservation and closes its CDP 
     ],
   });
 
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser runtime is reachable but has no browser context/,
   );
 
   expect(firstCloseCalls).toBe(1);
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 
   expect(secondCloseCalls).toBe(1);
@@ -366,9 +439,9 @@ test("concurrent second acquire is rejected while the first acquire is still con
     connectOverCDP: async () => connectGate,
   });
 
-  const firstAcquire = provider.acquire({});
+  const firstAcquire = provider.acquire({ jobId: "job-browser-test" });
 
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
@@ -384,9 +457,9 @@ test("concurrent second acquire is rejected while the first acquire is still con
 
 test("second acquire is rejected while an established session remains active", async () => {
   const provider = providerWithConnection();
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "job-browser-test" });
 
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
@@ -410,12 +483,12 @@ test("unexpected browser disconnect clears the active session so reconnect can a
     ],
   });
 
-  await provider.acquire({});
+  await provider.acquire({ jobId: "job-browser-test" });
   expect(disconnectFirstBrowser).toBeTypeOf("function");
 
   disconnectFirstBrowser?.();
 
-  const reconnected = await provider.acquire({});
+  const reconnected = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(reconnected.id);
 });
 
@@ -444,9 +517,9 @@ test("single-session lease spans provider instances without transferring release
     ],
   });
 
-  const first = await firstProvider.acquire({});
+  const first = await firstProvider.acquire({ jobId: "job-browser-test" });
 
-  await expect(secondProvider.acquire({})).rejects.toThrow(
+  await expect(secondProvider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
@@ -458,7 +531,7 @@ test("single-session lease spans provider instances without transferring release
   await firstProvider.release(first.id);
   expect(firstCloseCalls).toBe(1);
 
-  const second = await secondProvider.acquire({});
+  const second = await secondProvider.acquire({ jobId: "job-browser-test" });
   await secondProvider.release(second.id);
   expect(secondCloseCalls).toBe(1);
 });
@@ -484,22 +557,22 @@ test("unknown and stale release ids do not disturb the active lease", async () =
     ],
   });
 
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "job-browser-test" });
 
   await provider.release("unknown-session");
   expect(firstCloseCalls).toBe(0);
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
   await provider.release(first.id);
   expect(firstCloseCalls).toBe(1);
 
-  const second = await provider.acquire({});
+  const second = await provider.acquire({ jobId: "job-browser-test" });
 
   await provider.release(first.id);
   expect(secondCloseCalls).toBe(0);
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
@@ -520,10 +593,10 @@ test("release clears the process-wide lease even when Playwright disconnect fail
     browsers: [failingBrowser, recoveredBrowser],
   });
 
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "job-browser-test" });
   await expect(provider.release(first.id)).rejects.toThrow("disconnect failed");
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 });
 
@@ -552,19 +625,19 @@ test("release keeps the single-session lease until Playwright transport teardown
     ],
   });
 
-  const first = await provider.acquire({});
+  const first = await provider.acquire({ jobId: "job-browser-test" });
   const releasePromise = provider.release(first.id);
 
   await Promise.resolve();
   expect(closeCalls).toBe(1);
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
   finishClose?.();
   await releasePromise;
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 });
 
@@ -605,12 +678,12 @@ test("disconnect during acquisition releases the reservation instead of returnin
     },
   });
 
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session disconnected during acquisition/,
   );
   expect(firstCloseCalls).toBe(1);
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 });
 
@@ -639,20 +712,20 @@ test("concurrent release calls share one teardown and keep the lease until it fi
     ],
   });
 
-  const session = await provider.acquire({});
+  const session = await provider.acquire({ jobId: "job-browser-test" });
   const firstRelease = provider.release(session.id);
   const secondRelease = provider.release(session.id);
 
   await Promise.resolve();
   expect(closeCalls).toBe(1);
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /Browser session already active/,
   );
 
   finishClose?.();
   await Promise.all([firstRelease, secondRelease]);
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 });
 
@@ -669,10 +742,10 @@ test("failed acquire still releases the reservation when Playwright cleanup also
     ],
   });
 
-  await expect(provider.acquire({})).rejects.toThrow(
+  await expect(provider.acquire({ jobId: "job-browser-test" })).rejects.toThrow(
     /acquisition failed and the app-side CDP connection could not be released/,
   );
 
-  const recovered = await provider.acquire({});
+  const recovered = await provider.acquire({ jobId: "job-browser-test" });
   await provider.release(recovered.id);
 });

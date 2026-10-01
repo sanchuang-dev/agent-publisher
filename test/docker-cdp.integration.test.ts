@@ -186,8 +186,8 @@ test(
         connectTimeoutMs: 5_000,
       });
 
-      const first = await provider.acquire({});
-      await expect(provider.acquire({})).rejects.toThrow(
+      const first = await provider.acquire({ jobId: "job-cdp-test" });
+      await expect(provider.acquire({ jobId: "job-cdp-test" })).rejects.toThrow(
         /Browser session already active/,
       );
       await first.page.goto(
@@ -202,9 +202,18 @@ test(
       expect(chromiumProcess.exitCode).toBeNull();
       expect(chromiumProcess.signalCode).toBeNull();
 
-      const second = await provider.acquire({});
-      expect(second.page.isClosed()).toBe(false);
-      await provider.release(second.id);
+      const resumed = await provider.acquire({ jobId: "job-cdp-test" });
+      expect(resumed.page.isClosed()).toBe(false);
+      await expect(resumed.page.title()).resolves.toBe(
+        "provider-integration",
+      );
+      await provider.release(resumed.id);
+
+      const isolated = await provider.acquire({ jobId: "job-cdp-other" });
+      expect(isolated.page.isClosed()).toBe(false);
+      expect(isolated.page.url()).toBe("about:blank");
+      expect(isolated.profileRef).toBe(resumed.profileRef);
+      await provider.release(isolated.id);
 
       expect(chromiumProcess.exitCode).toBeNull();
       expect(chromiumProcess.signalCode).toBeNull();
@@ -352,7 +361,7 @@ test(
         connectTimeoutMs: 5_000,
       });
 
-      const first = await firstProvider.acquire({});
+      const first = await firstProvider.acquire({ jobId: "job-profile-a" });
       await first.page.goto(origin);
       const cookieStoreBefore = new Map(
         cookieStorePaths(profilePath).map((path) => [path, fileSignature(path)]),
@@ -389,7 +398,7 @@ test(
         connectTimeoutMs: 5_000,
       });
 
-      const second = await secondProvider.acquire({});
+      const second = await secondProvider.acquire({ jobId: "job-profile-b" });
       await second.page.goto(origin);
       await expect(
         second.page.context().cookies(origin),
