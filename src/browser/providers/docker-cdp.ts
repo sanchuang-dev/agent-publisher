@@ -98,7 +98,10 @@ export class DockerCdpBrowserProvider
   readonly #profileRef: string;
   readonly #resolveEndpoint: ResolveCdpEndpoint;
   readonly #connectOverCDP: ConnectOverCdp;
-  readonly #connections = new Map<string, Browser>();
+  readonly #connections = new Map<
+    string,
+    { readonly browser: Browser; readonly pageRef: string }
+  >();
   readonly #releasePromises = new Map<string, Promise<void>>();
   readonly #releasingSessionIds = new Set<string>();
 
@@ -185,7 +188,10 @@ export class DockerCdpBrowserProvider
         throw new Error("Browser session disconnected during acquisition");
       }
 
-      this.#connections.set(id, browser);
+      this.#connections.set(id, {
+        browser,
+        pageRef: marker,
+      });
 
       return {
         id,
@@ -228,8 +234,10 @@ export class DockerCdpBrowserProvider
     readonly sessionId: string;
     readonly cdpEndpoint: string;
   }> {
-    const browser = this.#connections.get(sessionId);
+    const connection = this.#connections.get(sessionId);
+    const browser = connection?.browser;
     if (
+      !connection ||
       !browser ||
       !browser.isConnected() ||
       DockerCdpBrowserProvider.#activeSessionId !== sessionId ||
@@ -246,6 +254,7 @@ export class DockerCdpBrowserProvider
         this.#endpoint,
         this.#connectTimeoutMs,
       ),
+      pageRef: connection.pageRef,
     };
   }
 
@@ -256,7 +265,8 @@ export class DockerCdpBrowserProvider
       return;
     }
 
-    const browser = this.#connections.get(sessionId);
+    const connection = this.#connections.get(sessionId);
+    const browser = connection?.browser;
     if (!browser) {
       if (DockerCdpBrowserProvider.#activeSessionId === sessionId) {
         throw new Error(
