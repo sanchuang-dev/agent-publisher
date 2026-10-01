@@ -186,6 +186,11 @@ export async function createPublisherAiRuntime(
           compat: {
             supportsDeveloperRole: false,
             supportsReasoningEffort: false,
+            // Publisher accepts arbitrary OpenAI-compatible gateways. Pi
+            // 0.85.1 otherwise assumes unknown endpoints support strict tool
+            // schemas, which can break MCP/function-tool requests even when
+            // ordinary text completions work.
+            supportsStrictMode: false,
           },
         },
       ],
