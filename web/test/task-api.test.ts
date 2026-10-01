@@ -334,6 +334,38 @@ test("Publishing Secretary runtime failure is specific, durable-looking, and sto
   expect(shouldAutoContinueTask(task)).toBe(false);
 });
 
+test("renders missing browser evidence as a specific Publishing Secretary failure", async () => {
+  const repository = new ApiTaskRepository({
+    fetchImpl: vi.fn(async () =>
+      response({
+        job: projection({
+          status: "preparing_publish",
+          currentWorker: "publishing_secretary",
+          currentStep: "publishing_secretary_runtime",
+          phase: "publishing_secretary_runtime_failed",
+          failure: {
+            step: "publishing_secretary_runtime",
+            code: "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED",
+            message:
+              "The Publishing Secretary returned without executing a controlled browser tool.",
+          },
+        }),
+      }),
+    ) as unknown as typeof fetch,
+    storage: null,
+    eventSourceFactory: () => {
+      throw new Error("SSE not used in this test");
+    },
+  });
+
+  const task = await repository.get("job-real-1");
+  expect(task.failure).toMatchObject({
+    step: "执行秘书运行失败",
+    reason: "执行秘书未执行任何受控浏览器动作，无法依据当前页面继续。",
+  });
+  expect(shouldAutoContinueTask(task)).toBe(false);
+});
+
 test("renders transitional AGT-08 upstream error aliases without losing diagnostic meaning", async () => {
   const repository = new ApiTaskRepository({
     fetchImpl: vi.fn(async () =>

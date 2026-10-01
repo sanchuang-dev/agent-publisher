@@ -282,6 +282,8 @@ function boundedFailureMessage(code: string | null): string {
     AGENT_SESSION_SHUTDOWN_FAILED: "执行秘书会话关闭失败。",
     AGENT_SESSION_DISPOSE_FAILED: "执行秘书会话清理失败。",
     PUBLISHING_SECRETARY_RUNTIME_FAILED: "执行秘书运行时在返回结果前停止。",
+    PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED:
+      "执行秘书未执行任何受控浏览器动作，无法依据当前页面继续。",
     PUBLISHING_UPSTREAM_AUTH_FAILED: "执行秘书的上游请求鉴权被拒绝。",
     PUBLISHING_UPSTREAM_RATE_LIMITED: "执行秘书的上游请求暂时被限流。",
     PUBLISHING_UPSTREAM_NOT_FOUND: "执行秘书的上游接口或资源不存在。",

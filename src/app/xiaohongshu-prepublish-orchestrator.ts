@@ -131,6 +131,25 @@ function boundedPublishingRuntimeDiagnostic(
   const causeKind = boundedCauseKind(error);
   const upstreamStatus = boundedUpstreamStatus(error);
 
+  const boundedCode =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { readonly code?: unknown }).code === "string"
+      ? (error as { readonly code: string }).code
+      : null;
+
+  if (boundedCode === "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED") {
+    return {
+      stage: "session_run",
+      code: boundedCode,
+      message:
+        "The Publishing Secretary returned without executing a controlled browser tool.",
+      causeKind,
+      upstreamStatus,
+    };
+  }
+
   if (error instanceof AgentSessionError) {
     const stage: BoundedPublishingRuntimeDiagnostic["stage"] =
       error.code === "AGENT_SESSION_INITIALIZATION_FAILED"
@@ -387,6 +406,8 @@ function safeErrorMessage(error: unknown): string {
       "The Publishing Secretary session could not be disposed cleanly.",
     PUBLISHING_SECRETARY_RUNTIME_FAILED:
       "The Publishing Secretary runtime stopped before returning a bounded outcome.",
+    PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED:
+      "The Publishing Secretary returned without executing a controlled browser tool.",
     PUBLISHING_UPSTREAM_AUTH_FAILED:
       "An upstream Publishing Secretary request rejected authentication.",
     PUBLISHING_UPSTREAM_RATE_LIMITED:
