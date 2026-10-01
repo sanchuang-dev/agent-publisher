@@ -21,6 +21,7 @@ import {
   type PublisherAgentSession,
 } from "../src/agent/host.js";
 import {
+  PublishingSecretaryBrowserEvidenceError,
   PublishingSecretaryService,
   authorizeXiaohongshuPrepublishClick,
   createXiaohongshuPublishingBrowserResourceLoader,
@@ -434,6 +435,168 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       });
     } finally {
       db.close();
+    }
+  });
+
+  test("re-prompts once in the same session when terminal output arrives before any browser evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-evidence-retry-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-evidence-retry",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "先看页面再下结论" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(agentResult("qr_ready", [], "QR is probably ready."));
+    host.queue(agentResult("qr_ready", ["mcp"], "QR is visibly ready now."));
+    const progress: Array<{ key: string; status: string }> = [];
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-evidence-retry",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+          onProgress: (event) => progress.push(event),
+        }),
+      ).resolves.toMatchObject({
+        kind: "needs_identity",
+        semanticMilestone: "qr_ready",
+        browserToolCalls: 1,
+      });
+
+      expect(host.created).toHaveLength(1);
+      expect(host.created[0]!.prompts).toHaveLength(2);
+      expect(host.created[0]!.prompts[1]).toContain(
+        "previous turn ended before any controlled browser tool was executed",
+      );
+      expect(host.created[0]!.prompts[1]).toContain(
+        "Do not return PUBLISHING_SECRETARY_SIGNAL until a browser tool result",
+      );
+      expect(progress).toEqual([
+        { key: "starting", status: "running" },
+        { key: "starting", status: "succeeded" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("fails with a dedicated bounded error after two terminal turns without browser evidence", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-evidence-missing-"));
+    roots.push(root);
+    const db = openDatabase({ databasePath: join(root, "app.db") });
+    const jobs = new JobRepository(db);
+    const bindings = new AgentSessionBindingRepository(db);
+    const pack = createImageTextMaterialPackFixture();
+    const browser = new FakeAutomationBrowserProvider();
+    jobs.create({
+      id: "job-evidence-missing",
+      platform: "xiaohongshu",
+      publishMode: "image_text",
+      briefJson: JSON.stringify({ brief: "不能凭空判断页面" }),
+    });
+    for (const asset of [pack.cover, ...pack.images]) {
+      writeFileSync(join(root, asset.assetId + ".png"), "asset");
+    }
+
+    const host = new ScriptedHost();
+    host.queue(agentResult("failed", [], "No safe path."));
+    host.queue(agentResult("failed", [], "Still no safe path."));
+    const progress: Array<{ key: string; status: string }> = [];
+    const service = new PublishingSecretaryService({
+      jobs,
+      bindings,
+      createHost: () => host,
+      uploadRoot: root,
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      await expect(
+        service.execute({
+          jobId: "job-evidence-missing",
+          browserProvider: browser,
+          browserSession: browser.session,
+          materialPack: pack,
+          onProgress: (event) => progress.push(event),
+        }),
+      ).rejects.toMatchObject({
+        name: "PublishingSecretaryBrowserEvidenceError",
+        code: "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED",
+      } satisfies Partial<PublishingSecretaryBrowserEvidenceError>);
+
+      expect(host.created[0]!.prompts).toHaveLength(2);
+      expect(progress).toEqual([
+        { key: "starting", status: "running" },
+        { key: "starting", status: "succeeded" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("persists a dedicated product-visible code when browser evidence is still missing after correction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "publisher-agt08-evidence-projection-"));
+    roots.push(root);
+    const browser = new FakeAutomationBrowserProvider();
+    const pack = createImageTextMaterialPackFixture();
+    const execute = vi.fn(async () => {
+      throw new PublishingSecretaryBrowserEvidenceError(
+        "model returned without browser evidence",
+      );
+    });
+    const application = createMvpPrepublishApplication({
+      databasePath: join(root, "app.db"),
+      browserProvider: browser,
+      publishingSecretary: { execute },
+      materialSource: createControlledMaterialSource(async () => pack),
+      resolveAssetPath: (asset) => join(root, asset.assetId + ".png"),
+    });
+
+    try {
+      const created = await application.runtime.orchestrator.createJob({
+        brief: "浏览器证据缺失要说清楚",
+      });
+      const result = await application.runtime.orchestrator.continueJob(
+        created.id,
+      );
+
+      expect(result).toMatchObject({
+        blocked: true,
+        error: {
+          code: "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED",
+          message:
+            "The Publishing Secretary returned without executing a controlled browser tool.",
+        },
+        projection: {
+          status: "preparing_publish",
+          currentStep: "publishing_secretary_runtime",
+          failure: {
+            code: "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED",
+          },
+        },
+      });
+    } finally {
+      await application.stop();
     }
   });
 
