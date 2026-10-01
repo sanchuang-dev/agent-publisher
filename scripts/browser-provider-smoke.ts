@@ -8,8 +8,9 @@ const controlledUrl = `data:text/html,${encodeURIComponent(
 async function exercise(
   provider: DockerCdpBrowserProvider,
   phase: "initial" | "reconnect",
+  jobId: string,
 ): Promise<void> {
-  const session = await provider.acquire({});
+  const session = await provider.acquire({ jobId });
 
   if (session.page.url() !== "about:blank") {
     await provider.release(session.id);
@@ -72,9 +73,9 @@ async function main(): Promise<void> {
   }
 
   console.log("[browser-provider-smoke] health=reachable");
-  await exercise(provider, "initial");
-  await exercise(provider, "reconnect");
-  console.log("[browser-provider-smoke] release-and-reconnect=ok");
+  await exercise(provider, "initial", "browser-provider-smoke-a");
+  await exercise(provider, "reconnect", "browser-provider-smoke-b");
+  console.log("[browser-provider-smoke] job-page-isolation=ok");
 }
 
 main().catch((error: unknown) => {
