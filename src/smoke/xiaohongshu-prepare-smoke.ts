@@ -265,7 +265,7 @@ export async function runXiaohongshuPrepareSmoke(
   const browserProvider =
     options.browserProvider ?? new DockerCdpBrowserProvider({ env });
 
-  const preflightSession = await browserProvider.acquire({});
+  const preflightSession = await browserProvider.acquire({ jobId: "xiaohongshu-prepare-smoke" });
   try {
     const currentUrl = preflightSession.page.url();
     if (
