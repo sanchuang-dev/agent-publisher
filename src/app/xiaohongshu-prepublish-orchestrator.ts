@@ -10,6 +10,7 @@ import type {
   PublishingSecretaryProgressEvent,
   PublishingSecretaryPort,
 } from "../agent/publishing-secretary-contract.js";
+import { PublishingSecretaryBrowserEvidenceError } from "../agent/publishing-secretary.js";
 import { AgentSessionError } from "../agent/host.js";
 import {
   JobNotFoundError,
@@ -130,6 +131,17 @@ function boundedPublishingRuntimeDiagnostic(
 ): BoundedPublishingRuntimeDiagnostic {
   const causeKind = boundedCauseKind(error);
   const upstreamStatus = boundedUpstreamStatus(error);
+
+  if (error instanceof PublishingSecretaryBrowserEvidenceError) {
+    return {
+      stage: "session_run",
+      code: error.code,
+      message:
+        "The Publishing Secretary returned without executing a controlled browser tool.",
+      causeKind,
+      upstreamStatus,
+    };
+  }
 
   if (error instanceof AgentSessionError) {
     const stage: BoundedPublishingRuntimeDiagnostic["stage"] =
@@ -387,6 +399,8 @@ function safeErrorMessage(error: unknown): string {
       "The Publishing Secretary session could not be disposed cleanly.",
     PUBLISHING_SECRETARY_RUNTIME_FAILED:
       "The Publishing Secretary runtime stopped before returning a bounded outcome.",
+    PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED:
+      "The Publishing Secretary returned without executing a controlled browser tool.",
     PUBLISHING_UPSTREAM_AUTH_FAILED:
       "An upstream Publishing Secretary request rejected authentication.",
     PUBLISHING_UPSTREAM_RATE_LIMITED:
