@@ -174,6 +174,11 @@ describe("Publisher runtime AI configuration", () => {
       id: "publisher-test-model",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:65530/v1",
+      compat: {
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+        supportsStrictMode: false,
+      },
     });
     expect(
       runtime.modelRuntime.getProviderAuthStatus(
