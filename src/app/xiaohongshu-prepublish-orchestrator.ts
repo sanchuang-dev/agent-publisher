@@ -10,7 +10,6 @@ import type {
   PublishingSecretaryProgressEvent,
   PublishingSecretaryPort,
 } from "../agent/publishing-secretary-contract.js";
-import { PublishingSecretaryBrowserEvidenceError } from "../agent/publishing-secretary.js";
 import { AgentSessionError } from "../agent/host.js";
 import {
   JobNotFoundError,
@@ -132,10 +131,18 @@ function boundedPublishingRuntimeDiagnostic(
   const causeKind = boundedCauseKind(error);
   const upstreamStatus = boundedUpstreamStatus(error);
 
-  if (error instanceof PublishingSecretaryBrowserEvidenceError) {
+  const boundedCode =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { readonly code?: unknown }).code === "string"
+      ? (error as { readonly code: string }).code
+      : null;
+
+  if (boundedCode === "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED") {
     return {
       stage: "session_run",
-      code: error.code,
+      code: boundedCode,
       message:
         "The Publishing Secretary returned without executing a controlled browser tool.",
       causeKind,
