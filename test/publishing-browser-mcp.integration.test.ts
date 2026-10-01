@@ -419,6 +419,92 @@ describe("Publishing browser MCP capability", () => {
     await session.dispose();
   });
 
+  test("rejects a reused snapshot token after a mutation and tells the Agent to re-observe", async () => {
+    const uploadRoot = await tempDir("publisher-browser-stale-token-");
+    const faux = fauxProvider({ provider: "publisher-browser-stale-token" });
+    const { grant: issued } = await grant(uploadRoot);
+    const host = await createHost(faux, issued);
+    const session = await host.createSession({
+      definition: fixtureDefinition(),
+      scope: { jobId: "job-browser", role: "publishing" },
+    });
+
+    let safeToken = "";
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall(
+          "mcp",
+          {
+            server: PUBLISHING_BROWSER_MCP_SERVER,
+            tool: "browser_navigate",
+            args: { url: "https://creator.xiaohongshu.com/publish" },
+          },
+          { id: "fresh-observation" },
+        ),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        const messages = JSON.stringify(context.messages);
+        safeToken =
+          messages.match(/Safe next[^\n]*\[ref=(g\d+:e2)\]/)?.[1] ?? "";
+        expect(safeToken).toMatch(/^g\d+:e2$/);
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: { element: "Safe next", target: safeToken },
+            },
+            { id: "first-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        expect(JSON.stringify(context.messages)).toContain(
+          "BROWSER_CLICK_EXECUTED:Safe next",
+        );
+        return fauxAssistantMessage(
+          fauxToolCall(
+            "mcp",
+            {
+              server: PUBLISHING_BROWSER_MCP_SERVER,
+              tool: "browser_click",
+              args: { element: "Safe next", target: safeToken },
+            },
+            { id: "stale-click" },
+          ),
+          { stopReason: "toolUse" },
+        );
+      },
+      (context) => {
+        const messages = JSON.stringify(context.messages);
+        expect(messages).toContain(
+          "is stale or was not observed in the latest Publisher-controlled snapshot",
+        );
+        expect(messages).toContain(
+          "re-observe before any further mutation and use a fresh target token",
+        );
+        const executedClicks =
+          messages.match(/BROWSER_CLICK_EXECUTED:Safe next/g) ?? [];
+        expect(executedClicks).toHaveLength(1);
+        return fauxAssistantMessage(fauxText("STALE_TOKEN_RECOVERY_GUIDED"));
+      },
+    ]);
+
+    await expect(
+      session.run({
+        prompt:
+          "Observe, click once, then intentionally try to reuse the old target without observing again.",
+      }),
+    ).resolves.toMatchObject({
+      finalText: "STALE_TOKEN_RECOVERY_GUIDED",
+    });
+
+    await session.dispose();
+  });
+
   test("blocks browser actions when the acquired current page drifts outside the Job origin grant", async () => {
     const uploadRoot = await tempDir("publisher-browser-current-origin-");
     const faux = fauxProvider({ provider: "publisher-browser-current-origin" });
