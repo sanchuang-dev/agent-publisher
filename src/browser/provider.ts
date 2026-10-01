@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 
-export type BrowserAcquireInput = Record<string, never>;
+export interface BrowserAcquireInput {
+  readonly jobId: string;
+}
 
 export interface BrowserSession {
   readonly id: string;
