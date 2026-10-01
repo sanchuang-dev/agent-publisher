@@ -404,12 +404,14 @@ function observedTarget(
 ): ObservedTargetEvidence {
   const target = args.target;
   if (typeof target !== "string" || !modelSnapshotTokenPattern.test(target)) {
-    throw new Error(`${tool} requires a current Publisher snapshot token`);
+    throw new Error(
+      `${tool} requires a current Publisher snapshot token; re-observe with browser_snapshot or browser_find before mutating and use the fresh target token`,
+    );
   }
   const evidence = refs.get(target);
   if (!evidence) {
     throw new Error(
-      `${tool} target ${target} was not observed in the latest Publisher-controlled snapshot`,
+      `${tool} target ${target} is stale or was not observed in the latest Publisher-controlled snapshot; re-observe before any further mutation and use a fresh target token`,
     );
   }
   return evidence;
