@@ -59,6 +59,15 @@ export class PublishingSecretaryResultError extends Error {
   }
 }
 
+export class PublishingSecretaryBrowserEvidenceError extends Error {
+  readonly code = "PUBLISHING_SECRETARY_BROWSER_EVIDENCE_REQUIRED" as const;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "PublishingSecretaryBrowserEvidenceError";
+  }
+}
+
 type PublishingSecretaryBoundedOutcome = Omit<
   PublishingSecretaryExecutionResult,
   "browserToolCalls"
@@ -242,6 +251,20 @@ function buildTaskPrompt(
   ].join("\n");
 }
 
+function buildBrowserEvidenceRecoveryPrompt(
+  allowedOrigins: readonly string[],
+): string {
+  return [
+    "Your previous turn ended before any controlled browser tool was executed.",
+    "That is not a valid Publishing Secretary terminal decision because there is no current page evidence yet.",
+    "Make one bounded recovery attempt now through the controlled mcp browser capability.",
+    "First inspect the actual browser state. If the page is blank or outside the task surface, navigate only within the granted Creator origins: " +
+      allowedOrigins.join(", "),
+    "Do not return PUBLISHING_SECRETARY_SIGNAL until a browser tool result has established current page evidence.",
+    "Keep the same safety boundaries: never execute final publication, never overwrite unknown content, and never perform or bypass QR scan, CAPTCHA, MFA, OTP, device verification, or equivalent identity checks.",
+  ].join("\n");
+}
+
 function recordLike(value: unknown): Readonly<Record<string, unknown>> | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return null;
@@ -379,14 +402,10 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
 
     try {
       emitProgress(input, { key: "starting", status: "running" });
-      let run: Awaited<ReturnType<typeof session.run>>;
-      try {
-        run = await session.run({
-          prompt: buildTaskPrompt(
-            input,
-            uploadFiles,
-            this.#allowedOrigins,
-          ),
+
+      const runTask = (prompt: string) =>
+        session.run({
+          prompt,
           ...(this.#runTimeoutMs === undefined
             ? {}
             : { timeoutMs: this.#runTimeoutMs }),
@@ -405,48 +424,82 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
             });
           },
         });
+
+      const browserEvidence = (
+        run: Awaited<ReturnType<typeof session.run>>,
+      ) => {
+        const browserExecutions = run.toolExecutions.filter((execution) => {
+          if (execution.toolName !== "mcp") return false;
+          const args = execution.args;
+          if (
+            typeof args !== "object" ||
+            args === null ||
+            Array.isArray(args)
+          ) {
+            return false;
+          }
+          const record = args as {
+            readonly server?: unknown;
+            readonly tool?: unknown;
+          };
+          return (
+            record.server === PUBLISHING_BROWSER_MCP_SERVER &&
+            typeof record.tool === "string" &&
+            (PUBLISHING_BROWSER_MCP_TOOLS as readonly string[]).includes(
+              record.tool,
+            )
+          );
+        });
+
+        return {
+          browserToolCalls: browserExecutions.length,
+          successfulBrowserToolCalls: browserExecutions.filter(
+            (execution) =>
+              execution.completed && execution.isError === false,
+          ).length,
+        };
+      };
+
+      try {
+        let run = await runTask(
+          buildTaskPrompt(
+            input,
+            uploadFiles,
+            this.#allowedOrigins,
+          ),
+        );
+        let evidence = browserEvidence(run);
+
+        if (
+          evidence.browserToolCalls === 0 &&
+          semanticSignal(run.finalText) !== null
+        ) {
+          run = await runTask(
+            buildBrowserEvidenceRecoveryPrompt(this.#allowedOrigins),
+          );
+          evidence = browserEvidence(run);
+
+          if (evidence.browserToolCalls === 0) {
+            throw new PublishingSecretaryBrowserEvidenceError(
+              "Publishing Secretary returned terminal output twice without executing a controlled browser tool.",
+            );
+          }
+        }
+
+        const outcome = interpretRunOutcome(
+          run.finalText,
+          evidence.successfulBrowserToolCalls,
+        );
+        emitProgress(input, { key: "starting", status: "succeeded" });
+
+        return {
+          ...outcome,
+          browserToolCalls: evidence.browserToolCalls,
+        };
       } catch (error) {
         emitProgress(input, { key: "starting", status: "failed" });
         throw error;
       }
-
-      emitProgress(input, { key: "starting", status: "succeeded" });
-      const browserExecutions = run.toolExecutions.filter((execution) => {
-        if (execution.toolName !== "mcp") return false;
-        const args = execution.args;
-        if (
-          typeof args !== "object" ||
-          args === null ||
-          Array.isArray(args)
-        ) {
-          return false;
-        }
-        const record = args as {
-          readonly server?: unknown;
-          readonly tool?: unknown;
-        };
-        return (
-          record.server === PUBLISHING_BROWSER_MCP_SERVER &&
-          typeof record.tool === "string" &&
-          (PUBLISHING_BROWSER_MCP_TOOLS as readonly string[]).includes(
-            record.tool,
-          )
-        );
-      });
-      const browserToolCalls = browserExecutions.length;
-      const successfulBrowserToolCalls = browserExecutions.filter(
-        (execution) =>
-          execution.completed && execution.isError === false,
-      ).length;
-      const outcome = interpretRunOutcome(
-        run.finalText,
-        successfulBrowserToolCalls,
-      );
-
-      return {
-        ...outcome,
-        browserToolCalls,
-      };
     } finally {
       await session.dispose();
     }
