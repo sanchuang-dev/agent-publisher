@@ -402,6 +402,7 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
 
     try {
       emitProgress(input, { key: "starting", status: "running" });
+      let startingCompleted = false;
 
       const runTask = (prompt: string) =>
         session.run({
@@ -468,6 +469,8 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
             this.#allowedOrigins,
           ),
         );
+        emitProgress(input, { key: "starting", status: "succeeded" });
+        startingCompleted = true;
         let evidence = browserEvidence(run);
 
         if (
@@ -490,14 +493,15 @@ export class PublishingSecretaryService implements PublishingSecretaryPort {
           run.finalText,
           evidence.successfulBrowserToolCalls,
         );
-        emitProgress(input, { key: "starting", status: "succeeded" });
 
         return {
           ...outcome,
           browserToolCalls: evidence.browserToolCalls,
         };
       } catch (error) {
-        emitProgress(input, { key: "starting", status: "failed" });
+        if (!startingCompleted) {
+          emitProgress(input, { key: "starting", status: "failed" });
+        }
         throw error;
       }
     } finally {
