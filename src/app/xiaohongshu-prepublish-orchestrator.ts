@@ -686,7 +686,7 @@ export class XiaohongshuPrepublishOrchestrator {
 
       try {
         try {
-          session = await this.#browserProvider.acquire({});
+          session = await this.#browserProvider.acquire({ jobId });
         } catch (error) {
           this.#recordBrowserAcquireFailure(jobId);
           throw new PrepublishBrowserUnavailableError({ cause: error });
