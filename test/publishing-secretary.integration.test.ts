@@ -308,6 +308,12 @@ describe("AGT-07 Publishing Secretary browser execution", () => {
       "choose a browser_navigate action",
     );
     expect(host.created[0]!.prompts[0]).toContain(
+      "Snapshot tokens are single-observation evidence",
+    );
+    expect(host.created[0]!.prompts[0]).toContain(
+      "re-observe before another mutation",
+    );
+    expect(host.created[0]!.prompts[0]).toContain(
       "A login page or login button is not itself a human-action boundary",
     );
     expect(host.created[0]!.prompts[0]).toContain(

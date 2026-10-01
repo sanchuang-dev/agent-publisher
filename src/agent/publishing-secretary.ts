@@ -235,6 +235,7 @@ function buildTaskPrompt(
     "Granted Creator origins: " + allowedOrigins.join(", "),
     "If the current page is blank or outside the task surface, choose a browser_navigate action within the granted Creator origin before trying to inspect or mutate page controls.",
     "You own the page-local browser route. Observe the page, choose the next bounded safe action, act, and re-observe. You may use multiple observe/act loops while progress or new evidence exists.",
+    "Snapshot tokens are single-observation evidence: after any navigation, click, type, fill, or upload attempt, successful or failed, re-observe before another mutation and use only a fresh token from that new observation.",
     "Do not ask Publisher code which UI control to click. Current page evidence and the reviewed Xiaohongshu Skill guide the route.",
     "Never execute final publication, delete/clear/overwrite unknown content, or bypass QR scan, CAPTCHA, MFA, OTP, device verification, or equivalent identity challenges.",
     "A login page or login button is not itself a human-action boundary. Within the granted Creator origin, you may safely navigate the login UI, choose or switch login methods, and prefer a visible QR/scanning login method when available.",

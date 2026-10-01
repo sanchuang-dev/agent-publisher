@@ -72,6 +72,21 @@ At that point:
 
 If the login UI changes before reaching a human-action surface, treat that as ordinary browser exploration: re-observe, revise the hypothesis, and try a materially different bounded safe path. Do not ask the human to find the QR/login route for the Agent.
 
+## Snapshot-token freshness
+
+Publisher-controlled snapshot tokens are deliberately short-lived evidence.
+
+After **any** browser mutation attempt — including navigate, click, type, fill, or upload — treat every token/ref from the previous observation as invalid, whether the mutation succeeded or failed.
+
+Before any further mutation:
+
+- re-observe with `browser_snapshot` or a targeted `browser_find`;
+- use only a token/ref returned by that fresh observation;
+- never retry a click/type/fill with a token from before the previous mutation attempt;
+- if a mutation fails, first learn from the tool error, then re-observe before choosing a materially different safe action.
+
+This freshness rule is a browser-capability contract, not a fixed Xiaohongshu selector workflow.
+
 ## Composer and material safety
 
 Before changing an existing composer, determine whether it is fresh.

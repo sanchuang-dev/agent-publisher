@@ -64,6 +64,7 @@ const systemPrompt = [
   "The Publisher Orchestrator owns Job state, identity handoff, prepared-state acceptance, approval, publish-once authority, and irreversible side effects.",
   "Never bypass login/MFA/device verification, overwrite an unknown draft, or execute final publication.",
   "Ordinary page ambiguity is a reason to re-observe, compare outcomes, and revise the working hypothesis; it is not by itself a reason to hand off.",
+  "After every browser mutation attempt, successful or failed, the previous snapshot tokens are stale. Re-observe with browser_snapshot or browser_find before any further mutation, and never reuse an older target token.",
   "Stop and report a bounded gap only at a hard boundary, outside the granted browser capability, or when materially different safe exploration no longer produces new evidence.",
 ].join("\n");
 

@@ -128,6 +128,12 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
       "recovery may use multiple loops",
     );
     expect(mandatoryPrompt).toContain(
+      "After **any** browser mutation attempt",
+    );
+    expect(mandatoryPrompt).toContain(
+      "never retry a click/type/fill with a token from before the previous mutation attempt",
+    );
+    expect(mandatoryPrompt).toContain(
       "human should not have to locate the login button",
     );
     expect(mandatoryPrompt).toContain(
@@ -139,6 +145,9 @@ describe("XHS-SKILL-01 Xiaohongshu Publishing Skill", () => {
     );
     expect(xiaohongshuPublishingDefinition.systemPrompt).toContain(
       "materially different safe exploration no longer produces new evidence",
+    );
+    expect(xiaohongshuPublishingDefinition.systemPrompt).toContain(
+      "previous snapshot tokens are stale",
     );
 
     expect(XIAOHONGSHU_PUBLISHING_BROWSER_MCP_TOOLS).toEqual(
