@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { chromium, type Browser } from "playwright";
 
@@ -38,6 +38,56 @@ export interface DockerCdpBrowserProviderOptions {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const JOB_PAGE_MARKER_PREFIX = "__agent_publisher_job__:";
+
+function requiredJobId(input: BrowserAcquireInput): string {
+  const jobId = input.jobId.trim();
+  if (!jobId) {
+    throw new Error("Browser acquisition requires a non-empty Job id");
+  }
+  return jobId;
+}
+
+function jobPageMarker(jobId: string): string {
+  // The marker survives CDP reconnects/navigation through window.name without
+  // exposing the Publisher Job id itself to page script.
+  return (
+    JOB_PAGE_MARKER_PREFIX +
+    createHash("sha256").update(jobId).digest("hex")
+  );
+}
+
+async function readPageMarker(page: import("playwright").Page): Promise<string | null> {
+  if (page.isClosed()) return null;
+
+  try {
+    return await page.evaluate(() => window.name);
+  } catch {
+    return null;
+  }
+}
+
+async function findJobPage(
+  pages: readonly import("playwright").Page[],
+  marker: string,
+): Promise<import("playwright").Page | null> {
+  for (const page of pages) {
+    if ((await readPageMarker(page)) === marker) {
+      return page;
+    }
+  }
+  return null;
+}
+
+async function bindJobPage(
+  page: import("playwright").Page,
+  marker: string,
+): Promise<void> {
+  await page.evaluate((value) => {
+    window.name = value;
+  }, marker);
 }
 
 export class DockerCdpBrowserProvider
@@ -88,7 +138,9 @@ export class DockerCdpBrowserProvider
         chromium.connectOverCDP(endpointURL, connectOptions));
   }
 
-  async acquire(_input: BrowserAcquireInput): Promise<BrowserSession> {
+  async acquire(input: BrowserAcquireInput): Promise<BrowserSession> {
+    const jobId = requiredJobId(input);
+
     if (DockerCdpBrowserProvider.#activeSessionId !== undefined) {
       throw new Error(
         "Browser session already active or being acquired. Wait for it to be released before acquiring a new session.",
@@ -96,9 +148,11 @@ export class DockerCdpBrowserProvider
     }
 
     const id = randomUUID();
+    const marker = jobPageMarker(jobId);
     DockerCdpBrowserProvider.#activeSessionId = id;
 
     let browser: Browser | undefined;
+    let createdPage: import("playwright").Page | undefined;
 
     try {
       browser = await this.#connect();
@@ -118,9 +172,14 @@ export class DockerCdpBrowserProvider
         );
       }
 
-      const page =
-        context.pages().find((candidate) => !candidate.isClosed()) ??
-        (await context.newPage());
+      let page = await findJobPage(context.pages(), marker);
+      if (!page) {
+        createdPage = await context.newPage();
+        await bindJobPage(createdPage, marker);
+        page = createdPage;
+      }
+
+      await page.bringToFront();
 
       if (DockerCdpBrowserProvider.#activeSessionId !== id) {
         throw new Error("Browser session disconnected during acquisition");
@@ -134,6 +193,15 @@ export class DockerCdpBrowserProvider
         profileRef: this.#profileRef,
       };
     } catch (error) {
+      if (createdPage && !createdPage.isClosed()) {
+        try {
+          await createdPage.close();
+        } catch {
+          // The primary acquisition error remains authoritative. A failed
+          // best-effort cleanup must not replace it.
+        }
+      }
+
       if (browser) {
         try {
           await browser.close();
